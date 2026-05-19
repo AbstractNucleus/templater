@@ -16,10 +16,11 @@ Originated from vault page `[[templates-widget]]` (promoted 2026-05-19). Origina
 | Variable UX | Copy-with-placeholders | `{{vars}}` survive copy; edit in target app |
 | Categories | Tags, multi-assignable | Sidebar shows tag chips, intersection on multi-select |
 | Paste-match UI | Top-of-sidebar input | Length threshold switches literal ↔ semantic |
-| API key | OS keychain via Tauri | `ANTHROPIC_API_KEY` env var as override |
+| Auth & billing | Claude Agent SDK via Claude subscription | Uses Agent SDK credit pool (Pro $20 / Max5 $100 / Max20 $200 per month, starting 2026-06-15). No API key needed. |
+| Sidecar | Node.js sidecar process | TypeScript Agent SDK runs in a Node sidecar spawned by Tauri's Rust backend; stdio JSON IPC. |
 | Window behaviour | Full desk-companion | Tray + global hotkey + always-on-top toggle |
 | Body format | Plain text | Universal target compatibility |
-| Model | Claude Haiku 4.5 | Fast, cheap, plenty for ranking |
+| Model | Claude Haiku 4.5 | Specified per-query in SDK `query()` options. Fast, cheap, plenty for ranking. |
 | Distribution | Portable `.exe` + GitHub Releases | No installer, no auto-updater |
 | Window chrome | Fully frameless, custom resize handles | Maximum aesthetic polish, ~2-3 days of chrome work |
 | Shared base with paste-stack | None — standalone | Extract when paste-stack is real |
@@ -122,20 +123,22 @@ Frameless cost is real — count on ~2-3 days for chrome alone, between drag-reg
 
 ## Paste-to-match
 
-1. User pastes inbound text into the sidebar search/paste input.
-2. Under length threshold → literal substring filter, no API call.
-3. Above threshold → POST to Anthropic Messages API with model `claude-haiku-4-5-20251001`. Prompt inlines the entire template catalog (`id + name + tags + opening + body`) plus the pasted text. Asks for the top 5 matches as ranked IDs with one-line justifications.
-4. Sidebar template list replaces with the ranked results, each showing the justification underneath.
+1. User pastes inbound text into the sidecar search/paste input.
+2. Under length threshold → literal substring filter, no SDK call.
+3. Above threshold → frontend invokes a Tauri command. Rust backend forwards the request (catalog + pasted text) over stdio JSON to the Node sidecar. Sidecar calls `@anthropic-ai/claude-agent-sdk`'s `query()` with `model: "claude-haiku-4-5-20251001"` and a JSON-schema `outputFormat` constraining the response to `{ rankings: [{ template_id, score, reason }] }`. Sidecar streams the result back over stdout.
+4. Sidebar template list replaces with the ranked results, each showing the one-line `reason` underneath.
 5. Click a result → main panel loads that template. Copy as normal.
 
 Error states:
 
-- No API key configured → sidebar input shows hint: "Set API key in Settings to enable paste-match."
+- Not signed in to Claude Code → sidebar shows: "Sign in via `claude login` to enable paste-match." (link opens shell with instructions).
+- `ANTHROPIC_API_KEY` env var detected → warning banner: "API key env var is set; SDK will bill against the API, not your subscription. Unset to use subscription credits."
 - Network error → inline error in the result area with [Retry].
-- API error (auth fail, rate limit) → inline error with message and [Retry] / [Open Settings].
+- SDK error (auth fail, quota exceeded) → inline error with message and [Retry] / [Open Settings].
+- Sidecar process dead → "Backend not running. Restart app." (Rust auto-restarts the sidecar; this state should be transient.)
 - No strong matches → "No strong matches" with literal search results as fallback.
 
-Architecture: inline the whole catalog in the prompt. No embeddings, no vector DB. At personal scale (<200 templates) the token cost is fractions of a cent per match.
+Architecture: catalog is inlined into the prompt (no embeddings, no vector DB). At personal scale (<200 templates) the SDK credit cost is trivial — a Max20 plan ($200/mo Agent SDK credit) easily absorbs hundreds of matches a day.
 
 ## Window behaviour
 
@@ -146,19 +149,40 @@ Architecture: inline the whole catalog in the prompt. No embeddings, no vector D
 - Close button: minimises to tray (first-time hint shown). Quit only via tray menu.
 - Default window size: 800×600. Saves geometry across sessions.
 
-## API key handling
+## Auth & billing
 
-Stored in Windows Credential Manager via `tauri-plugin-stronghold` (or a thin keyring crate, TBD which is easier).
+Uses the Claude Agent SDK with subscription-based auth — no API key, no keychain integration, no Settings field for credentials.
 
-- Settings modal has a password-masked field. Save writes to keychain.
-- Env var `ANTHROPIC_API_KEY` overrides keychain if set (for dev / power-user override).
-- First-run banner: "Set your Anthropic API key to enable paste-match" → click → modal.
-- Settings shows status: "Key configured ✓" or "No key set."
+**How auth works:**
+
+- The Agent SDK auto-discovers the local Claude Code session on startup. If you're signed in via `claude login` (which the user already is, since they use Claude Code daily), the SDK is authenticated.
+- The SDK bundles its own Claude Code CLI binary, so the **end user does not need Claude Code separately installed** — only Node.js for the sidecar process.
+
+**Billing:**
+
+- Programmatic SDK usage draws from a separate **Agent SDK credit pool**, not the interactive Claude Code quota. Pool sizes (effective 2026-06-15): Pro $20/mo, Max 5x $100/mo, Max 20x $200/mo, Team/Enterprise varies.
+- Each paste-match call costs a few thousand input tokens at Haiku rates. A heavy user firing 100 matches/day would burn maybe $1-2 of the credit pool. Max20's $200 monthly budget is effectively unlimited for this app.
+
+**Critical gotcha — `ANTHROPIC_API_KEY` precedence:**
+
+- If `ANTHROPIC_API_KEY` is set in the user's environment, the SDK uses it *instead* of subscription auth and bills against API rates.
+- The app must detect this at startup (Rust reads env, forwards status to frontend) and surface a warning banner.
+- Settings modal shows: subscription status (signed in / not signed in), env-var override warning (yes / no), Agent SDK credit status if discoverable.
+
+**Settings modal scope** (revised, no API key field):
+
+- Subscription auth status (read-only, with "Open `claude login`" button if not signed in).
+- `ANTHROPIC_API_KEY` override warning (if detected).
+- Global hotkey rebinder.
+- Always-on-top default toggle.
+- Start-minimised-to-tray toggle.
+- Window-geometry reset.
 
 ## Build & distribution
 
-- Build: `cargo tauri build` → `target/release/template-widget.exe` (~10 MB).
-- Distribution: tag a release on GitHub, upload binary, link in README.
+- Build: `cargo tauri build` → `target/release/template-widget.exe` (~10 MB). The Node sidecar ships alongside (`sidecar/` folder bundled as a Tauri resource, or as a separately-distributed companion).
+- **Runtime requirement: Node.js on the target machine** (v18+). For personal use this is fine — Node is already installed on the dev/target machine via the Claude Code setup. For broader distribution later, bundle a Node binary via Tauri's [sidecar binary feature](https://tauri.app/v1/guides/building/sidecar/) (~30 MB add to the package).
+- Distribution: tag a release on GitHub, upload binary + sidecar archive, link in README.
 - Install: download, run. No installer.
 - Update: re-download from Releases. Manual.
 - Code signing: defer. SmartScreen warning on first launch — accept once.
@@ -171,11 +195,16 @@ coin_template_manager/
 │   ├── Cargo.toml
 │   ├── src/
 │   │   ├── main.rs
-│   │   ├── store.rs        # templates.json read/write
-│   │   ├── keychain.rs     # API key get/set
-│   │   ├── api.rs          # Anthropic API call
-│   │   └── hotkey.rs       # global hotkey registration
+│   │   ├── store.rs        # templates.json read/write (atomic)
+│   │   ├── sidecar.rs      # Node sidecar spawn + stdio JSON IPC
+│   │   ├── tray.rs         # system tray icon + menu
+│   │   ├── hotkey.rs       # global hotkey registration
+│   │   └── env.rs          # ANTHROPIC_API_KEY env detection
 │   └── tauri.conf.json
+├── sidecar/                # Node.js sidecar (Agent SDK host)
+│   ├── package.json        # depends on @anthropic-ai/claude-agent-sdk
+│   ├── index.ts            # reads stdin (JSON requests), writes stdout (JSON responses)
+│   └── tsconfig.json
 ├── src/                    # SvelteKit frontend
 │   ├── routes/+page.svelte
 │   ├── lib/
@@ -183,10 +212,20 @@ coin_template_manager/
 │   │   ├── stores/         # Svelte stores for template state
 │   │   └── api.ts          # Tauri invoke wrappers
 │   └── app.html
-├── package.json
+├── package.json            # SvelteKit deps
 ├── README.md
 └── IDEA.md
 ```
+
+**Sidecar protocol (sketch):**
+
+```
+→ stdin  { "id": "req-1", "op": "rank", "pasted": "...", "catalog": [...] }
+← stdout { "id": "req-1", "ok": true, "rankings": [{ "template_id": "...", "score": 0.87, "reason": "..." }] }
+← stdout { "id": "req-1", "ok": false, "error": "quota_exceeded" }
+```
+
+One request per line, JSON. Rust matches responses to requests by `id`. Sidecar lifecycle: spawn-on-startup, auto-restart on crash (with backoff), graceful shutdown via SIGTERM on app quit.
 
 ## Open work
 
@@ -198,6 +237,8 @@ Small decisions still pending — make these inline during implementation:
 - Import/export from JSON (defer to v2 unless trivial).
 - Custom drop-shadow rendering technique (Tauri trick or CSS box-shadow on inner container).
 - Aero Snap behaviour for frameless window.
+- Sidecar lifecycle policy: spawn-on-startup (keeps Node resident, faster matches) vs. spawn-per-query (cleaner but ~200ms cold start). Default: spawn-on-startup.
+- Sidecar packaging: ship as a `sidecar/` resource folder vs. embed Node binary via Tauri sidecar feature. Default: ship as resource folder for v1 (requires Node on target), revisit when distributing beyond personal use.
 
 ## Adjacent vault references
 
