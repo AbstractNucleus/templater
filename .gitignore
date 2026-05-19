@@ -1,0 +1,21 @@
+.DS_Store
+node_modules/
+/build
+/.svelte-kit
+/package
+.env
+.env.*
+!.env.example
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Rust — keep Cargo.lock since this is an application, not a library
+/src-tauri/target/
+
+# Sidecar build output
+/sidecar/dist/
+
+# Editor / OS junk
+Thumbs.db
+*.swp
+*.swo
