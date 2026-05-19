@@ -14,18 +14,25 @@ Day job = customer support for CoinPoker via the Clickout Media engagement (emai
 - **Composability** — signature and opening phrase as independent toggles, not baked into each template.
 - **Discovery** — categorised list + paste-to-match shortcut when you can't remember the exact template.
 
-## Form factor (unresolved)
+## UI direction (decided 2026-05-19)
 
-Four candidates, no decision yet:
+Minimal interface modelled on the **Claude Code desktop app**:
 
-| Form factor | Pros | Cons |
-|---|---|---|
-| Windows 11 widget | Native feel, dockable | Widget API is limited |
-| Always-on-top floating panel | Most flexible, matches existing tooling style | Manual placement |
-| Tray app + popover | Out of the way until needed | Extra click to summon |
-| Browser side panel | Lowest effort if helpdesk lives in browser | Tied to browser session |
+- Very dark background (near-black, subtle warm tint).
+- **Left sidebar** — category list (account / deposit / withdrawal / kyc / technical / fraud / general), plus a search box and a "+ New template" action at the top. Mirrors the Claude Code sessions sidebar.
+- **Main panel** — selected template: name, body preview, the `opening` and `signature` toggle checkboxes, and a prominent "Copy" button. Generous padding, flat chrome.
+- **Right panel (optional, collapsible)** — variables for the active template, with inline editors. Mirrors the Claude Code Files panel.
+- **Top bar** — breadcrumb-style title (`category / template-name`), small action icons (edit, duplicate, delete).
+- **Bottom input strip** — paste-to-match input + model/mode selector chip on the right, mirroring the Claude Code chat input.
+- Typography: sans-serif for UI, monospace for variable names and any code/HTML in the body.
+- Subtle dividers, no heavy borders, flat icons, one accent color used sparingly (e.g. the Copy button and successful-match highlights).
+- No window chrome decoration beyond the standard OS title bar (or frameless if the stack makes that cheap).
 
-Default lean: small native floating panel with a global hotkey (matches the pattern from `[[windows-autoclicker]]` and `[[terminal-switcher]]`).
+This shifts the form factor away from "small floating panel" toward a **proper windowed app** — small by default (≈800×600), resizable, optionally always-on-top via a toggle. Global hotkey to summon/focus the window.
+
+## Form factor
+
+Decided: **windowed desktop app**, three-pane layout (sidebar / main / optional right panel), global hotkey to summon. The earlier floating-panel idea is dropped — it can't host a Claude-Code-style multi-pane UI cleanly.
 
 ## Data model (implicit)
 
@@ -53,12 +60,12 @@ Note: the existing `anthropic-skills:email` Claude skill already does the semant
 
 Each is tied to an existing project for build velocity:
 
-- **PySide6 + ctypes** — matches `[[windows-autoclicker]]`. Dark theme proven, easy Anthropic SDK call.
-- **Rust + Iced** — matches `[[terminal-switcher]]`. Smaller binary, global hotkey + tray icon already solved.
-- **Tauri + SvelteKit** — matches `[[compositor]]`. Only worth it if UI grows beyond a panel.
-- **Browser side panel** — lowest effort if helpdesk lives in browser.
+- **Tauri + SvelteKit** — matches `[[compositor]]`. **Strongest fit for the Claude-Code aesthetic** — CSS does dark themes, multi-pane layouts, and flat chrome trivially, and Tauri keeps the binary small (~10 MB) without Electron's footprint. The earlier "only if UI grows beyond a panel" caveat is now resolved: the UI *did* grow beyond a panel.
+- **PySide6 + ctypes** — matches `[[windows-autoclicker]]`. Achievable via QSS styling, but matching the exact Claude Code look (rounded corners, subtle hover states, smooth transitions) is more work than CSS. Still the right pick if you want to avoid a JS toolchain entirely.
+- **Rust + Iced** — matches `[[terminal-switcher]]`. Iced's theming is improving but trails CSS for this aesthetic; rule out unless you specifically want Rust-only.
+- **Browser side panel** — drop. The decision to go windowed makes this irrelevant.
 
-Tie-breaker: PySide6 or Iced ship in a weekend if signature/opening checkboxes are the whole UI. Tauri only if paste-to-match grows into a multi-pane workflow.
+Recommendation: **Tauri + SvelteKit**. Aesthetic fidelity is now the binding constraint, and web tech is built for this look. Fallback to PySide6 only if you'd rather not maintain a Node toolchain.
 
 ## Confidentiality constraint (important)
 
@@ -73,11 +80,12 @@ Idea only. No design doc, no stack decision. Closest existing capability is the 
 
 ## Open questions
 
-- Widget vs. floating app vs. side panel — decide before stack.
-- Where do templates live? File system, Supabase, something else?
-- Variable-filling UX: prompt before copy, or copy-with-placeholders?
-- Is cloud-match worth the GDPR friction, or is folder-of-categories enough?
-- Does this share infrastructure with `[[paste-stack]]` (clipboard manager, also hotkey-triggered)? A unified "desk-side overlay" base might serve both.
+- ~~Widget vs. floating app vs. side panel~~ — resolved: windowed app, Claude-Code-style three-pane layout.
+- ~~Stack~~ — leaning Tauri + SvelteKit; confirm before scaffolding.
+- Where do templates live? File system (`%APPDATA%\templates-widget\templates.json`), or something richer like SQLite?
+- Variable-filling UX: prompt before copy, or copy-with-placeholders for manual fill-in?
+- Is cloud-match worth the GDPR friction, or is folder-of-categories enough for v1?
+- Does this share infrastructure with `[[paste-stack]]`? A shared global-hotkey/tray base in Tauri is feasible.
 
 ## Adjacent vault references
 
