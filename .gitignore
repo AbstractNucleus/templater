@@ -19,6 +19,7 @@ vite.config.ts.timestamp-*
 Thumbs.db
 *.swp
 *.swo
+.vscode/
 
 # Engagement / private seed data — not for publication
 *.csv
