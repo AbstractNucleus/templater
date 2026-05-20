@@ -4,6 +4,41 @@ A personal templating app for prose drafts (emails, replies, DMs, networking, fo
 
 Originated from vault page `[[templates-widget]]` (promoted 2026-05-19). Original framing was CS reply templates for the Clickout Media engagement; reframed 2026-05-19 to **personal use only** — no engagement traffic, no customer data, no NDA/GDPR constraint.
 
+## Current state (as of last commit on `main`)
+
+**Scaffolded and verified.** Tauri 2 + SvelteKit + TypeScript project initialised via `create-tauri-app` with the `svelte-ts` template. Node sidecar wired up; the round-trip ping (Svelte button → Tauri invoke → Rust → Node stdin → Node stdout → back) was tested end-to-end and works.
+
+**Where things live:**
+
+| Path | Purpose | State |
+|---|---|---|
+| `src-tauri/Cargo.toml` | Rust deps (Tauri 2 + tokio + serde) | done |
+| `src-tauri/src/main.rs` | Entrypoint (calls `templates_widget_lib::run`) | done |
+| `src-tauri/src/lib.rs` | Tauri builder, `ping_sidecar` command, managed `Sidecar` state | done |
+| `src-tauri/src/sidecar.rs` | Spawns `npx tsx sidecar/index.ts` at startup, stdio JSON IPC | done |
+| `src-tauri/tauri.conf.json` | `productName: templates-widget`, identifier `com.noel.templatewidget` | done |
+| `sidecar/package.json` | Pins `@anthropic-ai/claude-agent-sdk` ^0.3.144 | done (SDK not used yet) |
+| `sidecar/index.ts` | newline-JSON loop; `ping` op works, `rank` op is a stub | partial |
+| `src/routes/+page.svelte` | Single "Ping sidecar" button (placeholder) | placeholder |
+| `package.json` | SvelteKit + Tauri deps + `@types/node` | done |
+| `.gitignore` | Covers `node_modules`, `target/`, `.svelte-kit`, `dist/` | done |
+
+**Commands to resume work:**
+
+```powershell
+# Dev (opens window with HMR)
+npm run tauri dev
+
+# Sanity checks
+cd src-tauri ; cargo check       # Rust
+cd ..        ; npm run check     # Svelte+TS
+
+# Sidecar standalone smoke test (echoes a pong)
+echo '{"id":"smoke","op":"ping"}' | npx tsx sidecar/index.ts
+```
+
+**Next milestone (recommended):** replace the Ping page with the three-pane shell (sidebar + main panel + collapsible right panel) using mocked templates. After that, real CRUD against `templates.json`, then clipboard + toggle logic, then the Agent SDK call to implement the sidecar's `rank` op.
+
 ## Decisions at a glance
 
 | Branch | Decision | Notes |
@@ -63,7 +98,7 @@ Notes:
 - `opening` and `signature` are independent toggleable strings. UI checkboxes control whether they prefix/suffix `body` on copy.
 - `{{variable}}` tokens in any field are preserved verbatim on copy. The UI may display detected variables as a hint, but no fill UI in v1.
 - Tags are arbitrary strings. The sidebar derives the tag list from observed values across all templates.
-- API key is NOT in this file — it lives in Windows Credential Manager.
+- No API key in this file (or anywhere in the app). Auth is via the Claude Agent SDK + Claude subscription; see [Auth & billing](#auth--billing).
 - Atomic writes: write to `templates.json.tmp`, fsync, rename. Pre-write backup to `templates.json.bak`.
 
 ## UI
@@ -180,7 +215,7 @@ Uses the Claude Agent SDK with subscription-based auth — no API key, no keycha
 
 ## Build & distribution
 
-- Build: `cargo tauri build` → `target/release/template-widget.exe` (~10 MB). The Node sidecar ships alongside (`sidecar/` folder bundled as a Tauri resource, or as a separately-distributed companion).
+- Build: `cargo tauri build` → `target/release/templates-widget.exe` (~10 MB). The Node sidecar ships alongside (`sidecar/` folder bundled as a Tauri resource, or as a separately-distributed companion).
 - **Runtime requirement: Node.js on the target machine** (v18+). For personal use this is fine — Node is already installed on the dev/target machine via the Claude Code setup. For broader distribution later, bundle a Node binary via Tauri's [sidecar binary feature](https://tauri.app/v1/guides/building/sidecar/) (~30 MB add to the package).
 - Distribution: tag a release on GitHub, upload binary + sidecar archive, link in README.
 - Install: download, run. No installer.
@@ -253,4 +288,4 @@ Small decisions still pending — make these inline during implementation:
 
 ## Status
 
-In design. Major branches resolved 2026-05-19 via `/grill-me` session. Next: scaffold Tauri + SvelteKit, implement the tracer feature path (CRUD + copy with toggles) before paste-match.
+Scaffolded and ready for feature work. Major design branches resolved 2026-05-19 via `/grill-me` session; scaffold + sidecar IPC verified the same day. See [Current state](#current-state-as-of-last-commit-on-main) for the file map and next-milestone pointer.
