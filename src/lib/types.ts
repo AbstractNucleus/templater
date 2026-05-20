@@ -1,0 +1,44 @@
+export interface Template {
+  id: string;
+  name: string;
+  tags: string[];
+  opening: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WindowGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type Theme = "dark" | "light";
+
+export interface Settings {
+  always_on_top_default: boolean;
+  global_hotkey: string;
+  start_minimised_to_tray: boolean;
+  window_geometry: WindowGeometry | null;
+  close_hint_shown: boolean;
+  global_signature: string;
+  theme: Theme;
+}
+
+export interface AppData {
+  version: number;
+  templates: Template[];
+  settings: Settings;
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  always_on_top_default: false,
+  global_hotkey: "Ctrl+Shift+Backslash",
+  start_minimised_to_tray: false,
+  window_geometry: null,
+  close_hint_shown: false,
+  global_signature: "",
+  theme: "dark",
+};

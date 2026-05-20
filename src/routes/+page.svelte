@@ -1,99 +1,1064 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import TagsSidebar from "$lib/components/TagsSidebar.svelte";
+  import TemplatesSidebar from "$lib/components/TemplatesSidebar.svelte";
+  import MainPanel from "$lib/components/MainPanel.svelte";
+  import TitleBar from "$lib/components/TitleBar.svelte";
+  import SettingsModal from "$lib/components/SettingsModal.svelte";
+  import ResizeHandles from "$lib/components/ResizeHandles.svelte";
+  import AgentSidebar from "$lib/components/AgentSidebar.svelte";
+  import EditorPane from "$lib/components/EditorPane.svelte";
+  import SaveAsModal from "$lib/components/SaveAsModal.svelte";
+  import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
+  import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
+  import { mockTemplates } from "$lib/mocks";
+  import {
+    loadAppData,
+    saveAppData,
+    makeBlankTemplate,
+    rankTemplates,
+    getEnvWarnings,
+    explainRankError,
+    editTemplate,
+    openDataDir,
+    type Ranking,
+    type ChatTurn,
+  } from "$lib/api";
+  import { DEFAULT_SETTINGS, type AppData, type Settings, type Template } from "$lib/types";
 
-  let response = $state<string>("");
-  let busy = $state(false);
-  let error = $state<string | null>(null);
+  const PASTE_THRESHOLD = 30;
+  const RANK_DEBOUNCE_MS = 600;
+  const DATA_VERSION = 1;
 
-  async function pingSidecar(): Promise<void> {
-    busy = true;
-    error = null;
-    try {
-      const result = await invoke<Record<string, unknown>>("ping_sidecar");
-      response = JSON.stringify(result, null, 2);
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
+  const TAGS_MIN = 100;
+  const TAGS_MAX = 400;
+  const TEMPLATES_MIN = 160;
+  const TEMPLATES_MAX = 500;
+
+  let tagsWidth = $state(180);
+  let templatesWidth = $state(260);
+  let searchInput: HTMLInputElement | undefined = $state();
+
+  function clearSearch(): void {
+    searchQuery = "";
+    searchInput?.focus();
+  }
+
+  function handleGlobalContextMenu(e: MouseEvent): void {
+    const target = e.target as HTMLElement | null;
+    if (!target) {
+      e.preventDefault();
+      return;
+    }
+    const tag = target.tagName;
+    const isInputLike = tag === "INPUT" || tag === "TEXTAREA";
+
+    if (isInputLike) {
+      e.preventDefault();
+      const input = target as HTMLInputElement | HTMLTextAreaElement;
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? 0;
+      const hasSelection = start !== end;
+      contextMenu = {
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: "Paste",
+            onClick: async () => {
+              let text: string | null;
+              try {
+                text = await readText();
+              } catch {
+                return;
+              }
+              if (text == null || text.length === 0) return;
+              input.focus();
+              // execCommand("insertText") feeds through the native input
+              // pipeline, preserving the browser undo stack so Ctrl+Z works
+              // afterwards. Falls back to direct mutation if unsupported.
+              const ok = document.execCommand("insertText", false, text);
+              if (!ok) {
+                const s = input.selectionStart ?? input.value.length;
+                const en = input.selectionEnd ?? input.value.length;
+                input.value = input.value.slice(0, s) + text + input.value.slice(en);
+                const caret = s + text.length;
+                input.setSelectionRange(caret, caret);
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+            },
+          },
+          {
+            label: "Copy",
+            disabled: !hasSelection,
+            onClick: () => {
+              const slice = input.value.slice(start, end);
+              if (slice.length > 0) void writeText(slice);
+            },
+          },
+          {
+            label: "Select all",
+            onClick: () => {
+              input.focus();
+              input.select();
+            },
+          },
+        ],
+      };
+      return;
+    }
+
+    // Outside an input: contenteditable still gets default menu;
+    // otherwise show Copy when there's a text selection, else suppress.
+    if (target.isContentEditable) return;
+
+    const selectedText = window.getSelection()?.toString() ?? "";
+    if (selectedText.length > 0) {
+      e.preventDefault();
+      contextMenu = {
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: "Copy",
+            onClick: () => {
+              void writeText(selectedText);
+            },
+          },
+        ],
+      };
+      return;
+    }
+    e.preventDefault();
+  }
+
+  function handleGlobalKeydown(e: KeyboardEvent): void {
+    if (contextDeleteTarget) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelContextDelete();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        void confirmContextDelete();
+      }
+      return;
+    }
+    if (settingsOpen) return;
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
+      e.preventDefault();
+      clearSearch();
     }
   }
+
+  function startResize(target: "tags" | "templates" | "agent"): (e: PointerEvent) => void {
+    return (e) => {
+      e.preventDefault();
+      const handle = e.currentTarget as HTMLElement;
+      const startX = e.clientX;
+      const startWidth =
+        target === "tags" ? tagsWidth : target === "templates" ? templatesWidth : agentSidebarWidth;
+      const min =
+        target === "tags" ? TAGS_MIN : target === "templates" ? TEMPLATES_MIN : AGENT_MIN;
+      const max =
+        target === "tags" ? TAGS_MAX : target === "templates" ? TEMPLATES_MAX : AGENT_MAX;
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add("dragging");
+
+      function onMove(ev: PointerEvent): void {
+        const next = Math.max(min, Math.min(max, startWidth + ev.clientX - startX));
+        if (target === "tags") tagsWidth = next;
+        else if (target === "templates") templatesWidth = next;
+        else agentSidebarWidth = next;
+      }
+
+      function onUp(): void {
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        handle.removeEventListener("pointercancel", onUp);
+        handle.releasePointerCapture(e.pointerId);
+        handle.classList.remove("dragging");
+      }
+
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
+      handle.addEventListener("pointercancel", onUp);
+    };
+  }
+
+  let templates = $state<Template[]>([]);
+  let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
+  let envApiKeyOverride = $state(false);
+  let loaded = $state(false);
+  let loadError = $state<string | null>(null);
+
+  let searchQuery = $state("");
+  let selectedTagIds = $state<Set<string>>(new Set());
+  let selectedTemplateId = $state<string | null>(null);
+  let includeOpening = $state(true);
+  let includeSignature = $state(true);
+  let editing = $state(false);
+  let settingsOpen = $state(false);
+
+  let rankings = $state<Ranking[] | null>(null);
+  let rankLoading = $state(false);
+  let rankError = $state<string | null>(null);
+  let rankTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let baseMode = $state(false);
+  let baseSourceName = $state("");
+  let baseDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
+  let agentMessages = $state<ChatTurn[]>([]);
+  let agentBusy = $state(false);
+  let agentError = $state<string | null>(null);
+  let saveAsOpen = $state(false);
+  let agentSidebarWidth = $state(340);
+  let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
+  let contextDeleteTarget = $state<Template | null>(null);
+  const AGENT_MIN = 240;
+  const AGENT_MAX = 600;
+
+  const selectedTemplate = $derived(
+    templates.find((t) => t.id === selectedTemplateId) ?? null,
+  );
+
+  $effect(() => {
+    void (async () => {
+      try {
+        const [data, env] = await Promise.all([loadAppData(), getEnvWarnings()]);
+        envApiKeyOverride = env.api_key_override;
+        if (data === null) {
+          templates = mockTemplates;
+          settings = { ...DEFAULT_SETTINGS };
+          await saveAppData({
+            version: DATA_VERSION,
+            templates: mockTemplates,
+            settings,
+          });
+        } else {
+          templates = data.templates;
+          settings = data.settings;
+        }
+        selectedTemplateId = templates[0]?.id ?? null;
+      } catch (e) {
+        loadError = String(e);
+        templates = mockTemplates;
+        selectedTemplateId = templates[0]?.id ?? null;
+      } finally {
+        loaded = true;
+      }
+    })();
+  });
+
+  async function persist(
+    nextTemplates: Template[],
+    nextSettings: Settings = settings,
+  ): Promise<void> {
+    templates = nextTemplates;
+    settings = nextSettings;
+    try {
+      await saveAppData({
+        version: DATA_VERSION,
+        templates: nextTemplates,
+        settings: nextSettings,
+      });
+    } catch (e) {
+      loadError = `save failed: ${e}`;
+    }
+  }
+
+  function handleTagToggle(tag: string, additive: boolean): void {
+    const next = new Set(selectedTagIds);
+    if (additive) {
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+    } else if (next.has(tag) && next.size === 1) {
+      next.clear();
+    } else {
+      next.clear();
+      next.add(tag);
+    }
+    selectedTagIds = next;
+  }
+
+  function handleTemplateSelect(id: string): void {
+    if (editing) editing = false;
+    selectedTemplateId = selectedTemplateId === id ? null : id;
+  }
+
+  function handleSearchChange(q: string): void {
+    searchQuery = q;
+  }
+
+  $effect(() => {
+    if (rankTimer) {
+      clearTimeout(rankTimer);
+      rankTimer = null;
+    }
+    const q = searchQuery;
+    if (q.trim().length < PASTE_THRESHOLD) {
+      rankings = null;
+      rankError = null;
+      rankLoading = false;
+      return;
+    }
+    const catalog = templates;
+    rankTimer = setTimeout(async () => {
+      rankLoading = true;
+      rankError = null;
+      try {
+        const result = await rankTemplates(q, catalog);
+        if (searchQuery === q) rankings = result;
+      } catch (e) {
+        if (searchQuery === q) {
+          rankError = explainRankError(String(e));
+          rankings = null;
+        }
+      } finally {
+        if (searchQuery === q) rankLoading = false;
+      }
+    }, RANK_DEBOUNCE_MS);
+  });
+
+  async function retryRank(): Promise<void> {
+    rankError = null;
+    const q = searchQuery;
+    if (q.trim().length < PASTE_THRESHOLD) return;
+    rankLoading = true;
+    try {
+      const result = await rankTemplates(q, templates);
+      if (searchQuery === q) rankings = result;
+    } catch (e) {
+      if (searchQuery === q) rankError = explainRankError(String(e));
+    } finally {
+      if (searchQuery === q) rankLoading = false;
+    }
+  }
+
+  async function handleNew(): Promise<void> {
+    const blank = makeBlankTemplate();
+    await persist([blank, ...templates]);
+    selectedTemplateId = blank.id;
+    editing = true;
+  }
+
+  async function handleSave(updated: Template): Promise<void> {
+    const next = templates.map((t) => (t.id === updated.id ? updated : t));
+    await persist(next);
+    editing = false;
+  }
+
+  async function handleDuplicate(): Promise<void> {
+    if (!selectedTemplate) return;
+    const now = new Date().toISOString();
+    const copy: Template = {
+      ...selectedTemplate,
+      id: crypto.randomUUID(),
+      name: `${selectedTemplate.name} (copy)`,
+      created_at: now,
+      updated_at: now,
+    };
+    const idx = templates.findIndex((t) => t.id === selectedTemplate.id);
+    const next = [...templates];
+    next.splice(idx + 1, 0, copy);
+    await persist(next);
+    selectedTemplateId = copy.id;
+  }
+
+  async function handleDelete(): Promise<void> {
+    if (!selectedTemplate) return;
+    const id = selectedTemplate.id;
+    const idx = templates.findIndex((t) => t.id === id);
+    const next = templates.filter((t) => t.id !== id);
+    await persist(next);
+    selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
+  }
+
+  async function handleSettingsUpdate(next: Settings): Promise<void> {
+    await persist(templates, next);
+  }
+
+  async function dismissCloseHint(): Promise<void> {
+    await persist(templates, { ...settings, close_hint_shown: true });
+  }
+
+  async function duplicateTemplateById(id: string): Promise<void> {
+    const src = templates.find((t) => t.id === id);
+    if (!src) return;
+    const now = new Date().toISOString();
+    const copy: Template = {
+      ...src,
+      id: crypto.randomUUID(),
+      name: `${src.name} (copy)`,
+      created_at: now,
+      updated_at: now,
+    };
+    const idx = templates.findIndex((t) => t.id === id);
+    const next = [...templates];
+    next.splice(idx + 1, 0, copy);
+    await persist(next);
+    selectedTemplateId = copy.id;
+  }
+
+  async function deleteTemplateById(id: string): Promise<void> {
+    const idx = templates.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    const next = templates.filter((t) => t.id !== id);
+    await persist(next);
+    if (selectedTemplateId === id) {
+      selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
+    }
+  }
+
+  function openContextForTemplate(id: string, x: number, y: number): void {
+    const tpl = templates.find((t) => t.id === id);
+    if (!tpl) return;
+    contextMenu = {
+      x,
+      y,
+      items: [
+        { label: "Duplicate", onClick: () => void duplicateTemplateById(id) },
+        { label: "Delete", danger: true, onClick: () => (contextDeleteTarget = tpl) },
+      ],
+    };
+  }
+
+  function openContextForEmpty(x: number, y: number): void {
+    contextMenu = {
+      x,
+      y,
+      items: [
+        {
+          label: "Open data folder",
+          onClick: () => {
+            openDataDir().catch((e) => (loadError = `open folder failed: ${e}`));
+          },
+        },
+      ],
+    };
+  }
+
+  function closeContextMenu(): void {
+    contextMenu = null;
+  }
+
+  async function confirmContextDelete(): Promise<void> {
+    if (!contextDeleteTarget) return;
+    const id = contextDeleteTarget.id;
+    contextDeleteTarget = null;
+    await deleteTemplateById(id);
+  }
+
+  function cancelContextDelete(): void {
+    contextDeleteTarget = null;
+  }
+
+
+  function enterBaseMode(): void {
+    if (!selectedTemplate) return;
+    baseSourceName = selectedTemplate.name;
+    baseDraft = { opening: selectedTemplate.opening, body: selectedTemplate.body };
+    agentMessages = [];
+    agentBusy = false;
+    agentError = null;
+    baseMode = true;
+  }
+
+  function exitBaseMode(): void {
+    baseMode = false;
+    baseSourceName = "";
+    baseDraft = { opening: "", body: "" };
+    agentMessages = [];
+    agentBusy = false;
+    agentError = null;
+    saveAsOpen = false;
+  }
+
+  async function handleAgentPrompt(prompt: string): Promise<void> {
+    if (agentBusy) return;
+    agentError = null;
+    const history = [...agentMessages];
+    agentMessages = [...history, { role: "user", content: prompt }];
+    agentBusy = true;
+    try {
+      const { reasoning, updated } = await editTemplate(baseDraft, history, prompt);
+      baseDraft = updated;
+      agentMessages = [
+        ...agentMessages,
+        { role: "assistant", content: reasoning || "(no reasoning provided)" },
+      ];
+    } catch (e) {
+      agentError = explainRankError(String(e));
+    } finally {
+      agentBusy = false;
+    }
+  }
+
+  function openSaveAs(): void {
+    saveAsOpen = true;
+  }
+
+  async function handleSaveAs(name: string, tags: string[]): Promise<void> {
+    const now = new Date().toISOString();
+    const newTemplate: Template = {
+      id: crypto.randomUUID(),
+      name,
+      tags,
+      opening: baseDraft.opening,
+      body: baseDraft.body,
+      created_at: now,
+      updated_at: now,
+    };
+    const next = [newTemplate, ...templates];
+    await persist(next);
+    selectedTemplateId = newTemplate.id;
+    saveAsOpen = false;
+    exitBaseMode();
+  }
+
+  $effect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.theme = settings.theme;
+    }
+  });
 </script>
 
-<main>
-  <h1>templates-widget</h1>
-  <p class="subtitle">Sidecar IPC scaffold — round-trip ping.</p>
+<svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
 
-  <button onclick={pingSidecar} disabled={busy}>
-    {busy ? "Pinging…" : "Ping sidecar"}
-  </button>
-
-  {#if error}
-    <pre class="error">{error}</pre>
-  {:else if response}
-    <pre class="response">{response}</pre>
+<div class="frame">
+  <TitleBar onOpenSettings={() => (settingsOpen = true)} />
+  {#if envApiKeyOverride}
+    <div class="env-banner">
+      <strong>ANTHROPIC_API_KEY</strong> is set — paste-match will bill API rates, not subscription credits.
+      <button class="banner-action" onclick={() => (settingsOpen = true)}>Details</button>
+    </div>
   {/if}
-</main>
+  {#if !baseMode}
+    <div class="search-row">
+      <div class="search-wrap">
+        <input
+          bind:this={searchInput}
+          class="search"
+          type="text"
+          placeholder="Search or paste a message to find matching templates…"
+          value={searchQuery}
+          oninput={(e) => handleSearchChange(e.currentTarget.value)}
+        />
+        {#if searchQuery.length > 0}
+          <button
+            class="clear-btn"
+            title="Clear (Ctrl+L)"
+            aria-label="Clear search"
+            onclick={clearSearch}
+          >×</button>
+        {/if}
+      </div>
+    </div>
+  {/if}
+  <div class="shell">
+    {#if !loaded}
+      <div class="loading">Loading…</div>
+    {:else if baseMode}
+      <AgentSidebar
+        messages={agentMessages}
+        busy={agentBusy}
+        error={agentError}
+        sourceName={baseSourceName}
+        width={agentSidebarWidth}
+        onSubmit={handleAgentPrompt}
+      />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="col-resize"
+        title="Drag to resize"
+        onpointerdown={startResize("agent")}
+      ></div>
+      <EditorPane
+        opening={baseDraft.opening}
+        body={baseDraft.body}
+        globalSignature={settings.global_signature}
+        {includeOpening}
+        {includeSignature}
+        onUpdate={(next) => (baseDraft = next)}
+        onToggleOpening={(v) => (includeOpening = v)}
+        onToggleSignature={(v) => (includeSignature = v)}
+        onSave={openSaveAs}
+        onCancel={exitBaseMode}
+      />
+    {:else}
+      <TagsSidebar
+        {templates}
+        {selectedTagIds}
+        width={tagsWidth}
+        onTagToggle={handleTagToggle}
+        onContextEmpty={openContextForEmpty}
+      />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="col-resize"
+        title="Drag to resize"
+        onpointerdown={startResize("tags")}
+      ></div>
+      <TemplatesSidebar
+        {templates}
+        {selectedTagIds}
+        {selectedTemplateId}
+        {searchQuery}
+        {rankings}
+        {rankLoading}
+        {rankError}
+        pasteThreshold={PASTE_THRESHOLD}
+        width={templatesWidth}
+        onTemplateSelect={handleTemplateSelect}
+        onNew={handleNew}
+        onRetryRank={retryRank}
+        onContextTemplate={openContextForTemplate}
+        onContextEmpty={openContextForEmpty}
+      />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="col-resize"
+        title="Drag to resize"
+        onpointerdown={startResize("templates")}
+      ></div>
+      <MainPanel
+        template={selectedTemplate}
+        {includeOpening}
+        {includeSignature}
+        {editing}
+        globalSignature={settings.global_signature}
+        onToggleOpening={(v) => (includeOpening = v)}
+        onToggleSignature={(v) => (includeSignature = v)}
+        onEnterEdit={() => (editing = true)}
+        onCancelEdit={() => (editing = false)}
+        onSave={handleSave}
+        onDuplicate={handleDuplicate}
+        onDelete={handleDelete}
+        onBaseOnTemplate={enterBaseMode}
+      />
+    {/if}
+    {#if loadError}
+      <div class="error-banner">{loadError}</div>
+    {/if}
+    {#if loaded && !settings.close_hint_shown}
+      <div class="hint-banner">
+        <span>Tip: closing the window minimises to tray. Quit fully via the tray icon.</span>
+        <button class="banner-action" onclick={dismissCloseHint}>Got it</button>
+      </div>
+    {/if}
+  </div>
+</div>
+
+<ResizeHandles />
+
+{#if settingsOpen}
+  <SettingsModal
+    {settings}
+    {envApiKeyOverride}
+    onClose={() => (settingsOpen = false)}
+    onUpdate={handleSettingsUpdate}
+  />
+{/if}
+
+{#if saveAsOpen}
+  <SaveAsModal
+    defaultName={`${baseSourceName} (edited)`}
+    onSave={handleSaveAs}
+    onCancel={() => (saveAsOpen = false)}
+  />
+{/if}
+
+{#if contextMenu}
+  <ContextMenu
+    x={contextMenu.x}
+    y={contextMenu.y}
+    items={contextMenu.items}
+    onClose={closeContextMenu}
+  />
+{/if}
+
+{#if contextDeleteTarget}
+  <div
+    class="confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="ctx-confirm-title"
+    tabindex="-1"
+    onclick={(e) => e.target === e.currentTarget && cancelContextDelete()}
+    onkeydown={() => {}}
+  >
+    <div class="confirm-modal">
+      <h3 id="ctx-confirm-title">Delete template?</h3>
+      <p class="confirm-name">"{contextDeleteTarget.name}"</p>
+      <p class="confirm-warn">This can't be undone.</p>
+      <div class="confirm-actions">
+        <button class="confirm-btn" onclick={cancelContextDelete}>Cancel</button>
+        <!-- svelte-ignore a11y_autofocus -->
+        <button class="confirm-btn danger" onclick={confirmContextDelete} autofocus>Delete</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
-  :global(html, body) {
+  :global(:root) {
+    --bg-base: #1a1a1a;
+    --bg-elevated: #161616;
+    --bg-titlebar: #131313;
+    --bg-input: #0f0f0f;
+    --bg-hover: #222222;
+    --bg-active: #2a2a2a;
+    --border: #2a2a2a;
+    --border-strong: #3a3a3a;
+    --border-focus: #4a4a4a;
+    --text: #e6e6e6;
+    --text-strong: #f0f0f0;
+    --text-muted: #888888;
+    --text-subtle: #666666;
+    --text-deemphasis: #777777;
+    --text-placeholder: #555555;
+    --shadow: rgba(0, 0, 0, 0.6);
+    --backdrop: rgba(0, 0, 0, 0.5);
+    --accent-positive-bg: #2a3a2a;
+    --accent-positive-border: #3a5a3a;
+    --accent-positive-text: #d0e0d0;
+    --accent-positive-hover: #34453a;
+    --accent-danger-bg: #3a2222;
+    --accent-danger-border: #5a3030;
+    --accent-danger-text: #ff9a9a;
+    --accent-warning-bg: #3a2a16;
+    --accent-warning-border: #5a4426;
+    --accent-warning-text: #f0d090;
+    --accent-warning-strong: #ffe0a0;
+    --accent-info-bg: #1a2a3a;
+    --accent-info-border: #2a4a6a;
+    --accent-info-text: #a8c8e8;
+    --rank-error-bg: #2a1a1a;
+  }
+
+  :global([data-theme="light"]) {
+    --bg-base: #fafafa;
+    --bg-elevated: #f0f0f0;
+    --bg-titlebar: #e8e8e8;
+    --bg-input: #ffffff;
+    --bg-hover: #e0e0e0;
+    --bg-active: #d6d6d6;
+    --border: #d8d8d8;
+    --border-strong: #c0c0c0;
+    --border-focus: #888888;
+    --text: #1a1a1a;
+    --text-strong: #000000;
+    --text-muted: #555555;
+    --text-subtle: #888888;
+    --text-deemphasis: #666666;
+    --text-placeholder: #aaaaaa;
+    --shadow: rgba(0, 0, 0, 0.15);
+    --backdrop: rgba(0, 0, 0, 0.3);
+    --accent-positive-bg: #d4eada;
+    --accent-positive-border: #88c896;
+    --accent-positive-text: #1e5f2e;
+    --accent-positive-hover: #c0e0c8;
+    --accent-danger-bg: #fbe2e2;
+    --accent-danger-border: #e0a0a0;
+    --accent-danger-text: #9a2a2a;
+    --accent-warning-bg: #fbf0d8;
+    --accent-warning-border: #d8b870;
+    --accent-warning-text: #7a5510;
+    --accent-warning-strong: #5a3f00;
+    --accent-info-bg: #dde8f4;
+    --accent-info-border: #a0b8d0;
+    --accent-info-text: #2a4a6a;
+    --rank-error-bg: #fbe2e2;
+  }
+
+  :global(html) {
     margin: 0;
     padding: 0;
-    background: #1a1a1a;
-    color: #e6e6e6;
+    height: 100%;
+    background: transparent;
+    color: var(--text);
     font-family: Inter, system-ui, sans-serif;
+    overflow: hidden;
   }
 
-  main {
-    max-width: 480px;
-    margin: 0 auto;
-    padding: 3rem 1.5rem;
+  :global(body) {
+    margin: 0;
+    padding: 6px;
+    box-sizing: border-box;
+    height: 100vh;
+    background: transparent;
+    overflow: hidden;
   }
 
-  h1 {
-    margin: 0 0 0.25rem;
-    font-size: 1.5rem;
-    font-weight: 600;
+  :global(#svelte) {
+    height: 100%;
   }
 
-  .subtitle {
-    margin: 0 0 2rem;
-    color: #888;
+  :global(::-webkit-scrollbar) {
+    width: 10px;
+    height: 10px;
+  }
+
+  :global(::-webkit-scrollbar-track) {
+    background: transparent;
+  }
+
+  :global(::-webkit-scrollbar-thumb) {
+    background: var(--border);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+    min-height: 28px;
+  }
+
+  :global(::-webkit-scrollbar-thumb:hover) {
+    background: var(--border-strong);
+    background-clip: content-box;
+    border: 2px solid transparent;
+  }
+
+  :global(::-webkit-scrollbar-thumb:active) {
+    background: var(--border-focus);
+    background-clip: content-box;
+    border: 2px solid transparent;
+  }
+
+  :global(::-webkit-scrollbar-corner) {
+    background: transparent;
+  }
+
+  .frame {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 24px var(--shadow), 0 0 0 1px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .shell {
+    display: flex;
+    flex: 1;
+    width: 100%;
+    position: relative;
+    min-height: 0;
+  }
+
+  .search-row {
+    padding: 10px 12px;
+    background: var(--bg-titlebar);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .search-wrap {
+    position: relative;
+  }
+
+  .search {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 7px 34px 7px 12px;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 0.85rem;
+  }
+
+  .clear-btn {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    font-size: 1.05rem;
+    line-height: 1;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .clear-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .search:focus {
+    outline: none;
+    border-color: var(--border-focus);
+  }
+
+  .search::placeholder {
+    color: var(--text-placeholder);
+  }
+
+  .env-banner {
+    background: var(--accent-warning-bg);
+    color: var(--accent-warning-text);
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    line-height: 1.3;
+    border-bottom: 1px solid var(--accent-warning-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .env-banner strong {
+    color: var(--accent-warning-strong);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.75rem;
+  }
+
+  .banner-action {
+    background: transparent;
+    border: 1px solid var(--accent-warning-border);
+    color: var(--accent-warning-text);
+    padding: 2px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.75rem;
+  }
+
+  .banner-action:hover {
+    background: var(--bg-hover);
+  }
+
+  .loading {
+    margin: auto;
+    color: var(--text-subtle);
     font-size: 0.9rem;
   }
 
-  button {
-    background: #2a2a2a;
-    color: #e6e6e6;
-    border: 1px solid #3a3a3a;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
+  .col-resize {
+    width: 5px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 120ms;
+    margin-left: -1px;
+    margin-right: -1px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .col-resize:hover,
+  :global(.col-resize.dragging) {
+    background: var(--border-focus);
+  }
+
+  .error-banner {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--accent-danger-bg);
+    color: var(--accent-danger-text);
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    border-top: 1px solid var(--accent-danger-border);
+  }
+
+  .hint-banner {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--accent-info-bg);
+    color: var(--accent-info-text);
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    border-top: 1px solid var(--accent-info-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--backdrop);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 260;
+  }
+
+  .confirm-modal {
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+    width: 360px;
+    max-width: calc(100vw - 48px);
+    color: var(--text);
+    box-shadow: 0 8px 32px var(--shadow);
+  }
+
+  .confirm-modal h3 {
+    margin: 0 0 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  .confirm-name {
+    margin: 0 0 4px;
+    font-size: 0.85rem;
+    color: var(--text);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    word-break: break-word;
+  }
+
+  .confirm-warn {
+    margin: 0 0 18px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .confirm-btn {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 16px;
+    border-radius: 4px;
     cursor: pointer;
     font: inherit;
-  }
-
-  button:hover:not(:disabled) {
-    background: #333;
-    border-color: #4a4a4a;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  pre {
-    margin-top: 1.5rem;
-    padding: 0.75rem 1rem;
-    background: #0f0f0f;
-    border: 1px solid #2a2a2a;
-    border-radius: 6px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     font-size: 0.85rem;
-    overflow-x: auto;
   }
 
-  .error {
-    border-color: #6b2a2a;
-    color: #ff8a8a;
+  .confirm-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+
+  .confirm-btn.danger {
+    background: var(--accent-danger-bg);
+    border-color: var(--accent-danger-border);
+    color: var(--accent-danger-text);
+  }
+
+  .confirm-btn.danger:hover {
+    background: var(--accent-danger-border);
   }
 </style>

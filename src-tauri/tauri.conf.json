@@ -14,7 +14,13 @@
       {
         "title": "templates-widget",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "minWidth": 480,
+        "minHeight": 360
       }
     ],
     "security": {
