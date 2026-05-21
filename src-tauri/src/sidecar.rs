@@ -110,12 +110,24 @@ impl Sidecar {
             SidecarCommand::BundledNode(n) => format!("{} (bundled)", n.display()),
         };
 
-        let mut child = command
+        command
             .arg(&script.path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+
+        // Without CREATE_NO_WINDOW the bundled node.exe pops a console window
+        // when spawned from a GUI parent. The handles we care about
+        // (stdin/stdout) still work — only the console allocation is
+        // suppressed.
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = command
             .spawn()
             .map_err(|e| format!("failed to spawn sidecar ({label} {}): {e}", script.path.display()))?;
 
