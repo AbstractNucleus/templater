@@ -1,6 +1,6 @@
 [package]
 name = "templates-widget"
-version = "0.1.0"
+version = "0.1.1"
 description = "Templates widget — Tauri 2 desktop app for personal prose templating."
 authors = ["Noel <noelhkleen@gmail.com>"]
 edition = "2021"

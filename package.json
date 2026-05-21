@@ -1,6 +1,6 @@
 {
   "name": "coin_template_manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Personal templates widget — desk-side companion app for prose templating with semantic paste-to-match via the Claude Agent SDK.",
   "type": "module",
   "scripts": {
