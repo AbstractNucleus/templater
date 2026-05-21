@@ -2,22 +2,26 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
   let {
+    kind,
     opening,
     body,
     globalSignature,
     includeOpening,
     includeSignature,
+    canSave,
     onUpdate,
     onToggleOpening,
     onToggleSignature,
     onSave,
     onCancel,
   }: {
+    kind: "new" | "base";
     opening: string;
     body: string;
     globalSignature: string;
     includeOpening: boolean;
     includeSignature: boolean;
+    canSave: boolean;
     onUpdate: (next: { opening: string; body: string }) => void;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
@@ -52,10 +56,14 @@
 
 <section class="pane">
   <div class="header-row">
-    <div class="breadcrumb">base-on-template — agent editor</div>
+    <div class="breadcrumb">
+      {kind === "new" ? "new template — agent editor" : "base-on-template — agent editor"}
+    </div>
     <div class="actions">
       <button class="icon-btn" onclick={onCancel}>Cancel</button>
-      <button class="icon-btn primary" onclick={onSave}>Save as new…</button>
+      {#if canSave}
+        <button class="icon-btn primary" onclick={onSave}>Save as new…</button>
+      {/if}
     </div>
   </div>
 

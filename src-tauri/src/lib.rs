@@ -2,9 +2,10 @@ mod sidecar;
 mod store;
 
 use sidecar::Sidecar;
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Mutex;
-use store::{AppData, Store, Template, WindowGeometry, DEFAULT_HOTKEY};
+use store::{AppData, Store, Template, WindowGeometry, DATA_VERSION, DEFAULT_HOTKEY};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -65,6 +66,110 @@ fn load_app_data(store: tauri::State<'_, Store>) -> Result<Option<AppData>, Stri
 #[tauri::command]
 fn save_app_data(data: AppData, store: tauri::State<'_, Store>) -> Result<(), String> {
     store.save(&data)
+}
+
+/// Templates-only export file. Settings are intentionally excluded — they're
+/// machine-specific (window geometry, hotkey, theme) and exporting them would
+/// pollute the import target.
+#[derive(serde::Serialize)]
+struct ExportFile {
+    version: u32,
+    templates: Vec<Template>,
+}
+
+/// Permissive import shape: only `templates` is required; an export from this
+/// app, a full AppData backup, or any other JSON object that carries a
+/// `templates` array will all parse.
+#[derive(serde::Deserialize)]
+struct ImportFile {
+    templates: Vec<Template>,
+}
+
+#[derive(serde::Serialize)]
+struct ImportResult {
+    added: usize,
+    skipped: usize,
+    templates: Vec<Template>,
+}
+
+#[tauri::command]
+fn export_templates(path: String, store: tauri::State<'_, Store>) -> Result<usize, String> {
+    let data = store
+        .load()?
+        .unwrap_or_else(|| AppData::new(Vec::new()));
+    let count = data.templates.len();
+    let file = ExportFile {
+        version: DATA_VERSION,
+        templates: data.templates,
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(count)
+}
+
+#[tauri::command]
+fn export_template(
+    id: String,
+    path: String,
+    store: tauri::State<'_, Store>,
+) -> Result<(), String> {
+    let data = store
+        .load()?
+        .ok_or_else(|| "no templates file on disk".to_string())?;
+    let tpl = data
+        .templates
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| format!("template {id} not found"))?;
+    let file = ExportFile {
+        version: DATA_VERSION,
+        templates: vec![tpl],
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn import_templates(
+    path: String,
+    store: tauri::State<'_, Store>,
+) -> Result<ImportResult, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
+    let file: ImportFile = serde_json::from_str(&text)
+        .or_else(|_| {
+            // Tolerate the bare-array shape: [Template, ...]
+            serde_json::from_str::<Vec<Template>>(&text).map(|templates| ImportFile { templates })
+        })
+        .map_err(|e| format!("not a valid templates export: {e}"))?;
+
+    let mut data = store
+        .load()?
+        .unwrap_or_else(|| AppData::new(Vec::new()));
+    let existing: HashSet<String> = data.templates.iter().map(|t| t.id.clone()).collect();
+
+    let mut additions: Vec<Template> = Vec::new();
+    let mut skipped = 0usize;
+    for tpl in file.templates {
+        if existing.contains(&tpl.id) {
+            skipped += 1;
+        } else {
+            additions.push(tpl);
+        }
+    }
+    let added = additions.len();
+
+    // Prepend in file order so the imported chunk lands at the top and keeps
+    // its internal ordering. tail = existing.
+    additions.extend(data.templates.into_iter());
+    data.templates = additions;
+
+    store.save(&data)?;
+    Ok(ImportResult {
+        added,
+        skipped,
+        templates: data.templates,
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -173,7 +278,10 @@ fn toggle_main_window(app: &tauri::AppHandle) {
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
 
     #[cfg(desktop)]
     {
@@ -195,8 +303,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let sidecar = Sidecar::spawn().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-            app.manage(sidecar);
+            app.manage(Sidecar::start(&app.handle()));
 
             let dir = app
                 .path()
@@ -205,7 +312,7 @@ pub fn run() {
             std::fs::create_dir_all(&dir).map_err(|e| -> Box<dyn std::error::Error> {
                 format!("mkdir {}: {e}", dir.display()).into()
             })?;
-            let store = Store::new(dir.join("templates.json"));
+            let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
 
             let loaded_settings = store.load().ok().flatten().map(|d| d.settings);
             let start_minimised = loaded_settings
@@ -296,6 +403,9 @@ pub fn run() {
             edit_template,
             load_app_data,
             save_app_data,
+            export_templates,
+            export_template,
+            import_templates,
             get_env_warnings,
             set_hotkey,
             open_data_dir,

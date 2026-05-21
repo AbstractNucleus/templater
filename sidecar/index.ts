@@ -198,6 +198,9 @@ Rules:
 - Preserve {{variable}} placeholders unless the user explicitly asks to remove them.
 - Keep changes targeted — do not rewrite the entire message unless asked.
 - "opening" is the greeting line; "body" is everything else.
+- If the current draft is empty (both opening and body blank), treat the user's
+  instruction as a request to draft a new template from scratch. Use {{variable}}
+  placeholders for names, dates, or other context the recipient should fill in.
 - If the user's instruction is unclear or unsafe to apply, return the draft unchanged
   and explain why in reasoning.`;
 

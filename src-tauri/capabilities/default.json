@@ -15,6 +15,10 @@
     "opener:default",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "dialog:allow-save",
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

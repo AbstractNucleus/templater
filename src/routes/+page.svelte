@@ -10,19 +10,25 @@
   import SaveAsModal from "$lib/components/SaveAsModal.svelte";
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
-  import { mockTemplates } from "$lib/mocks";
+  import { starterTemplates } from "$lib/starterTemplates";
+  import { searchTemplates } from "$lib/search";
   import {
     loadAppData,
     saveAppData,
-    makeBlankTemplate,
     rankTemplates,
     getEnvWarnings,
     explainRankError,
     editTemplate,
     openDataDir,
+    exportTemplates,
+    exportTemplate,
+    importTemplates,
+    checkForUpdate,
+    getAppVersion,
     type Ranking,
     type ChatTurn,
   } from "$lib/api";
+  import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import { DEFAULT_SETTINGS, type AppData, type Settings, type Template } from "$lib/types";
 
   const PASTE_THRESHOLD = 30;
@@ -189,6 +195,7 @@
   let envApiKeyOverride = $state(false);
   let loaded = $state(false);
   let loadError = $state<string | null>(null);
+  let appVersion = $state("0.0.0");
 
   let searchQuery = $state("");
   let selectedTagIds = $state<Set<string>>(new Set());
@@ -204,6 +211,7 @@
   let rankTimer: ReturnType<typeof setTimeout> | null = null;
 
   let baseMode = $state(false);
+  let baseKind = $state<"new" | "base">("base");
   let baseSourceName = $state("");
   let baseDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
   let agentMessages = $state<ChatTurn[]>([]);
@@ -220,17 +228,42 @@
     templates.find((t) => t.id === selectedTemplateId) ?? null,
   );
 
+  const isEditorMode = $derived(settings.mode === "editor");
+
+  const availableTags = $derived.by(() => {
+    const set = new Set<string>();
+    for (const t of templates) for (const tag of t.tags) set.add(tag);
+    return [...set].sort();
+  });
+
+  const tagFiltered = $derived.by(() => {
+    if (selectedTagIds.size === 0) return templates;
+    return templates.filter((t) => {
+      for (const tag of selectedTagIds) {
+        if (!t.tags.includes(tag)) return false;
+      }
+      return true;
+    });
+  });
+
+  const searchResults = $derived(searchTemplates(searchQuery, tagFiltered));
+
   $effect(() => {
     void (async () => {
       try {
-        const [data, env] = await Promise.all([loadAppData(), getEnvWarnings()]);
+        const [data, env, version] = await Promise.all([
+          loadAppData(),
+          getEnvWarnings(),
+          getAppVersion().catch(() => "0.0.0"),
+        ]);
         envApiKeyOverride = env.api_key_override;
+        appVersion = version;
         if (data === null) {
-          templates = mockTemplates;
+          templates = starterTemplates;
           settings = { ...DEFAULT_SETTINGS };
           await saveAppData({
             version: DATA_VERSION,
-            templates: mockTemplates,
+            templates: starterTemplates,
             settings,
           });
         } else {
@@ -240,7 +273,7 @@
         selectedTemplateId = templates[0]?.id ?? null;
       } catch (e) {
         loadError = String(e);
-        templates = mockTemplates;
+        templates = starterTemplates;
         selectedTemplateId = templates[0]?.id ?? null;
       } finally {
         loaded = true;
@@ -333,20 +366,26 @@
     }
   }
 
-  async function handleNew(): Promise<void> {
-    const blank = makeBlankTemplate();
-    await persist([blank, ...templates]);
-    selectedTemplateId = blank.id;
-    editing = true;
+  function handleNew(): void {
+    if (!isEditorMode) return;
+    baseKind = "new";
+    baseSourceName = "";
+    baseDraft = { opening: "", body: "" };
+    agentMessages = [];
+    agentBusy = false;
+    agentError = null;
+    baseMode = true;
   }
 
   async function handleSave(updated: Template): Promise<void> {
+    if (!isEditorMode) return;
     const next = templates.map((t) => (t.id === updated.id ? updated : t));
     await persist(next);
     editing = false;
   }
 
   async function handleDuplicate(): Promise<void> {
+    if (!isEditorMode) return;
     if (!selectedTemplate) return;
     const now = new Date().toISOString();
     const copy: Template = {
@@ -364,6 +403,7 @@
   }
 
   async function handleDelete(): Promise<void> {
+    if (!isEditorMode) return;
     if (!selectedTemplate) return;
     const id = selectedTemplate.id;
     const idx = templates.findIndex((t) => t.id === id);
@@ -376,11 +416,58 @@
     await persist(templates, next);
   }
 
+  type PortResult =
+    | { kind: "ok"; message: string }
+    | { kind: "cancelled" }
+    | { kind: "err"; error: string };
+
+  function pluralise(n: number, word: string): string {
+    return `${n} ${word}${n === 1 ? "" : "s"}`;
+  }
+
+  async function handleExportTemplates(): Promise<PortResult> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const path = await saveDialog({
+        defaultPath: `templates-export-${today}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return { kind: "cancelled" };
+      const count = await exportTemplates(path);
+      return { kind: "ok", message: `Exported ${pluralise(count, "template")}.` };
+    } catch (e) {
+      return { kind: "err", error: String(e) };
+    }
+  }
+
+  async function handleImportTemplates(): Promise<PortResult> {
+    if (!isEditorMode) return { kind: "err", error: "import disabled in User mode" };
+    try {
+      const path = await openDialog({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (path === null || Array.isArray(path)) return { kind: "cancelled" };
+      const result = await importTemplates(path);
+      // Rust has already persisted the merged list; just sync local state.
+      templates = result.templates;
+      const dupNote =
+        result.skipped > 0 ? ` (${pluralise(result.skipped, "duplicate")} skipped)` : "";
+      return {
+        kind: "ok",
+        message: `Imported ${pluralise(result.added, "template")}${dupNote}.`,
+      };
+    } catch (e) {
+      return { kind: "err", error: String(e) };
+    }
+  }
+
   async function dismissCloseHint(): Promise<void> {
     await persist(templates, { ...settings, close_hint_shown: true });
   }
 
   async function duplicateTemplateById(id: string): Promise<void> {
+    if (!isEditorMode) return;
     const src = templates.find((t) => t.id === id);
     if (!src) return;
     const now = new Date().toISOString();
@@ -399,6 +486,7 @@
   }
 
   async function deleteTemplateById(id: string): Promise<void> {
+    if (!isEditorMode) return;
     const idx = templates.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const next = templates.filter((t) => t.id !== id);
@@ -408,17 +496,46 @@
     }
   }
 
+  function slugify(s: string): string {
+    const slug = s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+    return slug.length > 0 ? slug : "template";
+  }
+
+  async function exportSingleTemplate(id: string): Promise<void> {
+    const tpl = templates.find((t) => t.id === id);
+    if (!tpl) return;
+    try {
+      const path = await saveDialog({
+        defaultPath: `template-${slugify(tpl.name)}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await exportTemplate(id, path);
+    } catch (e) {
+      loadError = `export failed: ${e}`;
+    }
+  }
+
   function openContextForTemplate(id: string, x: number, y: number): void {
     const tpl = templates.find((t) => t.id === id);
     if (!tpl) return;
-    contextMenu = {
-      x,
-      y,
-      items: [
-        { label: "Duplicate", onClick: () => void duplicateTemplateById(id) },
-        { label: "Delete", danger: true, onClick: () => (contextDeleteTarget = tpl) },
-      ],
-    };
+    const items: ContextMenuItem[] = [];
+    if (isEditorMode) {
+      items.push({ label: "Duplicate", onClick: () => void duplicateTemplateById(id) });
+    }
+    items.push({ label: "Export…", onClick: () => void exportSingleTemplate(id) });
+    if (isEditorMode) {
+      items.push({
+        label: "Delete",
+        danger: true,
+        onClick: () => (contextDeleteTarget = tpl),
+      });
+    }
+    contextMenu = { x, y, items };
   }
 
   function openContextForEmpty(x: number, y: number): void {
@@ -454,6 +571,7 @@
 
   function enterBaseMode(): void {
     if (!selectedTemplate) return;
+    baseKind = "base";
     baseSourceName = selectedTemplate.name;
     baseDraft = { opening: selectedTemplate.opening, body: selectedTemplate.body };
     agentMessages = [];
@@ -464,6 +582,7 @@
 
   function exitBaseMode(): void {
     baseMode = false;
+    baseKind = "base";
     baseSourceName = "";
     baseDraft = { opening: "", body: "" };
     agentMessages = [];
@@ -497,6 +616,7 @@
   }
 
   async function handleSaveAs(name: string, tags: string[]): Promise<void> {
+    if (!isEditorMode) return;
     const now = new Date().toISOString();
     const newTemplate: Template = {
       id: crypto.randomUUID(),
@@ -558,6 +678,7 @@
       <div class="loading">Loading…</div>
     {:else if baseMode}
       <AgentSidebar
+        kind={baseKind}
         messages={agentMessages}
         busy={agentBusy}
         error={agentError}
@@ -572,11 +693,13 @@
         onpointerdown={startResize("agent")}
       ></div>
       <EditorPane
+        kind={baseKind}
         opening={baseDraft.opening}
         body={baseDraft.body}
         globalSignature={settings.global_signature}
         {includeOpening}
         {includeSignature}
+        canSave={isEditorMode}
         onUpdate={(next) => (baseDraft = next)}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
@@ -598,8 +721,8 @@
         onpointerdown={startResize("tags")}
       ></div>
       <TemplatesSidebar
+        {searchResults}
         {templates}
-        {selectedTagIds}
         {selectedTemplateId}
         {searchQuery}
         {rankings}
@@ -607,6 +730,7 @@
         {rankError}
         pasteThreshold={PASTE_THRESHOLD}
         width={templatesWidth}
+        canCreate={isEditorMode}
         onTemplateSelect={handleTemplateSelect}
         onNew={handleNew}
         onRetryRank={retryRank}
@@ -625,6 +749,8 @@
         {includeSignature}
         {editing}
         globalSignature={settings.global_signature}
+        canEdit={isEditorMode}
+        {availableTags}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => (editing = true)}
@@ -653,14 +779,19 @@
   <SettingsModal
     {settings}
     {envApiKeyOverride}
+    currentVersion={appVersion}
     onClose={() => (settingsOpen = false)}
     onUpdate={handleSettingsUpdate}
+    onExportTemplates={handleExportTemplates}
+    onImportTemplates={handleImportTemplates}
+    onCheckUpdate={checkForUpdate}
   />
 {/if}
 
 {#if saveAsOpen}
   <SaveAsModal
-    defaultName={`${baseSourceName} (edited)`}
+    defaultName={baseKind === "new" ? "" : `${baseSourceName} (edited)`}
+    {availableTags}
     onSave={handleSaveAs}
     onCancel={() => (saveAsOpen = false)}
   />

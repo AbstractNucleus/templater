@@ -48,6 +48,8 @@
           <span class="tag-count">{count}</span>
         </button>
       </li>
+    {:else}
+      <li class="empty">Tags will appear here as you add them.</li>
     {/each}
   </ul>
 </aside>
@@ -111,5 +113,13 @@
   .tag.active {
     background: var(--bg-active);
     color: var(--text-strong);
+  }
+
+  .empty {
+    color: var(--text-subtle);
+    font-size: 0.78rem;
+    padding: 6px 8px;
+    font-style: italic;
+    line-height: 1.4;
   }
 </style>

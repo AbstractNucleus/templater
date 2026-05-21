@@ -1,18 +1,115 @@
 <script lang="ts">
-  import type { Settings, Theme } from "$lib/types";
+  import type { Mode, Settings, Theme } from "$lib/types";
   import { setHotkey } from "$lib/api";
+
+  type PortResult =
+    | { kind: "ok"; message: string }
+    | { kind: "cancelled" }
+    | { kind: "err"; error: string };
+
+  type UpdateInfo = {
+    version: string;
+    currentVersion: string;
+    notes: string;
+    install: (onProgress?: (received: number, total: number | null) => void) => Promise<void>;
+  };
+
+  type UpdateState =
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "up-to-date" }
+    | { kind: "available"; info: UpdateInfo }
+    | { kind: "downloading"; received: number; total: number | null }
+    | { kind: "installing" }
+    | { kind: "error"; error: string };
 
   let {
     settings,
     envApiKeyOverride,
+    currentVersion,
     onClose,
     onUpdate,
+    onExportTemplates,
+    onImportTemplates,
+    onCheckUpdate,
   }: {
     settings: Settings;
     envApiKeyOverride: boolean;
+    currentVersion: string;
     onClose: () => void;
     onUpdate: (next: Settings) => void;
+    onExportTemplates: () => Promise<PortResult>;
+    onImportTemplates: () => Promise<PortResult>;
+    onCheckUpdate: () => Promise<UpdateInfo | null>;
   } = $props();
+
+  let updateState = $state<UpdateState>({ kind: "idle" });
+
+  async function handleCheckUpdate(): Promise<void> {
+    updateState = { kind: "checking" };
+    try {
+      const info = await onCheckUpdate();
+      updateState = info === null ? { kind: "up-to-date" } : { kind: "available", info };
+    } catch (e) {
+      updateState = { kind: "error", error: String(e) };
+    }
+  }
+
+  async function handleInstallUpdate(): Promise<void> {
+    if (updateState.kind !== "available") return;
+    const info = updateState.info;
+    updateState = { kind: "downloading", received: 0, total: null };
+    try {
+      await info.install((received, total) => {
+        updateState = { kind: "downloading", received, total };
+      });
+      updateState = { kind: "installing" };
+    } catch (e) {
+      updateState = { kind: "error", error: String(e) };
+    }
+  }
+
+  function dismissUpdate(): void {
+    updateState = { kind: "idle" };
+  }
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  let portMessage = $state<string | null>(null);
+  let portError = $state<string | null>(null);
+  let portBusy = $state(false);
+
+  async function handleExportClick(): Promise<void> {
+    if (portBusy) return;
+    portBusy = true;
+    portMessage = null;
+    portError = null;
+    try {
+      const r = await onExportTemplates();
+      if (r.kind === "ok") portMessage = r.message;
+      else if (r.kind === "err") portError = r.error;
+    } finally {
+      portBusy = false;
+    }
+  }
+
+  async function handleImportClick(): Promise<void> {
+    if (portBusy) return;
+    portBusy = true;
+    portMessage = null;
+    portError = null;
+    try {
+      const r = await onImportTemplates();
+      if (r.kind === "ok") portMessage = r.message;
+      else if (r.kind === "err") portError = r.error;
+    } finally {
+      portBusy = false;
+    }
+  }
 
   let capturing = $state(false);
   let captureError = $state<string | null>(null);
@@ -31,6 +128,10 @@
 
   function setTheme(next: Theme): void {
     onUpdate({ ...settings, theme: next });
+  }
+
+  function setMode(next: Mode): void {
+    onUpdate({ ...settings, mode: next });
   }
 
   function handleBackdrop(e: MouseEvent): void {
@@ -102,6 +203,34 @@
     </header>
 
     <section>
+      <div class="section-label">Mode</div>
+      <div class="theme-toggle">
+        <button
+          class="theme-btn"
+          class:active={settings.mode === "editor"}
+          onclick={() => setMode("editor")}
+        >
+          Editor
+        </button>
+        <button
+          class="theme-btn"
+          class:active={settings.mode === "user"}
+          onclick={() => setMode("user")}
+        >
+          User
+        </button>
+      </div>
+      <div class="hint">
+        {#if settings.mode === "editor"}
+          Editor mode — full access. You can create, edit, duplicate, and delete templates.
+        {:else}
+          User mode — read-only. You can browse, "Base on template" to draft a message,
+          and copy the result, but you can't save changes to the catalog.
+        {/if}
+      </div>
+    </section>
+
+    <section>
       <div class="section-label">Auth</div>
       {#if envApiKeyOverride}
         <div class="warning">
@@ -149,6 +278,34 @@
     </section>
 
     <section>
+      <div class="section-label">Templates</div>
+      <div class="port-row">
+        <button class="port-btn" disabled={portBusy} onclick={handleExportClick}>
+          Export…
+        </button>
+        {#if settings.mode === "editor"}
+          <button class="port-btn" disabled={portBusy} onclick={handleImportClick}>
+            Import…
+          </button>
+        {/if}
+      </div>
+      {#if portMessage}
+        <div class="port-message">{portMessage}</div>
+      {/if}
+      {#if portError}
+        <div class="capture-error">{portError}</div>
+      {/if}
+      <div class="hint">
+        {#if settings.mode === "editor"}
+          Export writes all templates to a JSON file. Import merges by id —
+          templates already on this machine are kept and duplicates are skipped.
+        {:else}
+          Export writes all templates to a JSON file. Import is disabled in User mode.
+        {/if}
+      </div>
+    </section>
+
+    <section>
       <div class="section-label">Window</div>
       <label class="row">
         <input
@@ -186,6 +343,54 @@
       </div>
       {#if captureError}
         <div class="capture-error">{captureError}</div>
+      {/if}
+    </section>
+
+    <section>
+      <div class="section-label">Updates</div>
+      <div class="hint">Current version: <code>{currentVersion}</code></div>
+
+      {#if updateState.kind === "idle"}
+        <div class="port-row">
+          <button class="port-btn" onclick={handleCheckUpdate}>Check for updates</button>
+        </div>
+      {:else if updateState.kind === "checking"}
+        <div class="hint">Checking…</div>
+      {:else if updateState.kind === "up-to-date"}
+        <div class="port-message">You're on the latest version.</div>
+        <div class="port-row">
+          <button class="port-btn" onclick={handleCheckUpdate}>Check again</button>
+        </div>
+      {:else if updateState.kind === "available"}
+        <div class="hint">
+          <strong>v{updateState.info.version}</strong> is available
+          (you're on v{updateState.info.currentVersion}).
+        </div>
+        {#if updateState.info.notes}
+          <pre class="release-notes">{updateState.info.notes}</pre>
+        {/if}
+        <div class="port-row">
+          <button class="port-btn" onclick={handleInstallUpdate}>Install &amp; restart</button>
+          <button class="port-btn" onclick={dismissUpdate}>Skip</button>
+        </div>
+      {:else if updateState.kind === "downloading"}
+        <div class="hint">
+          Downloading…
+          {#if updateState.total}
+            {formatBytes(updateState.received)} / {formatBytes(updateState.total)}
+            ({Math.round((updateState.received / updateState.total) * 100)}%)
+          {:else}
+            {formatBytes(updateState.received)}
+          {/if}
+        </div>
+      {:else if updateState.kind === "installing"}
+        <div class="hint">Installing… the app will restart momentarily.</div>
+      {:else if updateState.kind === "error"}
+        <div class="capture-error">{updateState.error}</div>
+        <div class="port-row">
+          <button class="port-btn" onclick={handleCheckUpdate}>Try again</button>
+          <button class="port-btn" onclick={dismissUpdate}>Dismiss</button>
+        </div>
       {/if}
     </section>
   </div>
@@ -396,5 +601,58 @@
     background: var(--accent-positive-bg);
     border-color: var(--accent-positive-border);
     color: var(--accent-positive-text);
+  }
+
+  .port-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .port-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+  }
+
+  .port-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+
+  .port-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+
+  .port-message {
+    color: var(--accent-positive-text);
+    background: var(--accent-positive-bg);
+    border: 1px solid var(--accent-positive-border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    margin-bottom: 6px;
+  }
+
+  .release-notes {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin: 8px 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 180px;
+    overflow-y: auto;
   }
 </style>

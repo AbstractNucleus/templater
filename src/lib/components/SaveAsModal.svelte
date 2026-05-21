@@ -1,17 +1,21 @@
 <script lang="ts">
+  import TagPicker from "./TagPicker.svelte";
+
   let {
     defaultName,
+    availableTags,
     onSave,
     onCancel,
   }: {
     defaultName: string;
+    availableTags: string[];
     onSave: (name: string, tags: string[]) => void;
     onCancel: () => void;
   } = $props();
 
   // svelte-ignore state_referenced_locally
   let name = $state(defaultName);
-  let tagsRaw = $state("");
+  let tags = $state<string[]>([]);
   let nameInput: HTMLInputElement | undefined = $state();
 
   $effect(() => {
@@ -20,10 +24,6 @@
 
   function handleSave(): void {
     const cleanName = name.trim() || "Untitled";
-    const tags = tagsRaw
-      .split(",")
-      .map((t) => t.trim().toLowerCase())
-      .filter((t) => t.length > 0);
     onSave(cleanName, tags);
   }
 
@@ -62,10 +62,14 @@
       />
     </label>
 
-    <label class="field">
-      <span>Tags (comma-separated)</span>
-      <input type="text" bind:value={tagsRaw} placeholder="e.g. withdrawals, escalations" />
-    </label>
+    <div class="field">
+      <span>Tags</span>
+      <TagPicker
+        value={tags}
+        available={availableTags}
+        onChange={(next) => (tags = next)}
+      />
+    </div>
 
     <div class="hint">Ctrl+Enter to save · Esc to cancel</div>
 

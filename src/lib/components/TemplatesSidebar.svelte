@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { Template } from "$lib/types";
   import type { Ranking } from "$lib/api";
+  import { highlightName, type SearchHit } from "$lib/search";
 
   let {
     templates,
-    selectedTagIds,
+    searchResults,
     selectedTemplateId,
     searchQuery,
     rankings,
@@ -12,6 +13,7 @@
     rankError,
     pasteThreshold,
     width,
+    canCreate,
     onTemplateSelect,
     onNew,
     onRetryRank,
@@ -19,7 +21,7 @@
     onContextEmpty,
   }: {
     templates: Template[];
-    selectedTagIds: Set<string>;
+    searchResults: SearchHit[];
     selectedTemplateId: string | null;
     searchQuery: string;
     rankings: Ranking[] | null;
@@ -27,6 +29,7 @@
     rankError: string | null;
     pasteThreshold: number;
     width: number;
+    canCreate: boolean;
     onTemplateSelect: (id: string) => void;
     onNew: () => void;
     onRetryRank: () => void;
@@ -53,17 +56,6 @@
   });
 
   const inPasteMode = $derived(searchQuery.trim().length >= pasteThreshold);
-
-  const filtered = $derived.by(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return templates.filter((t) => {
-      for (const tag of selectedTagIds) {
-        if (!t.tags.includes(tag)) return false;
-      }
-      if (q.length === 0) return true;
-      return t.name.toLowerCase().includes(q) || t.body.toLowerCase().includes(q);
-    });
-  });
 </script>
 
 <aside class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
@@ -71,7 +63,9 @@
     <div class="section-label">
       {inPasteMode ? "Ranked matches" : "Templates"}
     </div>
-    <button class="new-btn" title="New template" onclick={onNew}>+</button>
+    {#if canCreate}
+      <button class="new-btn" title="New template" onclick={onNew}>+</button>
+    {/if}
   </div>
 
   {#if inPasteMode}
@@ -107,19 +101,31 @@
     </ul>
   {:else}
     <ul class="template-list">
-      {#each filtered as tpl (tpl.id)}
+      {#each searchResults as hit (hit.template.id)}
         <li>
           <button
             class="template-item"
-            class:active={selectedTemplateId === tpl.id}
-            onclick={() => onTemplateSelect(tpl.id)}
-            oncontextmenu={(e) => handleTemplateContext(e, tpl.id)}
+            class:active={selectedTemplateId === hit.template.id}
+            onclick={() => onTemplateSelect(hit.template.id)}
+            oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
           >
-            {tpl.name}
+            {#each highlightName(hit.template.name, hit.nameHits) as seg}
+              {#if seg.hit}
+                <span class="hit">{seg.text}</span>
+              {:else}
+                {seg.text}
+              {/if}
+            {/each}
           </button>
         </li>
       {:else}
-        <li class="empty">No matches</li>
+        {#if templates.length === 0}
+          <li class="empty first-run">
+            No templates yet{canCreate ? " — hit + to create one" : ""}.
+          </li>
+        {:else}
+          <li class="empty">No matches</li>
+        {/if}
       {/each}
     </ul>
   {/if}
@@ -205,12 +211,24 @@
     color: var(--text-strong);
   }
 
+  .template-item .hit {
+    background: var(--accent-warning-bg);
+    color: var(--accent-warning-strong);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
   .empty,
   .status {
     color: var(--text-subtle);
     font-size: 0.8rem;
     padding: 4px 6px;
     font-style: italic;
+  }
+
+  .empty.first-run {
+    line-height: 1.4;
+    padding: 8px 8px;
   }
 
   .rank-error {

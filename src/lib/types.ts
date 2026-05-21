@@ -17,6 +17,8 @@ export interface WindowGeometry {
 
 export type Theme = "dark" | "light";
 
+export type Mode = "editor" | "user";
+
 export interface Settings {
   always_on_top_default: boolean;
   global_hotkey: string;
@@ -25,6 +27,7 @@ export interface Settings {
   close_hint_shown: boolean;
   global_signature: string;
   theme: Theme;
+  mode: Mode;
 }
 
 export interface AppData {
@@ -41,4 +44,5 @@ export const DEFAULT_SETTINGS: Settings = {
   close_hint_shown: false,
   global_signature: "",
   theme: "dark",
+  mode: "editor",
 };

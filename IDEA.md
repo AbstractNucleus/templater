@@ -6,22 +6,36 @@ Originated from vault page `[[templates-widget]]` (promoted 2026-05-19). Origina
 
 ## Current state (as of last commit on `main`)
 
-**Scaffolded and verified.** Tauri 2 + SvelteKit + TypeScript project initialised via `create-tauri-app` with the `svelte-ts` template. Node sidecar wired up; the round-trip ping (Svelte button → Tauri invoke → Rust → Node stdin → Node stdout → back) was tested end-to-end and works.
+**Core feature set complete; runs cleanly in `npm run tauri dev`.** Type-check and `cargo check` both pass with no warnings. What's left is packaging (bundle the sidecar as a Tauri resource so a built `.exe` works without the dev tree) and a handful of polish items — see [Open work](#open-work).
 
-**Where things live:**
+**What works today:**
 
-| Path | Purpose | State |
-|---|---|---|
-| `src-tauri/Cargo.toml` | Rust deps (Tauri 2 + tokio + serde) | done |
-| `src-tauri/src/main.rs` | Entrypoint (calls `templates_widget_lib::run`) | done |
-| `src-tauri/src/lib.rs` | Tauri builder, `ping_sidecar` command, managed `Sidecar` state | done |
-| `src-tauri/src/sidecar.rs` | Spawns `npx tsx sidecar/index.ts` at startup, stdio JSON IPC | done |
-| `src-tauri/tauri.conf.json` | `productName: templates-widget`, identifier `com.noel.templatewidget` | done |
-| `sidecar/package.json` | Pins `@anthropic-ai/claude-agent-sdk` ^0.3.144 | done (SDK not used yet) |
-| `sidecar/index.ts` | newline-JSON loop; `ping` op works, `rank` op is a stub | partial |
-| `src/routes/+page.svelte` | Single "Ping sidecar" button (placeholder) | placeholder |
-| `package.json` | SvelteKit + Tauri deps + `@types/node` | done |
-| `.gitignore` | Covers `node_modules`, `target/`, `.svelte-kit`, `dist/` | done |
+- Three-pane shell — TagsSidebar (multi-select intersection on Ctrl-click) + TemplatesSidebar + MainPanel, with draggable column resize handles.
+- CRUD against `%APPDATA%\templates-widget\templates.json` (portable, templates only) and `%APPDATA%\templates-widget\settings.json` (machine-local prefs). Per-file atomic save (write `.tmp` → fsync → rename) with `.bak` backup of the previous good copy. v0 → v1 migration on read; legacy unified file (settings embedded in templates.json) is migrated transparently on the next save.
+- Literal substring search on name + body. Above the paste threshold (30 chars), the search input switches to "paste-to-match" mode and the template list is replaced by ranked agent matches.
+- Real Agent SDK rank (`sidecar/index.ts` → `claude-haiku-4-5-20251001`). Structured output via JSON schema. Prompt caching: catalog goes before `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`, and a `WarmQuery` is pre-spawned so cache-hit calls are ~0.5-0.8s.
+- "Base on template" agent editor — sidebar chat (`AgentSidebar`) + editable draft (`EditorPane`) + `SaveAsModal`. Chat-driven, structured-output template edits via the `edit-template` op.
+- Custom frameless window: TitleBar with drag region + pin/settings/minimise/close icons, `ResizeHandles` on edges and corners, drop shadow, rounded corners.
+- Tray icon (left-click toggle, right-click → Show / Quit), global hotkey (default `Ctrl+Shift+Backslash`, rebindable in Settings and persisted), close-to-tray with first-run hint banner.
+- Window geometry persisted across sessions; restored only when the saved top-left corner still lies inside a connected monitor (cross-monitor sanity check).
+- Settings modal: Editor/User mode toggle (User mode hides every write affordance — `+` new, Edit/Duplicate/Delete in MainPanel, Save-as-new in EditorPane, Duplicate/Delete in the right-click menu, Import in Settings; defensive guards on the corresponding handlers in case a UI path is missed), light/dark theme, global signature (independent of any template), hotkey rebind, always-on-top default, start-minimised-to-tray, geometry reset, subscription status hints, `ANTHROPIC_API_KEY` env-override warning banner, in-app updater (Check for updates → download signed installer → relaunch). See [`RELEASING.md`](./RELEASING.md) for the publish workflow.
+- Custom context menus (right-click in inputs and on template list items) replacing Tauri's defaults; `Ctrl+L` clears the search input.
+
+**Where things live (actual, not planned):**
+
+| Path | Purpose |
+|---|---|
+| `src-tauri/src/lib.rs` | Tauri builder, all `#[tauri::command]`s, tray + global hotkey + window-lifecycle setup |
+| `src-tauri/src/store.rs` | Two-file atomic read/write (`templates.json` + `settings.json`); legacy unified-file and v0 migrations |
+| `src-tauri/src/sidecar.rs` | Spawns `npx tsx sidecar/index.ts` at startup; serialised request/response over stdio JSON |
+| `sidecar/index.ts` | `ping`, `rank`, `edit-template` ops; warm-subprocess management for `rank` |
+| `src/routes/+page.svelte` | Top-level page; holds app state and orchestrates components |
+| `src/lib/components/` | `TitleBar`, `TagsSidebar`, `TemplatesSidebar`, `MainPanel`, `AgentSidebar`, `EditorPane`, `SaveAsModal`, `ContextMenu`, `ResizeHandles`, `SettingsModal` |
+| `src/lib/api.ts` | Thin `invoke()` wrappers + `explainRankError` |
+| `src/lib/types.ts` | `Template`, `Settings`, `AppData`, `DEFAULT_SETTINGS` |
+| `src/lib/mocks.ts` | Seed templates used on first launch when no data file exists |
+
+Note: `src-tauri/src/` does *not* have separate `tray.rs` / `hotkey.rs` / `env.rs` modules — those are all in `lib.rs` because they're each only a handful of lines. The "Project structure (planned)" section below is aspirational; keep it as a target if the file grows, but don't treat it as the current layout.
 
 **Commands to resume work:**
 
@@ -37,7 +51,7 @@ cd ..        ; npm run check     # Svelte+TS
 echo '{"id":"smoke","op":"ping"}' | npx tsx sidecar/index.ts
 ```
 
-**Next milestone (recommended):** replace the Ping page with the three-pane shell (sidebar + main panel + collapsible right panel) using mocked templates. After that, real CRUD against `templates.json`, then clipboard + toggle logic, then the Agent SDK call to implement the sidecar's `rank` op.
+**Next milestone (recommended):** production bundling — make `npm run tauri build` produce a portable `.exe` that locates the sidecar via Tauri's resource API rather than the dev-only `../sidecar/index.ts` path relative to `CARGO_MANIFEST_DIR` (see [`src-tauri/src/sidecar.rs`](./src-tauri/src/sidecar.rs)). Decide between shipping `sidecar/` as an unpacked resource (needs Node on the target) or embedding a Node binary via Tauri's [sidecar binary feature](https://tauri.app/v1/guides/building/sidecar/).
 
 ## Decisions at a glance
 
@@ -68,7 +82,9 @@ Reframed: the `category` field becomes `tags` (multi-assignable), the variable-f
 
 ## Data model
 
-Single JSON file at `%APPDATA%\templates-widget\templates.json`:
+Two JSON files in `%APPDATA%\templates-widget\`. The split keeps `templates.json` portable on its own (it round-trips through import/export with no machine-specific noise) and lets settings churn — window geometry, theme toggles — happen without touching the templates file in source control diffs.
+
+**`templates.json`** — the portable half:
 
 ```json
 {
@@ -80,26 +96,38 @@ Single JSON file at `%APPDATA%\templates-widget\templates.json`:
       "tags": ["email", "decline"],
       "opening": "Hi {{name}},",
       "body": "Thanks for the invite — unfortunately I won't be able to make it. Happy to find another time if helpful.",
-      "signature": "— N",
       "created_at": "2026-05-19T18:00:00Z",
       "updated_at": "2026-05-19T18:00:00Z"
     }
-  ],
+  ]
+}
+```
+
+**`settings.json`** — machine-local preferences:
+
+```json
+{
+  "version": 1,
   "settings": {
     "always_on_top_default": false,
     "global_hotkey": "Ctrl+Shift+Backslash",
-    "window_geometry": { "x": 100, "y": 100, "w": 800, "h": 600 }
+    "start_minimised_to_tray": false,
+    "global_signature": "",
+    "theme": "dark",
+    "window_geometry": { "x": 100, "y": 100, "width": 800, "height": 600 },
+    "close_hint_shown": false
   }
 }
 ```
 
 Notes:
 
-- `opening` and `signature` are independent toggleable strings. UI checkboxes control whether they prefix/suffix `body` on copy.
+- `opening` is a separately-toggleable string. The UI checkbox controls whether it prefixes `body` on copy. Signatures live in `settings.global_signature` — a single per-machine signature, not per-template.
 - `{{variable}}` tokens in any field are preserved verbatim on copy. The UI may display detected variables as a hint, but no fill UI in v1.
 - Tags are arbitrary strings. The sidebar derives the tag list from observed values across all templates.
-- No API key in this file (or anywhere in the app). Auth is via the Claude Agent SDK + Claude subscription; see [Auth & billing](#auth--billing).
-- Atomic writes: write to `templates.json.tmp`, fsync, rename. Pre-write backup to `templates.json.bak`.
+- No API key in either file (or anywhere in the app). Auth is via the Claude Agent SDK + Claude subscription; see [Auth & billing](#auth--billing).
+- Atomic writes per file: write to `<file>.tmp`, fsync, rename. Pre-write backup to `<file>.bak`.
+- Migration: a legacy unified `templates.json` (settings embedded in the same file) is read transparently — settings are extracted on load, and the next save splits them into `settings.json`.
 
 ## UI
 
@@ -160,8 +188,8 @@ Frameless cost is real — count on ~2-3 days for chrome alone, between drag-reg
 
 1. User pastes inbound text into the sidecar search/paste input.
 2. Under length threshold → literal substring filter, no SDK call.
-3. Above threshold → frontend invokes a Tauri command. Rust backend forwards the request (catalog + pasted text) over stdio JSON to the Node sidecar. Sidecar calls `@anthropic-ai/claude-agent-sdk`'s `query()` with `model: "claude-haiku-4-5-20251001"` and a JSON-schema `outputFormat` constraining the response to `{ rankings: [{ template_id, score, reason }] }`. Sidecar streams the result back over stdout.
-4. Sidebar template list replaces with the ranked results, each showing the one-line `reason` underneath.
+3. Above threshold → frontend invokes a Tauri command. Rust backend forwards the request (catalog + pasted text) over stdio JSON to the Node sidecar. Sidecar calls `@anthropic-ai/claude-agent-sdk`'s `query()` with `model: "claude-haiku-4-5-20251001"` and a JSON-schema `outputFormat` constraining the response to `{ rankings: [{ template_id, score }] }`. Sidecar streams the result back over stdout. (A per-catalog `WarmQuery` is pre-spawned so each rank skips the ~1-2s SDK handshake; catalog edits invalidate the warm process.)
+4. Sidebar template list replaces with the ranked results.
 5. Click a result → main panel loads that template. Copy as normal.
 
 Error states:
@@ -264,16 +292,20 @@ One request per line, JSON. Rust matches responses to requests by `id`. Sidecar 
 
 ## Open work
 
-Small decisions still pending — make these inline during implementation:
+Done (was open in earlier passes; kept here only as a paper trail — these items have shipped):
 
-- Settings UI specifics: hotkey rebind widget, always-on-top default toggle, tray-on-startup toggle.
-- Edit-mode UI for templates (CRUD form).
-- First-run empty-state copy.
-- Import/export from JSON (defer to v2 unless trivial).
-- Custom drop-shadow rendering technique (Tauri trick or CSS box-shadow on inner container).
-- Aero Snap behaviour for frameless window.
-- Sidecar lifecycle policy: spawn-on-startup (keeps Node resident, faster matches) vs. spawn-per-query (cleaner but ~200ms cold start). Default: spawn-on-startup.
-- Sidecar packaging: ship as a `sidecar/` resource folder vs. embed Node binary via Tauri sidecar feature. Default: ship as resource folder for v1 (requires Node on target), revisit when distributing beyond personal use.
+- ~~Settings UI specifics: hotkey rebind widget, always-on-top default toggle, tray-on-startup toggle.~~
+- ~~Edit-mode UI for templates (CRUD form).~~
+- ~~Custom drop-shadow rendering technique.~~
+- ~~Sidecar lifecycle policy: spawn-on-startup vs. spawn-per-query.~~ Spawn-on-startup, with a per-catalog `WarmQuery` so each rank skips the ~1-2s SDK handshake.
+- ~~Import/export from JSON.~~ Settings → Templates section. Export writes `{ version, templates }` (settings deliberately excluded); import merges by id, skipping duplicates, with the imported chunk prepended to keep recent additions visible. Uses `tauri-plugin-dialog` for the file pickers.
+- ~~Production bundling.~~ `npm run tauri build` chains `npm run build:bundle` — `node scripts/fetch-node-binary.mjs` (downloads Node 22 LTS standalone .exe if missing), then frontend Vite build, then sidecar `tsc` build. The Tauri bundler copies `sidecar/dist`, `sidecar/node_modules`, and `sidecar/package.json` as resources under `_up_/sidecar/...` next to the main .exe, and ships the Node binary as an `externalBin` so it lands as `node.exe` alongside `templates-widget.exe`. `Sidecar::start(&AppHandle)` switches per build mode: debug runs `npx tsx sidecar/index.ts` from the source tree; release runs the bundled `node.exe` against the bundled `dist/index.js`. **Zero external prereqs on the friend's machine** — the NSIS installer (`templates-widget_0.1.0_x64-setup.exe`, ~76 MB compressed) is fully self-contained.
+- ~~First-run empty-state copy.~~ TemplatesSidebar now distinguishes "No templates yet — hit + to create one" from "No matches" against an existing catalog. TagsSidebar shows "Tags will appear here as you add them." when the tag list is empty.
+
+Still outstanding:
+
+- **Sidecar packaging refinement:** today the bundle includes the full `sidecar/node_modules` (~280 MB) so the friend can install Node and run as-is. For broader distribution, prune devDeps (`tsx`, `typescript`, `@types/node`) and/or embed a Node binary via Tauri's sidecar binary feature.
+- **Aero Snap behaviour** for the frameless window (drag-to-edge snap, Win+Arrow snap).
 
 ## Adjacent vault references
 
@@ -288,4 +320,4 @@ Small decisions still pending — make these inline during implementation:
 
 ## Status
 
-Scaffolded and ready for feature work. Major design branches resolved 2026-05-19 via `/grill-me` session; scaffold + sidecar IPC verified the same day. See [Current state](#current-state-as-of-last-commit-on-main) for the file map and next-milestone pointer.
+Core feature set is complete and runs cleanly in dev. What's left is production bundling (so a built `.exe` finds the sidecar) and the polish items in [Open work](#open-work). See [Current state](#current-state-as-of-last-commit-on-main) for the file map and next-milestone pointer.

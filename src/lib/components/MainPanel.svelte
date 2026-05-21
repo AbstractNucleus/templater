@@ -1,6 +1,7 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
+  import TagPicker from "./TagPicker.svelte";
 
   let {
     template,
@@ -8,6 +9,8 @@
     includeSignature,
     editing,
     globalSignature,
+    canEdit,
+    availableTags,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
@@ -22,6 +25,8 @@
     includeSignature: boolean;
     editing: boolean;
     globalSignature: string;
+    canEdit: boolean;
+    availableTags: string[];
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
@@ -39,7 +44,7 @@
 
   // Draft state — only used when editing.
   let draftName = $state("");
-  let draftTags = $state("");
+  let draftTags = $state<string[]>([]);
   let draftOpening = $state("");
   let draftBody = $state("");
 
@@ -47,7 +52,7 @@
   $effect(() => {
     if (editing && template) {
       draftName = template.name;
-      draftTags = template.tags.join(", ");
+      draftTags = [...template.tags];
       draftOpening = template.opening;
       draftBody = template.body;
     }
@@ -82,14 +87,10 @@
 
   function handleSave(): void {
     if (!template) return;
-    const tags = draftTags
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
     onSave({
       ...template,
       name: draftName.trim() || "Untitled",
-      tags,
+      tags: draftTags,
       opening: draftOpening,
       body: draftBody,
       updated_at: new Date().toISOString(),
@@ -128,8 +129,12 @@
 
 <section class="main">
   {#if !template}
-    <div class="empty">Select a template from the sidebar, or create a new one.</div>
-  {:else if editing}
+    <div class="empty">
+      {canEdit
+        ? "Select a template from the sidebar, or create a new one."
+        : "Select a template from the sidebar."}
+    </div>
+  {:else if editing && canEdit}
     <div class="header-row">
       <div class="breadcrumb">editing</div>
       <div class="actions">
@@ -142,10 +147,14 @@
       <span>Name</span>
       <input type="text" bind:value={draftName} />
     </label>
-    <label class="field">
-      <span>Tags (comma-separated)</span>
-      <input type="text" bind:value={draftTags} placeholder="email, decline" />
-    </label>
+    <div class="field">
+      <span>Tags</span>
+      <TagPicker
+        value={draftTags}
+        available={availableTags}
+        onChange={(next) => (draftTags = next)}
+      />
+    </div>
     <label class="field">
       <span>Opening</span>
       <input type="text" bind:value={draftOpening} placeholder="Hi {'{{'}name{'}}'}," />
@@ -160,11 +169,13 @@
         <div class="breadcrumb">{breadcrumb}</div>
         <h2 class="name">{template.name}</h2>
       </div>
-      <div class="actions">
-        <button class="icon-btn" onclick={onEnterEdit}>Edit</button>
-        <button class="icon-btn" onclick={onDuplicate}>Duplicate</button>
-        <button class="icon-btn danger" onclick={handleDelete}>Delete</button>
-      </div>
+      {#if canEdit}
+        <div class="actions">
+          <button class="icon-btn" onclick={onEnterEdit}>Edit</button>
+          <button class="icon-btn" onclick={onDuplicate}>Duplicate</button>
+          <button class="icon-btn danger" onclick={handleDelete}>Delete</button>
+        </div>
+      {/if}
     </div>
 
     <div class="toggles">

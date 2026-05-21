@@ -15,6 +15,9 @@ vite.config.ts.timestamp-*
 # Sidecar build output
 /sidecar/dist/
 
+# Bundled Node binary (downloaded by scripts/fetch-node-binary.ts)
+/src-tauri/binaries/
+
 # Editor / OS junk
 Thumbs.db
 *.swp

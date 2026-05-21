@@ -2,6 +2,7 @@
   import type { ChatTurn } from "$lib/api";
 
   let {
+    kind,
     messages,
     busy,
     error,
@@ -9,6 +10,7 @@
     width,
     onSubmit,
   }: {
+    kind: "new" | "base";
     messages: ChatTurn[];
     busy: boolean;
     error: string | null;
@@ -46,15 +48,22 @@
 
 <aside class="agent" style="width: {width}px">
   <div class="header">
-    <div class="section-label">Editing</div>
-    <div class="source-name" title={sourceName}>{sourceName}</div>
+    <div class="section-label">{kind === "new" ? "Drafting" : "Editing"}</div>
+    <div class="source-name" title={kind === "new" ? "New template" : sourceName}>
+      {kind === "new" ? "New template" : sourceName}
+    </div>
   </div>
 
   <div class="chat" bind:this={scrollRoot}>
     {#if messages.length === 0 && !busy}
       <div class="empty">
-        Ask the agent to edit the draft.<br />
-        Try: "make it more polite", "shorten it", or "rewrite for a frustrated user".
+        {#if kind === "new"}
+          Ask the agent to draft a template.<br />
+          Try: "polite decline for meeting invites" or "follow-up for unanswered emails".
+        {:else}
+          Ask the agent to edit the draft.<br />
+          Try: "make it more polite", "shorten it", or "rewrite for a frustrated user".
+        {/if}
       </div>
     {/if}
     {#each messages as msg, i (i)}

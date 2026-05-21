@@ -21,17 +21,69 @@ export async function openDataDir(): Promise<void> {
   await invoke<void>("open_data_dir");
 }
 
-export function makeBlankTemplate(): Template {
-  const now = new Date().toISOString();
+export async function exportTemplates(path: string): Promise<number> {
+  return await invoke<number>("export_templates", { path });
+}
+
+export async function exportTemplate(id: string, path: string): Promise<void> {
+  await invoke<void>("export_template", { id, path });
+}
+
+import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
+
+export interface UpdateInfo {
+  version: string;
+  currentVersion: string;
+  notes: string;
+  /** Downloads, installs, then triggers relaunch. */
+  install: (onProgress?: (received: number, total: number | null) => void) => Promise<void>;
+}
+
+/** Returns null when already on the latest version, throws on network / signature error. */
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  const update: Update | null = await check();
+  if (!update) return null;
+
   return {
-    id: crypto.randomUUID(),
-    name: "Untitled",
-    tags: [],
-    opening: "",
-    body: "",
-    created_at: now,
-    updated_at: now,
+    version: update.version,
+    currentVersion: update.currentVersion,
+    notes: update.body ?? "",
+    install: async (onProgress) => {
+      let received = 0;
+      let total: number | null = null;
+      await update.downloadAndInstall((event: DownloadEvent) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? null;
+          received = 0;
+          onProgress?.(received, total);
+        } else if (event.event === "Progress") {
+          received += event.data.chunkLength;
+          onProgress?.(received, total);
+        } else if (event.event === "Finished") {
+          onProgress?.(total ?? received, total);
+        }
+      });
+      // Most Windows installers (NSIS/MSI) close + relaunch the app themselves,
+      // but explicit relaunch is harmless and covers the edge case.
+      await relaunch();
+    },
   };
+}
+
+export async function getAppVersion(): Promise<string> {
+  return await getVersion();
+}
+
+export interface ImportTemplatesResult {
+  added: number;
+  skipped: number;
+  templates: Template[];
+}
+
+export async function importTemplates(path: string): Promise<ImportTemplatesResult> {
+  return await invoke<ImportTemplatesResult>("import_templates", { path });
 }
 
 export interface Ranking {
@@ -93,6 +145,9 @@ export function explainRankError(raw: string): string {
   }
   if (lower.includes("network") || lower.includes("econnref") || lower.includes("enotfound") || lower.includes("timeout")) {
     return "Network error. Check your connection and retry.";
+  }
+  if (lower.includes("sidecar unavailable")) {
+    return "Paste-match unavailable. Install Node 18+ and restart the app.";
   }
   if (lower.includes("sidecar closed") || lower.includes("sidecar write")) {
     return "Sidecar process is down. Restart the app.";

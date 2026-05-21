@@ -6,8 +6,16 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:bundle",
     "frontendDist": "../build"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/AbstractNucleus/templates-widget-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCRTVGQjA0MEY0N0M3OTEKUldTUngwY1BCUHZsdTlYN3hPMFJYc1R1YmR4NERtSU0wT2dpSVFWc1ovZzk1YnVIbkxhUElKU1IK"
+    }
   },
   "app": {
     "windows": [
@@ -29,6 +37,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -36,6 +45,14 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "../sidecar/dist",
+      "../sidecar/node_modules",
+      "../sidecar/package.json"
+    ],
+    "externalBin": [
+      "binaries/node"
     ]
   }
 }
