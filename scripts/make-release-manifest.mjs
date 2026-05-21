@@ -3,12 +3,20 @@
 // Prereqs:
 //   1. Updater signing set up (see IDEA.md § Releasing).
 //   2. `npm run tauri build` has been run with TAURI_SIGNING_PRIVATE_KEY set,
-//      so the bundle dir contains a .sig file alongside the installer.
+//      so each bundle dir contains a .sig file alongside the installer.
 //
-// Run: node scripts/make-release-manifest.mjs
+// Run: node scripts/make-release-manifest.mjs [--input-dir <path>]
 //
-// Output: latest.json next to the installer. Upload installer + .sig +
+// By default scans src-tauri/target/release/bundle/. CI overrides with
+// --input-dir <downloaded-artifacts-path> when assembling the manifest from
+// per-runner artifact uploads.
+//
+// Output: latest.json inside the input dir. Upload installers + .sig +
 // latest.json to a GitHub release on the public releases repo named v<version>.
+//
+// Emits entries only for platforms whose artifacts are present on disk, so
+// the same script works for single-platform local builds and the multi-runner
+// CI flow.
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,10 +25,28 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 
+function parseArgs(argv) {
+  const args = { inputDir: null };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--input-dir") {
+      args.inputDir = argv[++i];
+    }
+  }
+  return args;
+}
+
+const { inputDir: inputDirArg } = parseArgs(process.argv.slice(2));
+const inputDir = inputDirArg
+  ? (inputDirArg.startsWith("/") || /^[A-Za-z]:/.test(inputDirArg)
+      ? inputDirArg
+      : join(process.cwd(), inputDirArg))
+  : join(root, "src-tauri/target/release/bundle");
+
 const config = JSON.parse(
   readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
 );
 const version = config.version;
+const productName = config.productName;
 const endpoint = config?.plugins?.updater?.endpoints?.[0];
 if (!endpoint) {
   console.error("No updater endpoint configured in tauri.conf.json.");
@@ -41,47 +67,69 @@ if (!m) {
 }
 const [, ghUser, ghRepo] = m;
 
-const nsisDir = join(root, "src-tauri/target/release/bundle/nsis");
-const installerName = `templates-widget_${version}_x64-setup.exe`;
-const installerPath = join(nsisDir, installerName);
-// Tauri 2 emits the .sig next to the installer as `<installer>.sig`.
-const sigPath = installerPath + ".sig";
+const releaseBase = `https://github.com/${ghUser}/${ghRepo}/releases/download/v${version}`;
 
-if (!existsSync(installerPath)) {
-  console.error(`Installer not found:\n  ${installerPath}`);
-  console.error("Run `npm run tauri build` first.");
+// Each candidate: where the installer + .sig should live, and the manifest
+// platform key + URL to emit if found. Arch-specific .app.tar.gz filenames
+// aren't a Tauri convention — only darwin-aarch64 is wired up since that's
+// what the CI workflow currently builds. Add darwin-x86_64 by extending this
+// list once the workflow includes an Intel runner.
+const candidates = [
+  {
+    key: "windows-x86_64",
+    installer: join(inputDir, "nsis", `${productName}_${version}_x64-setup.exe`),
+    uploadName: `${productName}_${version}_x64-setup.exe`,
+  },
+  {
+    key: "darwin-aarch64",
+    installer: join(inputDir, "macos", `${productName}.app.tar.gz`),
+    uploadName: `${productName}.app.tar.gz`,
+  },
+];
+
+const platforms = {};
+const found = [];
+const missing = [];
+for (const c of candidates) {
+  const sig = `${c.installer}.sig`;
+  if (existsSync(c.installer) && existsSync(sig)) {
+    platforms[c.key] = {
+      signature: readFileSync(sig, "utf8").trim(),
+      url: `${releaseBase}/${c.uploadName}`,
+    };
+    found.push(c.key);
+  } else {
+    missing.push(c.key);
+  }
+}
+
+if (found.length === 0) {
+  console.error(`No installers found under ${inputDir}.`);
+  console.error("Looked for:");
+  for (const c of candidates) console.error(`  - ${c.installer}`);
+  console.error("Did you run `npm run tauri build` with TAURI_SIGNING_PRIVATE_KEY set?");
   process.exit(1);
 }
-if (!existsSync(sigPath)) {
-  console.error(`Signature not found:\n  ${sigPath}`);
-  console.error("Did you set TAURI_SIGNING_PRIVATE_KEY before building?");
-  console.error("See IDEA.md § Releasing for the keypair setup.");
-  process.exit(1);
-}
 
-const signature = readFileSync(sigPath, "utf8").trim();
-
-// Allow the caller to set release notes via env var; otherwise leave a
-// placeholder the maintainer is reminded to overwrite when posting.
 const notes = process.env.RELEASE_NOTES?.trim() || "TODO: add release notes";
 
 const manifest = {
   version: `v${version}`,
   notes,
   pub_date: new Date().toISOString(),
-  platforms: {
-    "windows-x86_64": {
-      signature,
-      url: `https://github.com/${ghUser}/${ghRepo}/releases/download/v${version}/${installerName}`,
-    },
-  },
+  platforms,
 };
 
-const outPath = join(nsisDir, "latest.json");
+const outPath = join(inputDir, "latest.json");
 writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n");
 console.log(`Wrote ${outPath}`);
+console.log(`Platforms: ${found.join(", ")}${missing.length ? ` (skipped: ${missing.join(", ")})` : ""}`);
 console.log("");
-console.log(`Upload these three files to the v${version} release on ${ghUser}/${ghRepo}:`);
-console.log(`  - ${installerName}`);
-console.log(`  - ${installerName}.sig`);
+console.log(`Upload to the v${version} release on ${ghUser}/${ghRepo}:`);
+for (const c of candidates) {
+  if (platforms[c.key]) {
+    console.log(`  - ${c.uploadName}`);
+    console.log(`  - ${c.uploadName}.sig`);
+  }
+}
 console.log(`  - latest.json`);

@@ -2,23 +2,33 @@
 
 Personal desk-companion app for prose templating — emails, replies, DMs, networking, follow-ups. One-click copy with optional opening / signature toggles, plus semantic paste-to-match via the Claude Agent SDK (uses a Claude subscription, not API billing).
 
-Windows desktop app. Tauri 2 + SvelteKit + TypeScript frontend, Rust backend, Node.js sidecar hosting the Anthropic Agent SDK.
+Cross-platform desktop app (Windows + macOS). Tauri 2 + SvelteKit + TypeScript frontend, Rust backend, Node.js sidecar hosting the Anthropic Agent SDK.
 
 ## Install (playtest)
 
-Prereqs: Windows 10/11. **No external dependencies** — Node and the sidecar are bundled into the installer.
+**No external dependencies** — Node and the sidecar are bundled into the installer.
 
-1. **Download `templates-widget_0.1.0_x64-setup.exe`** (link in the message I sent you). Double-click to install. First launch will trigger a SmartScreen warning ("Windows protected your PC") because the installer isn't code-signed; click *More info* → *Run anyway*.
+### Windows 10/11
 
-2. **Sign in to Claude** (only needed for the AI paste-match feature; everything else works without it). Open PowerShell:
-   ```powershell
-   claude login
-   ```
-   If `claude` isn't recognised, paste-match will just say "Not signed in" inline and the rest of the app works fine.
+1. **Download `templates-widget_0.1.1_x64-setup.exe`** (link in the message I sent you). Double-click to install. First launch will trigger a SmartScreen warning ("Windows protected your PC") because the installer isn't code-signed; click *More info* → *Run anyway*.
+
+### macOS (Apple Silicon)
+
+1. **Download `templates-widget_0.1.1_aarch64.dmg`**, open it, and drag *templates-widget* to *Applications*. First launch will trigger a Gatekeeper warning ("can't be opened because Apple cannot check it for malicious software") because the app isn't notarized; right-click the app → *Open* → *Open* in the dialog. Subsequent launches work normally.
+
+### Then, on either OS
+
+**Sign in to Claude** (only needed for the AI paste-match feature; everything else works without it). Open a terminal (PowerShell on Windows, Terminal on macOS):
+
+```
+claude login
+```
+
+If `claude` isn't recognised, paste-match will just say "Not signed in" inline and the rest of the app works fine.
 
 That's it. The app drops a tray icon, opens an 800×600 window, and seeds itself with a handful of starter templates so you can see the format.
 
-> **Prefer portable?** If you don't want anything installed to Program Files, ask me for the portable zip instead — extract anywhere, run `templates-widget.exe`, delete the folder when done. Same app, just no installer / uninstaller / Start Menu entry.
+> **Prefer portable on Windows?** If you don't want anything installed to Program Files, ask me for the portable zip instead — extract anywhere, run `templates-widget.exe`, delete the folder when done. Same app, just no installer / uninstaller / Start Menu entry.
 
 ## Using it
 
@@ -36,7 +46,7 @@ Open Settings → **Updates** → *Check for updates*. The app fetches the lates
 
 ## Privacy
 
-Everything is local. Templates live in `%APPDATA%\templates-widget\templates.json`, preferences in `settings.json` next to it. The only thing that ever leaves the machine is the paste-match call — when you paste a long message, the template catalog + your pasted text go to Anthropic's API via the Agent SDK. No telemetry, no analytics, no account.
+Everything is local. Templates live in `templates.json`, preferences in `settings.json` next to it — on Windows under `%APPDATA%\com.noel.templatewidget\`, on macOS under `~/Library/Application Support/com.noel.templatewidget/`. The only thing that ever leaves the machine is the paste-match call — when you paste a long message, the template catalog + your pasted text go to Anthropic's API via the Agent SDK. No telemetry, no analytics, no account.
 
 ---
 
@@ -52,7 +62,7 @@ cd sidecar ; npm install ; cd ..
 # Dev (HMR + Rust auto-rebuild)
 npm run tauri dev
 
-# Build a portable .exe
+# Build platform installer (.exe on Windows, .dmg/.app on macOS)
 npm run tauri build
 
 # Sanity checks
