@@ -120,8 +120,13 @@ jobs:
           done
           echo "Publishing ${#FILES[@]} files to ${REPO} ${TAG}"
           printf '  %s\n' "${FILES[@]}"
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --title "$TAG" \
-            --generate-notes \
-            "${FILES[@]}"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading files with --clobber"
+            gh release upload "$TAG" --repo "$REPO" --clobber "${FILES[@]}"
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TAG" \
+              --generate-notes \
+              "${FILES[@]}"
+          fi
