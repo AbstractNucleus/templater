@@ -6,19 +6,19 @@ How a new version reaches the friend's "Check for updates" button. The flow has 
 
 ### 1. Create the public releases repo
 
-The friend's app fetches updates from a *separate* GitHub repo that's public, so this private source repo stays private. By convention: `templates-widget-releases`.
+The friend's app fetches updates from a *separate* GitHub repo that's public, so this private source repo stays private. By convention: `templater-releases`.
 
 ```powershell
 # Create the empty public repo via the gh CLI:
-gh repo create AbstractNucleus/templates-widget-releases --public --description "Public release artifacts for templates-widget"
+gh repo create AbstractNucleus/templater-releases --public --description "Public release artifacts for Templater"
 ```
 
 The repo's URL is baked into [`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json) → `plugins.updater.endpoints`. If you choose a different name, update it there.
 
 > An empty repo can't be tagged — `gh release create` fails with "Repository is empty." Seed it with one commit (a README is easiest) before your first release. Either pass `--add-readme` on `gh repo create`, or after the fact:
 > ```powershell
-> $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("# templates-widget — releases`n"))
-> gh api -X PUT repos/AbstractNucleus/templates-widget-releases/contents/README.md -f message="Initial commit" -f content="$b64"
+> $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("# Templater — releases`n"))
+> gh api -X PUT repos/AbstractNucleus/templater-releases/contents/README.md -f message="Initial commit" -f content="$b64"
 > ```
 
 ### 2. Generate a Tauri signing keypair
@@ -30,21 +30,21 @@ The updater plugin verifies every downloaded installer against a public key embe
 # file itself is the secret). Use a real passphrase if you'd rather; just
 # remember to export TAURI_SIGNING_PRIVATE_KEY_PASSWORD with that value when
 # building.
-npx tauri signer generate -w "$env:USERPROFILE\.tauri\templates-widget.key" -p "" -f --ci
+npx tauri signer generate -w "$env:USERPROFILE\.tauri\templater.key" -p "" -f --ci
 ```
 
-The command writes the keypair to `~/.tauri/templates-widget.key` (private) and `~/.tauri/templates-widget.key.pub` (public), and prints the public key to stdout. Open `src-tauri/tauri.conf.json` and replace the `REPLACE_WITH_TAURI_PUBLIC_KEY_FROM_KEYPAIR_GENERATION` placeholder with the public key contents (single line, base64).
+The command writes the keypair to `~/.tauri/templater.key` (private) and `~/.tauri/templater.key.pub` (public), and prints the public key to stdout. Open `src-tauri/tauri.conf.json` and replace the `REPLACE_WITH_TAURI_PUBLIC_KEY_FROM_KEYPAIR_GENERATION` placeholder with the public key contents (single line, base64).
 
 The bundler triggers signing only when the **private key contents** are in the `TAURI_SIGNING_PRIVATE_KEY` env var (not the path — `_PATH` is documented but didn't actually trigger signing in the Tauri 2.11 builds I tested):
 
 ```powershell
 # Set per shell before building. Persist via your PowerShell $PROFILE if you
 # ship often.
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE\.tauri\templates-widget.key" -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE\.tauri\templater.key" -Raw
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""  # omit / leave empty if no passphrase
 ```
 
-> **Back up `templates-widget.key` somewhere off-machine** (encrypted USB, password manager). If your dev machine dies, recovering this file means recovering update auth for every installed app. Without it, the only way to fix a broken update channel is to ship a new pubkey and have every user re-install from scratch.
+> **Back up `templater.key` somewhere off-machine** (encrypted USB, password manager). If your dev machine dies, recovering this file means recovering update auth for every installed app. Without it, the only way to fix a broken update channel is to ship a new pubkey and have every user re-install from scratch.
 
 ### 3. Verify the updater wiring builds cleanly
 
@@ -54,7 +54,7 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""  # omit / leave empty if no passphr
 npm run tauri build
 ```
 
-Should produce a `.sig` file alongside the installer at `src-tauri/target/release/bundle/nsis/templates-widget_*_x64-setup.exe.sig`. The build output will say `Finished N updater signatures at:` near the end. If you don't see that line, double-check the env var from step 2 and the `createUpdaterArtifacts` flag.
+Should produce a `.sig` file alongside the installer at `src-tauri/target/release/bundle/nsis/Templater_*_x64-setup.exe.sig`. The build output will say `Finished N updater signatures at:` near the end. If you don't see that line, double-check the env var from step 2 and the `createUpdaterArtifacts` flag.
 
 ## Per-release loop
 
@@ -77,8 +77,8 @@ npm run tauri build
 
 Produces, among other things:
 
-- `src-tauri/target/release/bundle/nsis/templates-widget_<v>_x64-setup.exe` — the installer
-- `src-tauri/target/release/bundle/nsis/templates-widget_<v>_x64-setup.exe.sig` — the signature
+- `src-tauri/target/release/bundle/nsis/Templater_<v>_x64-setup.exe` — the installer
+- `src-tauri/target/release/bundle/nsis/Templater_<v>_x64-setup.exe.sig` — the signature
 
 ### 3. Generate the update manifest
 
@@ -98,11 +98,11 @@ $VERSION = "0.1.1"
 $NSIS = "src-tauri/target/release/bundle/nsis"
 
 gh release create "v$VERSION" `
-  --repo AbstractNucleus/templates-widget-releases `
+  --repo AbstractNucleus/templater-releases `
   --title "v$VERSION" `
   --notes "$env:RELEASE_NOTES" `
-  "$NSIS/templates-widget_${VERSION}_x64-setup.exe" `
-  "$NSIS/templates-widget_${VERSION}_x64-setup.exe.sig" `
+  "$NSIS/Templater_${VERSION}_x64-setup.exe" `
+  "$NSIS/Templater_${VERSION}_x64-setup.exe.sig" `
   "$NSIS/latest.json"
 ```
 

@@ -32,7 +32,7 @@
 </script>
 
 <header class="titlebar" data-tauri-drag-region>
-  <div class="title" data-tauri-drag-region>templates-widget</div>
+  <div class="title" data-tauri-drag-region>Templater</div>
   <div class="actions">
     <button
       class="btn"

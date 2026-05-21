@@ -199,6 +199,8 @@
 
   let searchQuery = $state("");
   let selectedTagIds = $state<Set<string>>(new Set());
+  let excludedTagIds = $state<Set<string>>(new Set());
+  let tagCombinator = $state<"and" | "or">("and");
   let selectedTemplateId = $state<string | null>(null);
   let includeOpening = $state(true);
   let includeSignature = $state(true);
@@ -237,8 +239,18 @@
   });
 
   const tagFiltered = $derived.by(() => {
-    if (selectedTagIds.size === 0) return templates;
+    if (selectedTagIds.size === 0 && excludedTagIds.size === 0) return templates;
     return templates.filter((t) => {
+      for (const tag of excludedTagIds) {
+        if (t.tags.includes(tag)) return false;
+      }
+      if (selectedTagIds.size === 0) return true;
+      if (tagCombinator === "or") {
+        for (const tag of selectedTagIds) {
+          if (t.tags.includes(tag)) return true;
+        }
+        return false;
+      }
       for (const tag of selectedTagIds) {
         if (!t.tags.includes(tag)) return false;
       }
@@ -298,18 +310,43 @@
     }
   }
 
-  function handleTagToggle(tag: string, additive: boolean): void {
+  function handleTagToggle(tag: string): void {
     const next = new Set(selectedTagIds);
-    if (additive) {
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-    } else if (next.has(tag) && next.size === 1) {
-      next.clear();
+    if (excludedTagIds.has(tag)) {
+      const ex = new Set(excludedTagIds);
+      ex.delete(tag);
+      excludedTagIds = ex;
+      next.add(tag);
+    } else if (next.has(tag)) {
+      next.delete(tag);
     } else {
-      next.clear();
       next.add(tag);
     }
     selectedTagIds = next;
+  }
+
+  function handleTagExclude(tag: string): void {
+    const next = new Set(excludedTagIds);
+    if (selectedTagIds.has(tag)) {
+      const sel = new Set(selectedTagIds);
+      sel.delete(tag);
+      selectedTagIds = sel;
+      next.add(tag);
+    } else if (next.has(tag)) {
+      next.delete(tag);
+    } else {
+      next.add(tag);
+    }
+    excludedTagIds = next;
+  }
+
+  function handleTagsClear(): void {
+    selectedTagIds = new Set();
+    excludedTagIds = new Set();
+  }
+
+  function handleCombinatorToggle(): void {
+    tagCombinator = tagCombinator === "and" ? "or" : "and";
   }
 
   function handleTemplateSelect(id: string): void {
@@ -710,8 +747,13 @@
       <TagsSidebar
         {templates}
         {selectedTagIds}
+        {excludedTagIds}
+        {tagCombinator}
         width={tagsWidth}
         onTagToggle={handleTagToggle}
+        onTagExclude={handleTagExclude}
+        onTagsClear={handleTagsClear}
+        onCombinatorToggle={handleCombinatorToggle}
         onContextEmpty={openContextForEmpty}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->

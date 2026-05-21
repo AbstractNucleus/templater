@@ -1,7 +1,7 @@
 name: Release
 
 # Builds platform installers + updater artifacts on tag push, then publishes
-# them to the public releases repo (AbstractNucleus/templates-widget-releases)
+# them to the public releases repo (AbstractNucleus/templater-releases)
 # under a tag matching the source-repo tag.
 #
 # Required secrets:
@@ -9,7 +9,7 @@ name: Release
 #                                         contents of the .key file)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — password for that key
 #   RELEASES_REPO_TOKEN                 — fine-grained PAT with Contents:write
-#                                         on AbstractNucleus/templates-widget-releases
+#                                         on AbstractNucleus/templater-releases
 #
 # Tags must match the version in src-tauri/tauri.conf.json (e.g. tag v0.1.2
 # requires version "0.1.2"). The publish job refuses to run on a mismatch.
@@ -110,7 +110,7 @@ jobs:
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           TAG="v${VERSION}"
-          REPO="AbstractNucleus/templates-widget-releases"
+          REPO="AbstractNucleus/templater-releases"
           FILES=()
           for f in artifacts/nsis/*.exe artifacts/nsis/*.exe.sig \
                    artifacts/macos/*.app.tar.gz artifacts/macos/*.app.tar.gz.sig \

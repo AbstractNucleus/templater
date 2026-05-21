@@ -4,18 +4,28 @@
   let {
     templates,
     selectedTagIds,
+    excludedTagIds,
+    tagCombinator,
     width,
     onTagToggle,
+    onTagExclude,
+    onTagsClear,
+    onCombinatorToggle,
     onContextEmpty,
   }: {
     templates: Template[];
     selectedTagIds: Set<string>;
+    excludedTagIds: Set<string>;
+    tagCombinator: "and" | "or";
     width: number;
-    onTagToggle: (tag: string, additive: boolean) => void;
+    onTagToggle: (tag: string) => void;
+    onTagExclude: (tag: string) => void;
+    onTagsClear: () => void;
+    onCombinatorToggle: () => void;
     onContextEmpty: (x: number, y: number) => void;
   } = $props();
 
-  function handleContext(e: MouseEvent): void {
+  function handleSidebarContext(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
     onContextEmpty(e.clientX, e.clientY);
@@ -29,20 +39,51 @@
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   });
 
-  function handleTagClick(e: MouseEvent, tag: string) {
-    onTagToggle(tag, e.ctrlKey || e.metaKey);
+  const hasAnyFilter = $derived(selectedTagIds.size > 0 || excludedTagIds.size > 0);
+  const showCombinator = $derived(selectedTagIds.size >= 2);
+
+  function handleTagClick(tag: string) {
+    onTagToggle(tag);
+  }
+
+  function handleTagContext(e: MouseEvent, tag: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    onTagExclude(tag);
   }
 </script>
 
-<aside class="sidebar" style="width: {width}px" oncontextmenu={handleContext}>
-  <div class="section-label">Tags</div>
+<aside class="sidebar" style="width: {width}px" oncontextmenu={handleSidebarContext}>
+  <div class="header">
+    <span class="section-label">Tags</span>
+    <div class="header-controls">
+      {#if showCombinator}
+        <button
+          class="combinator"
+          title={tagCombinator === "and"
+            ? "Matching all selected tags. Click to switch to any."
+            : "Matching any selected tag. Click to switch to all."}
+          onclick={onCombinatorToggle}
+        >
+          <span class:on={tagCombinator === "and"}>ALL</span>
+          <span class="sep">/</span>
+          <span class:on={tagCombinator === "or"}>ANY</span>
+        </button>
+      {/if}
+      {#if hasAnyFilter}
+        <button class="clear" title="Clear tag filters" onclick={onTagsClear}>Clear</button>
+      {/if}
+    </div>
+  </div>
   <ul class="tag-list">
     {#each tagCounts as [tag, count] (tag)}
       <li>
         <button
           class="tag"
           class:active={selectedTagIds.has(tag)}
-          onclick={(e) => handleTagClick(e, tag)}
+          class:excluded={excludedTagIds.has(tag)}
+          onclick={() => handleTagClick(tag)}
+          oncontextmenu={(e) => handleTagContext(e, tag)}
         >
           <span class="tag-name">{tag}</span>
           <span class="tag-count">{count}</span>
@@ -66,13 +107,58 @@
     box-sizing: border-box;
   }
 
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 6px;
+    margin: 0 0 4px;
+    min-height: 18px;
+  }
+
   .section-label {
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-subtle);
-    padding: 0 6px;
-    margin: 0 0 4px;
+  }
+
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .combinator,
+  .clear {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-subtle);
+    font: inherit;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.2;
+  }
+
+  .combinator:hover,
+  .clear:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .combinator .sep {
+    margin: 0 3px;
+    color: var(--text-subtle);
+  }
+
+  .combinator .on {
+    color: var(--text-strong);
+    font-weight: 600;
   }
 
   ul {
@@ -113,6 +199,20 @@
   .tag.active {
     background: var(--bg-active);
     color: var(--text-strong);
+  }
+
+  .tag.excluded {
+    background: var(--accent-danger-bg);
+    color: var(--accent-danger-text);
+  }
+
+  .tag.excluded .tag-name {
+    text-decoration: line-through;
+  }
+
+  .tag.excluded .tag-count {
+    color: var(--accent-danger-text);
+    opacity: 0.7;
   }
 
   .empty {

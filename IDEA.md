@@ -1,4 +1,4 @@
-# Templates Widget — Design
+# Templater — Design
 
 A personal templating app for prose drafts (emails, replies, DMs, networking, follow-ups). Tag-organised, one-click copy, semantic paste-to-match via Claude API. Desk-side companion: tray icon, global hotkey, optional always-on-top.
 
@@ -243,7 +243,7 @@ Uses the Claude Agent SDK with subscription-based auth — no API key, no keycha
 
 ## Build & distribution
 
-- Build: `cargo tauri build` → `target/release/templates-widget.exe` (~10 MB). The Node sidecar ships alongside (`sidecar/` folder bundled as a Tauri resource, or as a separately-distributed companion).
+- Build: `cargo tauri build` → `target/release/Templater.exe` (~10 MB). The Node sidecar ships alongside (`sidecar/` folder bundled as a Tauri resource, or as a separately-distributed companion).
 - **Runtime requirement: Node.js on the target machine** (v18+). For personal use this is fine — Node is already installed on the dev/target machine via the Claude Code setup. For broader distribution later, bundle a Node binary via Tauri's [sidecar binary feature](https://tauri.app/v1/guides/building/sidecar/) (~30 MB add to the package).
 - Distribution: tag a release on GitHub, upload binary + sidecar archive, link in README.
 - Install: download, run. No installer.

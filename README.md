@@ -1,4 +1,4 @@
-# templates-widget
+# Templater
 
 Personal desk-companion app for prose templating — emails, replies, DMs, networking, follow-ups. One-click copy with optional opening / signature toggles, plus semantic paste-to-match via the Claude Agent SDK (uses a Claude subscription, not API billing).
 
@@ -10,11 +10,11 @@ Cross-platform desktop app (Windows + macOS). Tauri 2 + SvelteKit + TypeScript f
 
 ### Windows 10/11
 
-1. **Download `templates-widget_0.1.1_x64-setup.exe`** (link in the message I sent you). Double-click to install. First launch will trigger a SmartScreen warning ("Windows protected your PC") because the installer isn't code-signed; click *More info* → *Run anyway*.
+1. **Download `Templater_0.1.1_x64-setup.exe`** (link in the message I sent you). Double-click to install. First launch will trigger a SmartScreen warning ("Windows protected your PC") because the installer isn't code-signed; click *More info* → *Run anyway*.
 
 ### macOS (Apple Silicon)
 
-1. **Download `templates-widget_0.1.1_aarch64.dmg`**, open it, and drag *templates-widget* to *Applications*. First launch will trigger a Gatekeeper warning ("can't be opened because Apple cannot check it for malicious software") because the app isn't notarized; right-click the app → *Open* → *Open* in the dialog. Subsequent launches work normally.
+1. **Download `Templater_0.1.1_aarch64.dmg`**, open it, and drag *Templater* to *Applications*. First launch will trigger a Gatekeeper warning ("can't be opened because Apple cannot check it for malicious software") because the app isn't notarized; right-click the app → *Open* → *Open* in the dialog. Subsequent launches work normally.
 
 ### Then, on either OS
 
@@ -28,13 +28,13 @@ If `claude` isn't recognised, paste-match will just say "Not signed in" inline a
 
 That's it. The app drops a tray icon, opens an 800×600 window, and seeds itself with a handful of starter templates so you can see the format.
 
-> **Prefer portable on Windows?** If you don't want anything installed to Program Files, ask me for the portable zip instead — extract anywhere, run `templates-widget.exe`, delete the folder when done. Same app, just no installer / uninstaller / Start Menu entry.
+> **Prefer portable on Windows?** If you don't want anything installed to Program Files, ask me for the portable zip instead — extract anywhere, run `Templater.exe`, delete the folder when done. Same app, just no installer / uninstaller / Start Menu entry.
 
 ## Using it
 
 - **Browse**: click a template in the middle panel → preview on the right. Click *Copy* (or use the keyboard) to put the composed text on your clipboard.
 - **Filter**: type in the search box. Matches across name, tags, and body, with hits highlighted. Paste a longer message (30+ chars) and the search switches to AI ranking — the app sends the catalog + your text to Claude Haiku and ranks the best matches.
-- **Tag-filter**: click a tag chip in the left panel to filter, Ctrl-click to multi-select (intersection).
+- **Tag-filter**: left-click a tag chip in the left panel to include it, right-click to exclude it. Click again to deselect. With 2+ tags included, the `ALL / ANY` toggle in the section header switches between intersection and union. *Clear* in the header resets all filters.
 - **Edit / create**: hit `+` or *Edit* in the main panel. Tag picker lets you pick existing tags or type a new one.
 - **Base on template**: opens a chat with the AI editor. Tell it "make this more polite" / "shorten it" / etc. Save as new or copy and discard.
 - **User mode**: Settings → Mode → User. Hides all the editing affordances if you just want to browse + copy without accidentally changing anything.

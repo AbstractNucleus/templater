@@ -1,8 +1,8 @@
 {
-  "name": "coin-template-manager-sidecar",
+  "name": "templater-sidecar",
   "version": "0.1.0",
   "private": true,
-  "description": "Node.js sidecar process hosting the Claude Agent SDK for the templates-widget app.",
+  "description": "Node.js sidecar process hosting the Claude Agent SDK for the Templater app.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
