@@ -15,6 +15,12 @@ export interface WindowGeometry {
   height: number;
 }
 
+export interface ColumnWidths {
+  tags: number;
+  templates: number;
+  agent: number;
+}
+
 export type Theme = "dark" | "light";
 
 export type Mode = "editor" | "user";
@@ -28,7 +34,15 @@ export interface Settings {
   global_signature: string;
   theme: Theme;
   mode: Mode;
+  zoom: number;
+  column_widths: ColumnWidths;
 }
+
+export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
+  tags: 180,
+  templates: 260,
+  agent: 340,
+};
 
 export interface AppData {
   version: number;
@@ -45,4 +59,6 @@ export const DEFAULT_SETTINGS: Settings = {
   global_signature: "",
   theme: "dark",
   mode: "editor",
+  zoom: 1,
+  column_widths: DEFAULT_COLUMN_WIDTHS,
 };

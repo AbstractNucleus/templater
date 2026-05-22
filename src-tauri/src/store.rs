@@ -45,6 +45,23 @@ pub struct WindowGeometry {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ColumnWidths {
+    pub tags: u32,
+    pub templates: u32,
+    pub agent: u32,
+}
+
+impl Default for ColumnWidths {
+    fn default() -> Self {
+        Self {
+            tags: 180,
+            templates: 260,
+            agent: 340,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub always_on_top_default: bool,
@@ -61,6 +78,10 @@ pub struct Settings {
     pub theme: String,
     #[serde(default = "default_mode")]
     pub mode: String,
+    #[serde(default = "default_zoom")]
+    pub zoom: f32,
+    #[serde(default)]
+    pub column_widths: ColumnWidths,
 }
 
 fn default_theme() -> String {
@@ -69,6 +90,10 @@ fn default_theme() -> String {
 
 fn default_mode() -> String {
     "editor".to_string()
+}
+
+fn default_zoom() -> f32 {
+    1.0
 }
 
 impl Default for Settings {
@@ -82,6 +107,8 @@ impl Default for Settings {
             global_signature: String::new(),
             theme: default_theme(),
             mode: default_mode(),
+            zoom: default_zoom(),
+            column_widths: ColumnWidths::default(),
         }
     }
 }

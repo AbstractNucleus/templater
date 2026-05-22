@@ -23,6 +23,7 @@ Thumbs.db
 *.swp
 *.swo
 .vscode/
+.claude/
 
 # Engagement / private seed data — not for publication
 *.csv

@@ -10,6 +10,7 @@
   import SaveAsModal from "$lib/components/SaveAsModal.svelte";
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { starterTemplates } from "$lib/starterTemplates";
   import { searchTemplates } from "$lib/search";
   import {
@@ -29,19 +30,29 @@
     type ChatTurn,
   } from "$lib/api";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { DEFAULT_SETTINGS, type AppData, type Settings, type Template } from "$lib/types";
+  import {
+    DEFAULT_COLUMN_WIDTHS,
+    DEFAULT_SETTINGS,
+    type AppData,
+    type Settings,
+    type Template,
+  } from "$lib/types";
 
   const PASTE_THRESHOLD = 30;
   const RANK_DEBOUNCE_MS = 600;
   const DATA_VERSION = 1;
+
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 2.0;
+  const ZOOM_STEP = 0.1;
 
   const TAGS_MIN = 100;
   const TAGS_MAX = 400;
   const TEMPLATES_MIN = 160;
   const TEMPLATES_MAX = 500;
 
-  let tagsWidth = $state(180);
-  let templatesWidth = $state(260);
+  let tagsWidth = $state(DEFAULT_COLUMN_WIDTHS.tags);
+  let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
   let searchInput: HTMLInputElement | undefined = $state();
 
   function clearSearch(): void {
@@ -137,6 +148,13 @@
     e.preventDefault();
   }
 
+  function setZoom(next: number): void {
+    // Round to one decimal to avoid 0.1-step float drift (0.7 + 0.1 = 0.7999…).
+    const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(next * 10) / 10));
+    if (clamped === settings.zoom) return;
+    void persist(templates, { ...settings, zoom: clamped });
+  }
+
   function handleGlobalKeydown(e: KeyboardEvent): void {
     if (contextDeleteTarget) {
       if (e.key === "Escape") {
@@ -149,6 +167,22 @@
       return;
     }
     if (settingsOpen) return;
+    const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.altKey;
+    if (ctrlOnly && (e.key === "+" || e.key === "=")) {
+      e.preventDefault();
+      setZoom((settings.zoom ?? 1) + ZOOM_STEP);
+      return;
+    }
+    if (ctrlOnly && (e.key === "-" || e.key === "_")) {
+      e.preventDefault();
+      setZoom((settings.zoom ?? 1) - ZOOM_STEP);
+      return;
+    }
+    if (ctrlOnly && e.key === "0") {
+      e.preventDefault();
+      setZoom(1);
+      return;
+    }
     if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
       e.preventDefault();
       clearSearch();
@@ -182,6 +216,17 @@
         handle.removeEventListener("pointercancel", onUp);
         handle.releasePointerCapture(e.pointerId);
         handle.classList.remove("dragging");
+        const final = target === "tags"
+          ? tagsWidth
+          : target === "templates"
+            ? templatesWidth
+            : agentSidebarWidth;
+        if (final !== settings.column_widths[target]) {
+          void persist(templates, {
+            ...settings,
+            column_widths: { ...settings.column_widths, [target]: final },
+          });
+        }
       }
 
       handle.addEventListener("pointermove", onMove);
@@ -220,7 +265,7 @@
   let agentBusy = $state(false);
   let agentError = $state<string | null>(null);
   let saveAsOpen = $state(false);
-  let agentSidebarWidth = $state(340);
+  let agentSidebarWidth = $state(DEFAULT_COLUMN_WIDTHS.agent);
   let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   let contextDeleteTarget = $state<Template | null>(null);
   const AGENT_MIN = 240;
@@ -282,6 +327,9 @@
           templates = data.templates;
           settings = data.settings;
         }
+        tagsWidth = settings.column_widths.tags;
+        templatesWidth = settings.column_widths.templates;
+        agentSidebarWidth = settings.column_widths.agent;
         selectedTemplateId = templates[0]?.id ?? null;
       } catch (e) {
         loadError = String(e);
@@ -676,6 +724,13 @@
       document.documentElement.dataset.theme = settings.theme;
     }
   });
+
+  $effect(() => {
+    // Webview-level zoom (Ctrl+/− style) reflows scrollbars and hit-testing
+    // correctly — CSS `zoom` clips fixed-height flex layouts.
+    const z = settings.zoom ?? 1;
+    void getCurrentWebview().setZoom(z).catch(() => {});
+  });
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
@@ -954,7 +1009,7 @@
 
   :global(body) {
     margin: 0;
-    padding: 6px;
+    padding: 0;
     box-sizing: border-box;
     height: 100vh;
     background: transparent;
