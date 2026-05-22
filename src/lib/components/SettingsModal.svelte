@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Mode, Settings, Theme } from "$lib/types";
+  import type { Mode, PasteBackend, Settings, Theme } from "$lib/types";
   import { setHotkey } from "$lib/api";
 
   type PortResult =
@@ -134,6 +134,10 @@
     onUpdate({ ...settings, mode: next });
   }
 
+  function setPasteBackend(next: PasteBackend): void {
+    onUpdate({ ...settings, paste_backend: next });
+  }
+
   function handleBackdrop(e: MouseEvent): void {
     if (e.target === e.currentTarget) onClose();
   }
@@ -231,16 +235,38 @@
     </section>
 
     <section>
-      <div class="section-label">Auth</div>
-      {#if envApiKeyOverride}
-        <div class="warning">
-          <strong>ANTHROPIC_API_KEY is set in your environment.</strong>
-          The SDK will bill against API rates, not your Claude subscription credit pool.
-          Unset the env var to use subscription credits.
+      <div class="section-label">Paste-match backend</div>
+      <div class="theme-toggle">
+        <button
+          class="theme-btn"
+          class:active={settings.paste_backend === "agent"}
+          onclick={() => setPasteBackend("agent")}
+        >
+          Agent SDK
+        </button>
+        <button
+          class="theme-btn"
+          class:active={settings.paste_backend === "api"}
+          onclick={() => setPasteBackend("api")}
+        >
+          Anthropic API
+        </button>
+      </div>
+      {#if settings.paste_backend === "agent"}
+        <div class="hint">
+          Uses your Claude subscription via the Agent SDK — bills against the subscription
+          credit pool even when <code>ANTHROPIC_API_KEY</code> is set. Sign in via
+          <code>claude login</code> if paste-match fails.
+        </div>
+      {:else if envApiKeyOverride}
+        <div class="hint">
+          Calls Anthropic's Messages API directly with <code>ANTHROPIC_API_KEY</code>. Billed at
+          standard API rates.
         </div>
       {:else}
-        <div class="hint">
-          Using Claude subscription via Agent SDK. Sign in via <code>claude login</code> if paste-match fails.
+        <div class="warning">
+          <strong>ANTHROPIC_API_KEY is not set.</strong>
+          Paste-match in API mode will fail until you set the env var and restart the app.
         </div>
       {/if}
     </section>

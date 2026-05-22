@@ -28,6 +28,7 @@ async fn ping_sidecar(state: tauri::State<'_, Sidecar>) -> Result<serde_json::Va
 async fn rank_templates(
     pasted: String,
     catalog: Vec<Template>,
+    backend: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -36,6 +37,7 @@ async fn rank_templates(
             "op": "rank",
             "pasted": pasted,
             "catalog": catalog,
+            "backend": backend,
         }))
         .await
 }
@@ -45,6 +47,7 @@ async fn edit_template(
     draft: serde_json::Value,
     history: serde_json::Value,
     prompt: String,
+    backend: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -54,6 +57,7 @@ async fn edit_template(
             "draft": draft,
             "history": history,
             "prompt": prompt,
+            "backend": backend,
         }))
         .await
 }

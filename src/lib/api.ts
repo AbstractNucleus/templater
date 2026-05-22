@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppData, Template } from "./types";
+import type { AppData, PasteBackend, Template } from "./types";
 
 export async function loadAppData(): Promise<AppData | null> {
   return await invoke<AppData | null>("load_app_data");
@@ -100,8 +100,9 @@ interface RankResponse {
 export async function rankTemplates(
   pasted: string,
   catalog: Template[],
+  backend: PasteBackend,
 ): Promise<Ranking[]> {
-  const res = await invoke<RankResponse>("rank_templates", { pasted, catalog });
+  const res = await invoke<RankResponse>("rank_templates", { pasted, catalog, backend });
   if (!res.ok) throw new Error(res.error ?? "rank failed");
   return res.rankings ?? [];
 }
@@ -127,8 +128,9 @@ export async function editTemplate(
   draft: EditedDraft,
   history: ChatTurn[],
   prompt: string,
+  backend: PasteBackend,
 ): Promise<{ reasoning: string; updated: EditedDraft }> {
-  const res = await invoke<EditResponse>("edit_template", { draft, history, prompt });
+  const res = await invoke<EditResponse>("edit_template", { draft, history, prompt, backend });
   if (!res.ok || !res.updated) {
     throw new Error(res.error ?? "edit failed");
   }

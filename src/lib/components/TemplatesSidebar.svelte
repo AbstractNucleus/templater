@@ -56,9 +56,21 @@
   });
 
   const inPasteMode = $derived(searchQuery.trim().length >= pasteThreshold);
+
+  let sidebarEl: HTMLElement | undefined = $state();
+
+  // Keep the active row visible when arrow-key navigation moves selection
+  // off-screen. `block: "nearest"` avoids reflowing if it's already visible.
+  $effect(() => {
+    if (!selectedTemplateId || !sidebarEl) return;
+    const btn = sidebarEl.querySelector(
+      `[data-id="${CSS.escape(selectedTemplateId)}"]`,
+    ) as HTMLElement | null;
+    btn?.scrollIntoView({ block: "nearest" });
+  });
 </script>
 
-<aside class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
+<aside bind:this={sidebarEl} class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
   <div class="section-row">
     <div class="section-label">
       {inPasteMode ? "Ranked matches" : "Templates"}
@@ -87,6 +99,7 @@
               <button
                 class="template-item"
                 class:active={selectedTemplateId === tpl.id}
+                data-id={tpl.id}
                 onclick={() => onTemplateSelect(tpl.id)}
                 oncontextmenu={(e) => handleTemplateContext(e, tpl.id)}
               >
@@ -106,6 +119,7 @@
           <button
             class="template-item"
             class:active={selectedTemplateId === hit.template.id}
+            data-id={hit.template.id}
             onclick={() => onTemplateSelect(hit.template.id)}
             oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
           >

@@ -155,6 +155,33 @@
     void persist(templates, { ...settings, zoom: clamped });
   }
 
+  function isInputFocused(): boolean {
+    const ae = document.activeElement;
+    if (!ae || ae === document.body) return false;
+    const tag = ae.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return true;
+    if ((ae as HTMLElement).isContentEditable) return true;
+    return false;
+  }
+
+  function moveSelection(delta: number): void {
+    const ids = visibleTemplateIds;
+    if (ids.length === 0) return;
+    const idx = selectedTemplateId === null ? -1 : ids.indexOf(selectedTemplateId);
+    let next: number;
+    if (idx < 0) {
+      next = delta > 0 ? 0 : ids.length - 1;
+    } else {
+      next = Math.max(0, Math.min(ids.length - 1, idx + delta));
+    }
+    selectedTemplateId = ids[next];
+  }
+
+  function copySelected(): void {
+    if (selectedTemplateId === null) return;
+    copyTrigger++;
+  }
+
   function handleGlobalKeydown(e: KeyboardEvent): void {
     if (contextDeleteTarget) {
       if (e.key === "Escape") {
@@ -186,6 +213,33 @@
     if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
       e.preventDefault();
       clearSearch();
+      return;
+    }
+
+    if (baseMode || editing) return;
+    const inSearch = document.activeElement === searchInput;
+    if (!inSearch && isInputFocused()) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveSelection(1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveSelection(-1);
+      return;
+    }
+    if (
+      e.key === "Enter" &&
+      inSearch &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey
+    ) {
+      e.preventDefault();
+      copySelected();
     }
   }
 
@@ -257,6 +311,8 @@
   let rankError = $state<string | null>(null);
   let rankTimer: ReturnType<typeof setTimeout> | null = null;
 
+  let copyTrigger = $state(0);
+
   let baseMode = $state(false);
   let baseKind = $state<"new" | "base">("base");
   let baseSourceName = $state("");
@@ -304,6 +360,33 @@
   });
 
   const searchResults = $derived(searchTemplates(searchQuery, tagFiltered));
+
+  const inPasteMode = $derived(searchQuery.trim().length >= PASTE_THRESHOLD);
+
+  // Ordered IDs the user can step through with ↑/↓. Paste mode follows the
+  // ranked list; browse mode follows literal search results (which already
+  // honour tag filters via `tagFiltered`). Stale ranking IDs are filtered out
+  // so a deleted template doesn't leave a dead slot.
+  const visibleTemplateIds = $derived.by(() => {
+    if (inPasteMode) {
+      if (!rankings) return [];
+      const present = new Set(templates.map((t) => t.id));
+      return rankings.map((r) => r.template_id).filter((id) => present.has(id));
+    }
+    return searchResults.map((h) => h.template.id);
+  });
+
+  // Snap selection to the first visible row when the current pick drops out
+  // of the result set (e.g. user typed and the previous selection no longer
+  // matches). Skips during baseMode/editing where the selection is locked.
+  $effect(() => {
+    if (baseMode || editing) return;
+    const ids = visibleTemplateIds;
+    if (ids.length === 0) return;
+    if (selectedTemplateId === null || !ids.includes(selectedTemplateId)) {
+      selectedTemplateId = ids[0];
+    }
+  });
 
   $effect(() => {
     void (async () => {
@@ -419,11 +502,12 @@
       return;
     }
     const catalog = templates;
+    const backend = settings.paste_backend;
     rankTimer = setTimeout(async () => {
       rankLoading = true;
       rankError = null;
       try {
-        const result = await rankTemplates(q, catalog);
+        const result = await rankTemplates(q, catalog, backend);
         if (searchQuery === q) rankings = result;
       } catch (e) {
         if (searchQuery === q) {
@@ -442,7 +526,7 @@
     if (q.trim().length < PASTE_THRESHOLD) return;
     rankLoading = true;
     try {
-      const result = await rankTemplates(q, templates);
+      const result = await rankTemplates(q, templates, settings.paste_backend);
       if (searchQuery === q) rankings = result;
     } catch (e) {
       if (searchQuery === q) rankError = explainRankError(String(e));
@@ -683,7 +767,12 @@
     agentMessages = [...history, { role: "user", content: prompt }];
     agentBusy = true;
     try {
-      const { reasoning, updated } = await editTemplate(baseDraft, history, prompt);
+      const { reasoning, updated } = await editTemplate(
+        baseDraft,
+        history,
+        prompt,
+        settings.paste_backend,
+      );
       baseDraft = updated;
       agentMessages = [
         ...agentMessages,
@@ -737,12 +826,6 @@
 
 <div class="frame">
   <TitleBar onOpenSettings={() => (settingsOpen = true)} />
-  {#if envApiKeyOverride}
-    <div class="env-banner">
-      <strong>ANTHROPIC_API_KEY</strong> is set — paste-match will bill API rates, not subscription credits.
-      <button class="banner-action" onclick={() => (settingsOpen = true)}>Details</button>
-    </div>
-  {/if}
   {#if !baseMode}
     <div class="search-row">
       <div class="search-wrap">
@@ -848,6 +931,7 @@
         globalSignature={settings.global_signature}
         canEdit={isEditorMode}
         {availableTags}
+        {copyTrigger}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => (editing = true)}
@@ -1129,26 +1213,6 @@
 
   .search::placeholder {
     color: var(--text-placeholder);
-  }
-
-  .env-banner {
-    background: var(--accent-warning-bg);
-    color: var(--accent-warning-text);
-    padding: 6px 12px;
-    font-size: 0.78rem;
-    line-height: 1.3;
-    border-bottom: 1px solid var(--accent-warning-border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
-  .env-banner strong {
-    color: var(--accent-warning-strong);
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.75rem;
   }
 
   .banner-action {

@@ -25,6 +25,8 @@ export type Theme = "dark" | "light";
 
 export type Mode = "editor" | "user";
 
+export type PasteBackend = "agent" | "api";
+
 export interface Settings {
   always_on_top_default: boolean;
   global_hotkey: string;
@@ -36,6 +38,7 @@ export interface Settings {
   mode: Mode;
   zoom: number;
   column_widths: ColumnWidths;
+  paste_backend: PasteBackend;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -61,4 +64,5 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: "editor",
   zoom: 1,
   column_widths: DEFAULT_COLUMN_WIDTHS,
+  paste_backend: "agent",
 };

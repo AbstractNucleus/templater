@@ -82,6 +82,8 @@ pub struct Settings {
     pub zoom: f32,
     #[serde(default)]
     pub column_widths: ColumnWidths,
+    #[serde(default = "default_paste_backend")]
+    pub paste_backend: String,
 }
 
 fn default_theme() -> String {
@@ -94,6 +96,10 @@ fn default_mode() -> String {
 
 fn default_zoom() -> f32 {
     1.0
+}
+
+fn default_paste_backend() -> String {
+    "agent".to_string()
 }
 
 impl Default for Settings {
@@ -109,6 +115,7 @@ impl Default for Settings {
             mode: default_mode(),
             zoom: default_zoom(),
             column_widths: ColumnWidths::default(),
+            paste_backend: default_paste_backend(),
         }
     }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
+  import { composeText } from "$lib/compose";
   import TagPicker from "./TagPicker.svelte";
 
   let {
@@ -11,6 +12,7 @@
     globalSignature,
     canEdit,
     availableTags,
+    copyTrigger,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
@@ -27,6 +29,7 @@
     globalSignature: string;
     canEdit: boolean;
     availableTags: string[];
+    copyTrigger: number;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
@@ -58,14 +61,9 @@
     }
   });
 
-  const composed = $derived.by(() => {
-    if (!template) return "";
-    const parts: string[] = [];
-    if (includeOpening && template.opening.trim().length > 0) parts.push(template.opening);
-    parts.push(template.body);
-    if (includeSignature && signatureAvailable) parts.push(globalSignature);
-    return parts.join("\n\n");
-  });
+  const composed = $derived(
+    template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
+  );
 
   const breadcrumb = $derived.by(() => {
     if (!template) return "";
@@ -84,6 +82,20 @@
     if (copyTimer) clearTimeout(copyTimer);
     copyTimer = setTimeout(() => (copyState = "idle"), 1500);
   }
+
+  // Bumping `copyTrigger` from the parent runs the same copy flow as the
+  // Copy button — keeps the "Copied"/"Copy failed" feedback shared. Skips the
+  // mount run so the initial render doesn't fire a stray copy.
+  let skipInitialCopy = true;
+  $effect(() => {
+    // Read so the effect tracks the prop.
+    void copyTrigger;
+    if (skipInitialCopy) {
+      skipInitialCopy = false;
+      return;
+    }
+    void copyToClipboard();
+  });
 
   function handleSave(): void {
     if (!template) return;
