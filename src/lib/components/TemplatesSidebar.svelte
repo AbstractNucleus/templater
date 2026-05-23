@@ -95,6 +95,7 @@
         {#each rankings as r (r.template_id)}
           {@const tpl = templateById.get(r.template_id)}
           {#if tpl}
+            {@const trimmed = tpl.body.trim()}
             <li>
               <button
                 class="template-item"
@@ -103,7 +104,10 @@
                 onclick={() => onTemplateSelect(tpl.id)}
                 oncontextmenu={(e) => handleTemplateContext(e, tpl.id)}
               >
-                {tpl.name}
+                <span class="name">{tpl.name}</span>
+                {#if trimmed.length > 0}
+                  <span class="excerpt">{trimmed.slice(0, 100)}{trimmed.length > 100 ? '…' : ''}</span>
+                {/if}
               </button>
             </li>
           {/if}
