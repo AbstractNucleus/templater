@@ -123,11 +123,15 @@
           <button
             class="template-item"
             class:active={selectedTemplateId === hit.template.id}
+            class:pinned={hit.template.pinned}
             data-id={hit.template.id}
             onclick={() => onTemplateSelect(hit.template.id)}
             oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
           >
             <span class="name">
+              {#if hit.template.pinned}
+                <span class="pin-mark" aria-label="pinned" title="Pinned">▸</span>
+              {/if}
               {#each highlightName(hit.template.name, hit.nameHits) as seg}
                 {#if seg.hit}
                   <span class="hit">{seg.text}</span>
@@ -238,6 +242,14 @@
 
   .template-item .name {
     display: block;
+  }
+
+  .pin-mark {
+    display: inline-block;
+    margin-right: 4px;
+    color: var(--accent-positive-text);
+    font-size: 0.7rem;
+    transform: translateY(-1px);
   }
 
   .template-item .excerpt {

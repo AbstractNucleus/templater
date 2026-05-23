@@ -153,6 +153,8 @@ function main(): void {
     body: string;
     created_at: string;
     updated_at: string;
+    pinned: boolean;
+    last_used_at: string | null;
   };
 
   const out: Out[] = [];
@@ -180,6 +182,8 @@ function main(): void {
       body,
       created_at: parseDate(createdRaw),
       updated_at: parseDate(updatedRaw),
+      pinned: false,
+      last_used_at: null,
     });
   });
 
@@ -200,6 +204,8 @@ export const mockTemplates: Template[] = [
     body: ${tsString(t.body)},
     created_at: ${tsString(t.created_at)},
     updated_at: ${tsString(t.updated_at)},
+    pinned: false,
+    last_used_at: null,
   },`,
     )
     .join("\n");

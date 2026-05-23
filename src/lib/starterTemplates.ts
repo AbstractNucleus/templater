@@ -14,6 +14,8 @@ export const starterTemplates: Template[] = [
     body: "Thanks for the invite — unfortunately I won't be able to make it. Happy to find another time if helpful.",
     created_at: ISO,
     updated_at: ISO,
+    pinned: false,
+    last_used_at: null,
   },
   {
     id: "tpl-follow-up",
@@ -23,6 +25,8 @@ export const starterTemplates: Template[] = [
     body: "Just bumping this in case it slipped past. No rush — let me know if {{topic}} is still on the table.",
     created_at: ISO,
     updated_at: ISO,
+    pinned: false,
+    last_used_at: null,
   },
   {
     id: "tpl-quick-yes",
@@ -32,6 +36,8 @@ export const starterTemplates: Template[] = [
     body: "Works for me. {{time}} is good — I'll send a calendar invite shortly.",
     created_at: ISO,
     updated_at: ISO,
+    pinned: false,
+    last_used_at: null,
   },
   {
     id: "tpl-intro",
@@ -41,6 +47,8 @@ export const starterTemplates: Template[] = [
     body: "{{a}}, meet {{b}} — {{b_oneliner}}.\n{{b}}, meet {{a}} — {{a_oneliner}}.\nI'll leave you two to take it from here.",
     created_at: ISO,
     updated_at: ISO,
+    pinned: false,
+    last_used_at: null,
   },
   {
     id: "tpl-forum-thanks",
@@ -50,6 +58,8 @@ export const starterTemplates: Template[] = [
     body: "Thanks {{name}} — that fixed it. Posting the working config below for anyone hitting the same issue.",
     created_at: ISO,
     updated_at: ISO,
+    pinned: false,
+    last_used_at: null,
   },
   {
     id: "tpl-dm-quick-ask",
@@ -59,5 +69,7 @@ export const starterTemplates: Template[] = [
     body: "got a sec? quick question about {{topic}} — no rush, whenever you're free.",
     created_at: ISO,
     updated_at: ISO,
+    pinned: false,
+    last_used_at: null,
   },
 ];

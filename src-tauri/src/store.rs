@@ -43,6 +43,10 @@ pub struct Template {
     pub body: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

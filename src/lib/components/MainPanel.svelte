@@ -21,6 +21,7 @@
     onDuplicate,
     onDelete,
     onBaseOnTemplate,
+    onCopySuccess,
   }: {
     template: Template | null;
     includeOpening: boolean;
@@ -38,6 +39,7 @@
     onDuplicate: () => void;
     onDelete: () => void;
     onBaseOnTemplate: () => void;
+    onCopySuccess: (templateId: string) => void;
   } = $props();
 
   const signatureAvailable = $derived(globalSignature.trim().length > 0);
@@ -90,9 +92,11 @@
 
   async function copyToClipboard(): Promise<void> {
     if (!template) return;
+    const id = template.id;
     try {
       await writeText(composedFilled);
       copyState = "ok";
+      onCopySuccess(id);
     } catch {
       copyState = "error";
     }

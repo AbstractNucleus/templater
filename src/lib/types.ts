@@ -6,6 +6,9 @@ export interface Template {
   body: string;
   created_at: string;
   updated_at: string;
+  pinned: boolean;
+  /** ISO-8601 timestamp of the last copy-to-clipboard, or null if never. */
+  last_used_at: string | null;
 }
 
 export interface WindowGeometry {

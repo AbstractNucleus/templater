@@ -356,9 +356,22 @@
     return [...set].sort();
   });
 
+  // Browse order: pinned first, then by most-recently-copied, then the
+  // template's own insertion order (stable sort). Applied before tag/search
+  // so the empty-query view reflects user priority.
+  const browseOrdered = $derived.by(() => {
+    return [...templates].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      const aT = a.last_used_at ?? "";
+      const bT = b.last_used_at ?? "";
+      if (aT !== bT) return aT > bT ? -1 : 1;
+      return 0;
+    });
+  });
+
   const tagFiltered = $derived.by(() => {
-    if (selectedTagIds.size === 0 && excludedTagIds.size === 0) return templates;
-    return templates.filter((t) => {
+    if (selectedTagIds.size === 0 && excludedTagIds.size === 0) return browseOrdered;
+    return browseOrdered.filter((t) => {
       for (const tag of excludedTagIds) {
         if (t.tags.includes(tag)) return false;
       }
@@ -376,7 +389,19 @@
     });
   });
 
-  const searchResults = $derived(searchTemplates(searchQuery, tagFiltered));
+  const rawHits = $derived(searchTemplates(searchQuery, tagFiltered));
+
+  // Group pinned to the top regardless of search score. Within each tier the
+  // searchTemplates ordering (full-match → score → name) is preserved.
+  const searchResults = $derived.by(() => {
+    const pinned: typeof rawHits = [];
+    const others: typeof rawHits = [];
+    for (const h of rawHits) {
+      if (h.template.pinned) pinned.push(h);
+      else others.push(h);
+    }
+    return [...pinned, ...others];
+  });
 
   const inPasteMode = $derived(searchQuery.trim().length >= PASTE_THRESHOLD);
 
@@ -690,6 +715,20 @@
     }
   }
 
+  async function togglePin(id: string): Promise<void> {
+    if (!isEditorMode) return;
+    const next = templates.map((t) => (t.id === id ? { ...t, pinned: !t.pinned } : t));
+    await persist(next);
+  }
+
+  // Bumped from MainPanel after a successful copy. Updates last_used_at so
+  // the browse-order sort surfaces recently-used templates near the top.
+  async function recordCopy(id: string): Promise<void> {
+    const now = new Date().toISOString();
+    const next = templates.map((t) => (t.id === id ? { ...t, last_used_at: now } : t));
+    await persist(next);
+  }
+
   function slugify(s: string): string {
     const slug = s
       .toLowerCase()
@@ -719,6 +758,10 @@
     if (!tpl) return;
     const items: ContextMenuItem[] = [];
     if (isEditorMode) {
+      items.push({
+        label: tpl.pinned ? "Unpin" : "Pin",
+        onClick: () => void togglePin(id),
+      });
       items.push({ label: "Duplicate", onClick: () => void duplicateTemplateById(id) });
     }
     items.push({ label: "Export…", onClick: () => void exportSingleTemplate(id) });
@@ -839,6 +882,8 @@
       body: baseDraft.body,
       created_at: now,
       updated_at: now,
+      pinned: false,
+      last_used_at: null,
     };
     const next = [newTemplate, ...templates];
     await persist(next);
@@ -980,6 +1025,7 @@
         onDuplicate={handleDuplicate}
         onDelete={handleDelete}
         onBaseOnTemplate={enterBaseMode}
+        onCopySuccess={(id) => void recordCopy(id)}
       />
     {/if}
     {#if loadError}
