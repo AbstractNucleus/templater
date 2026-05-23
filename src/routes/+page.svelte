@@ -232,6 +232,15 @@
     const inSearch = document.activeElement === searchInput;
     if (!inSearch && isInputFocused()) return;
 
+    // Ctrl/Cmd+Z: undo the last template-list mutation. Native text undo wins
+    // inside inputs (we returned above) so this only fires from the body /
+    // search field. Disabled in User mode where mutations can't happen anyway.
+    if (ctrlOnly && !e.shiftKey && e.key.toLowerCase() === "z" && isEditorMode) {
+      e.preventDefault();
+      void performUndo();
+      return;
+    }
+
     if (e.key === "ArrowDown") {
       e.preventDefault();
       moveSelection(1);
@@ -328,6 +337,49 @@
   let rankTimer: ReturnType<typeof setTimeout> | null = null;
 
   let copyTrigger = $state(0);
+
+  // Undo: a bounded snapshot stack pushed BEFORE every template-list
+  // mutation (save, delete, duplicate, agent save, import, restore, pin).
+  // Ctrl+Z pops one entry and re-persists; settings (theme, zoom, columns)
+  // are NOT pushed so an undo doesn't surprise the user by reverting them.
+  type UndoSnapshot = {
+    templates: Template[];
+    placeholderValues: Record<string, Record<string, string>>;
+    label: string;
+  };
+  const MAX_UNDO = 20;
+  let undoStack = $state<UndoSnapshot[]>([]);
+  let undoToast = $state<string | null>(null);
+  let undoToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function pushUndo(label: string): void {
+    const snapshot: UndoSnapshot = {
+      templates: [...templates],
+      placeholderValues: { ...settings.placeholder_values },
+      label,
+    };
+    undoStack = [...undoStack.slice(-(MAX_UNDO - 1)), snapshot];
+  }
+
+  async function performUndo(): Promise<void> {
+    if (undoStack.length === 0) return;
+    const snap = undoStack[undoStack.length - 1];
+    undoStack = undoStack.slice(0, -1);
+    await persist(snap.templates, { ...settings, placeholder_values: snap.placeholderValues });
+    if (
+      selectedTemplateId === null ||
+      !snap.templates.some((t) => t.id === selectedTemplateId)
+    ) {
+      selectedTemplateId = snap.templates[0]?.id ?? null;
+    }
+    showUndoToast(`Undid ${snap.label}`);
+  }
+
+  function showUndoToast(msg: string): void {
+    undoToast = msg;
+    if (undoToastTimer) clearTimeout(undoToastTimer);
+    undoToastTimer = setTimeout(() => (undoToast = null), 2000);
+  }
 
   let baseMode = $state(false);
   let baseKind = $state<"new" | "base">("base");
@@ -590,6 +642,7 @@
 
   async function handleSave(updated: Template): Promise<void> {
     if (!isEditorMode) return;
+    pushUndo("edit");
     const next = templates.map((t) => (t.id === updated.id ? updated : t));
     await persist(next);
     editing = false;
@@ -598,6 +651,7 @@
   async function handleDuplicate(): Promise<void> {
     if (!isEditorMode) return;
     if (!selectedTemplate) return;
+    pushUndo("duplicate");
     const now = new Date().toISOString();
     const copy: Template = {
       ...selectedTemplate,
@@ -616,6 +670,7 @@
   async function handleDelete(): Promise<void> {
     if (!isEditorMode) return;
     if (!selectedTemplate) return;
+    pushUndo("delete");
     const id = selectedTemplate.id;
     const idx = templates.findIndex((t) => t.id === id);
     const next = templates.filter((t) => t.id !== id);
@@ -637,6 +692,7 @@
   }
 
   async function handleRestoreBackup(name: string): Promise<void> {
+    pushUndo("restore");
     const data = await restoreTemplateBackup(name);
     // Rust already wrote the restored data to disk; sync local state.
     templates = data.templates;
@@ -676,6 +732,7 @@
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (path === null || Array.isArray(path)) return { kind: "cancelled" };
+      pushUndo("import");
       const result = await importTemplates(path);
       // Rust has already persisted the merged list; just sync local state.
       templates = result.templates;
@@ -698,6 +755,7 @@
     if (!isEditorMode) return;
     const src = templates.find((t) => t.id === id);
     if (!src) return;
+    pushUndo("duplicate");
     const now = new Date().toISOString();
     const copy: Template = {
       ...src,
@@ -717,6 +775,7 @@
     if (!isEditorMode) return;
     const idx = templates.findIndex((t) => t.id === id);
     if (idx < 0) return;
+    pushUndo("delete");
     const next = templates.filter((t) => t.id !== id);
     const nextSettings = settings.placeholder_values[id] !== undefined
       ? { ...settings, placeholder_values: omitKey(settings.placeholder_values, id) }
@@ -729,6 +788,7 @@
 
   async function togglePin(id: string): Promise<void> {
     if (!isEditorMode) return;
+    pushUndo("pin");
     const next = templates.map((t) => (t.id === id ? { ...t, pinned: !t.pinned } : t));
     await persist(next);
   }
@@ -903,6 +963,7 @@
 
   async function handleSaveAs(name: string, tags: string[]): Promise<void> {
     if (!isEditorMode) return;
+    pushUndo("agent save");
     const now = new Date().toISOString();
     const newTemplate: Template = {
       id: crypto.randomUUID(),
@@ -1062,6 +1123,9 @@
     {/if}
     {#if loadError}
       <div class="error-banner">{loadError}</div>
+    {/if}
+    {#if undoToast}
+      <div class="undo-toast">{undoToast}</div>
     {/if}
     {#if loaded && !settings.close_hint_shown}
       <div class="hint-banner">
@@ -1399,6 +1463,22 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+  }
+
+  .undo-toast {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-active);
+    color: var(--text-strong);
+    border: 1px solid var(--border-strong);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    pointer-events: none;
+    box-shadow: 0 4px 12px var(--shadow);
+    z-index: 200;
   }
 
   .confirm-backdrop {
