@@ -215,6 +215,15 @@
       clearSearch();
       return;
     }
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "f") {
+      // Suppress the webview's default Find dialog — the search input IS our find.
+      e.preventDefault();
+      if (searchInput) {
+        searchInput.focus();
+        searchInput.select();
+      }
+      return;
+    }
 
     if (baseMode || editing) return;
     const inSearch = document.activeElement === searchInput;
@@ -230,9 +239,13 @@
       moveSelection(-1);
       return;
     }
+    // Enter copies when search is focused OR when no element is focused (body).
+    // Excludes a focused button — that case already gets a native Enter→click,
+    // so firing copySelected() too would double-trigger.
+    const activeIsBody = document.activeElement === document.body;
     if (
       e.key === "Enter" &&
-      inSearch &&
+      (inSearch || activeIsBody) &&
       !e.shiftKey &&
       !e.ctrlKey &&
       !e.altKey &&
