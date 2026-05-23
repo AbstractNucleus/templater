@@ -66,8 +66,9 @@ npm run tauri dev
 npm run tauri build
 
 # Sanity checks
-cd src-tauri ; cargo check     # Rust
-cd ..        ; npm run check   # Svelte + TS
+npm test                                                  # vitest, pure modules
+npm run check                                             # Svelte + TS
+cargo check --manifest-path src-tauri/Cargo.toml          # Rust
 ```
 
 Three processes talk over stdio JSON:
@@ -75,13 +76,55 @@ Three processes talk over stdio JSON:
 ```
 SvelteKit (webview)  ──invoke──>  Tauri Rust backend  ──stdin/stdout──>  Node sidecar (Agent SDK)
                      <─result──                       <──────────────
+                                  events──>                          progress, multiplexed by id
 ```
 
-- Svelte frontend (`src/`) — UI.
-- Rust backend (`src-tauri/`) — Tauri shell, hosts the `Sidecar` actor and Tauri commands.
-- Node sidecar (`sidecar/`) — newline-delimited JSON over stdin/stdout. Wraps `@anthropic-ai/claude-agent-sdk` for paste-match and chat-driven template editing.
+- Svelte frontend (`src/`) — UI. Talks to Rust via `invoke()` and listens to Tauri events.
+- Rust backend (`src-tauri/`) — Tauri shell, the on-disk store, and the sidecar host. The sidecar host runs a writer task + reader task and routes responses to callers by id, so multiple in-flight rank/edit calls share the pipe.
+- Node sidecar (`sidecar/`) — wraps `@anthropic-ai/claude-agent-sdk` and the Anthropic Messages API. Two ops today: `rank` (catalog match for paste-to-match) and `edit-template` (chat-driven structured edits). The edit op streams partial text back as it's generated.
 
 See `IDEA.md` § [Project structure](./IDEA.md#project-structure-planned) and § [Paste-to-match](./IDEA.md#paste-to-match) for the full picture.
+
+### Sidecar wire protocol
+
+Newline-delimited JSON, one request per line, one or more responses per line. Each request carries a unique `id`; responses echo it back so the Rust reader routes to the matching caller.
+
+```jsonc
+// Request: { id, op, ...args }
+{ "id": "r42", "op": "ping" }
+{ "id": "r43", "op": "rank",
+  "backend": "agent" | "api",
+  "pasted": "<message text>",
+  "catalog": [{ "id": "...", "name": "...", "body": "...", "tags": [...] }, ...] }
+{ "id": "r44", "op": "edit-template",
+  "backend": "agent" | "api",
+  "draft": { "opening": "...", "body": "..." },
+  "history": [{ "role": "user"|"assistant", "content": "..." }],
+  "prompt": "make it shorter" }
+
+// Response: final success or failure
+{ "id": "r43", "ok": true, "rankings": [{ "template_id": "...", "score": 0.92 }, ...] }
+{ "id": "r43", "ok": false, "error": "..." }
+
+// Response: streaming partial (only edit-template, multiple per request)
+{ "id": "r44", "progress": { "text": "<accumulated partial JSON>" } }
+```
+
+Each request is wrapped in a 30s timeout on the Rust side. A timeout, EOF on stdout, or a broken write marks the sidecar Unavailable; the next `invoke` respawns it. Progress lines (no `ok` field) are forwarded to the frontend via the `sidecar-progress` Tauri event and don't complete the caller's oneshot.
+
+### Storage
+
+Two JSON files in the OS app-data dir. Every save copies the current file to `<name>.bak.<epoch>` and prunes to the newest 5 backups, then writes `<name>.tmp` and atomically renames. Settings → Backups lists and restores them.
+
+### Keyboard shortcuts
+
+- **Enter** (from search or body) — copy the selected template
+- **↑ / ↓** — move the selection
+- **Ctrl+F** — focus the search input
+- **Ctrl+L** — clear the search
+- **Ctrl+Z** — undo the last template-list mutation
+- **Ctrl+0 / Ctrl+= / Ctrl+-** — reset / zoom in / zoom out
+- **Global hotkey** (default `Ctrl+Shift+\`) — show/hide the window from anywhere
 
 ## License
 
