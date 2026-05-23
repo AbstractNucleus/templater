@@ -1,56 +1,69 @@
-//! Node.js sidecar host. Spawns the sidecar process at startup, holds its
-//! stdin/stdout, and exposes a single async `request` method that the Tauri
-//! commands wrap.
+//! Node.js sidecar host. Spawns the sidecar process at startup and exposes a
+//! single async `request` method.
 //!
 //! Wire protocol: newline-delimited JSON, one request per line, one response
-//! per line. See sidecar/index.ts for the request/response shapes.
+//! per line. Each request carries a unique `id`; responses echo it back so
+//! the reader can route to the matching caller. See sidecar/index.ts.
 //!
-//! Resilience model:
-//! - If the initial spawn fails (e.g. Node isn't installed), the Sidecar
-//!   enters the [`SidecarState::Unavailable`] state. The app still runs;
-//!   only paste-match / agent-edit calls fail with a recognisable error.
-//!   Each subsequent request attempts to re-spawn first, so the user can
-//!   install Node and have the feature start working without restarting
-//!   the app.
-//! - If a request fails mid-session with a "process died" type error
-//!   (0-byte read, broken pipe), the sidecar is respawned once and the
-//!   request retried. Avoids stranding the app on a transient crash.
+//! Concurrency model: a writer task owns stdin, a reader task owns stdout.
+//! Callers register a oneshot in a shared pending map keyed by id and await
+//! it. Multiple in-flight requests share the same pipe without serialising.
+//!
+//! Resilience:
+//! - Initial spawn failure (no Node on PATH, missing script) parks the
+//!   sidecar in `Unavailable`. The app still runs; each subsequent
+//!   `request()` tries to respawn first, so installing Node mid-session
+//!   recovers without restarting the app.
+//! - Mid-session death (reader EOF, writer broken pipe, or any caller's
+//!   request timing out) marks the sidecar `Unavailable` and drains pending
+//!   callers with an error. The next call respawns.
 //!
 //! Build modes:
-//! - Debug builds (tauri dev): run `npx tsx sidecar/index.ts` from the source
-//!   tree, resolved relative to CARGO_MANIFEST_DIR.
-//! - Release builds (tauri build): run `node` against the pre-compiled
-//!   sidecar/dist/index.js bundled as a Tauri resource.
+//! - Debug builds (tauri dev): run `npx tsx sidecar/index.ts` from source.
+//! - Release builds (tauri build): run a bundled `node` against the
+//!   pre-compiled `sidecar/dist/index.js` shipped as a Tauri resource.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot};
 
 /// Cap on a single sidecar round-trip. Picked so a slow first call (cold
 /// Claude API + cache miss ~3-5s) still has comfortable headroom, while a
-/// truly stuck process gets reaped instead of wedging every future request
-/// behind the same Mutex.
+/// truly stuck process is reaped instead of blocking future requests.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_request_id() -> String {
+    let n = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("r{n}")
+}
+
+type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, String>>>>>;
+
 pub struct Sidecar {
-    inner: Mutex<SidecarState>,
+    state: Arc<Mutex<SidecarState>>,
     script: SidecarScript,
 }
 
 enum SidecarState {
-    Active(SidecarInner),
+    Active(ActiveSidecar),
     Unavailable(String),
 }
 
-struct SidecarInner {
-    // Holding `_child` keeps the process alive; `kill_on_drop` reaps it at app exit.
+struct ActiveSidecar {
+    writer_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pending: Pending,
+    // Held so `kill_on_drop` reaps the process when the state transitions
+    // back to Unavailable or the app exits.
     _child: tokio::process::Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
 }
 
 #[derive(Clone)]
@@ -74,20 +87,23 @@ impl Sidecar {
     /// `Unavailable` state if Node/npx isn't on PATH or the script is missing.
     pub fn start(app: &AppHandle) -> Self {
         let script = resolve_script(app);
-        let state = match Self::try_spawn(&script) {
-            Ok(inner) => SidecarState::Active(inner),
+        let state = Arc::new(Mutex::new(SidecarState::Unavailable(
+            "not yet started".to_string(),
+        )));
+        match Self::try_spawn(&script, &state) {
+            Ok(active) => *state.lock().unwrap() = SidecarState::Active(active),
             Err(e) => {
                 eprintln!("sidecar unavailable at startup: {e}");
-                SidecarState::Unavailable(e)
+                *state.lock().unwrap() = SidecarState::Unavailable(e);
             }
-        };
-        Self {
-            inner: Mutex::new(state),
-            script,
         }
+        Self { state, script }
     }
 
-    fn try_spawn(script: &SidecarScript) -> Result<SidecarInner, String> {
+    fn try_spawn(
+        script: &SidecarScript,
+        state: &Arc<Mutex<SidecarState>>,
+    ) -> Result<ActiveSidecar, String> {
         if !script.path.exists() {
             return Err(format!(
                 "sidecar script not found at {}",
@@ -141,110 +157,137 @@ impl Sidecar {
         let stdin = child.stdin.take().ok_or("sidecar stdin missing")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("sidecar stdout missing")?);
 
-        Ok(SidecarInner {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        tokio::spawn(writer_loop(stdin, writer_rx));
+        tokio::spawn(reader_loop(stdout, pending.clone(), state.clone()));
+
+        Ok(ActiveSidecar {
+            writer_tx,
+            pending,
             _child: child,
-            stdin,
-            stdout,
         })
     }
 
     pub async fn request(&self, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let mut guard = self.inner.lock().await;
-
-        // If we're currently Unavailable, try one respawn before giving up —
-        // the user may have installed Node since launch.
-        if matches!(*guard, SidecarState::Unavailable(_)) {
-            match Self::try_spawn(&self.script) {
-                Ok(inner) => *guard = SidecarState::Active(inner),
-                Err(_) => {
-                    let SidecarState::Unavailable(reason) = &*guard else { unreachable!() };
-                    return Err(format!("sidecar unavailable: {reason}"));
+        // Snapshot the writer + pending Arc, respawning from Unavailable if
+        // needed. Lock is released before any await.
+        let (writer_tx, pending) = {
+            let mut guard = self.state.lock().unwrap();
+            if let SidecarState::Unavailable(prior) = &*guard {
+                let prior = prior.clone();
+                match Self::try_spawn(&self.script, &self.state) {
+                    Ok(active) => *guard = SidecarState::Active(active),
+                    Err(e) => return Err(format!("sidecar unavailable: {e} (prior: {prior})")),
                 }
             }
-        }
-
-        // First attempt with the current process.
-        let first_err = {
-            let SidecarState::Active(inner) = &mut *guard else { unreachable!() };
-            match request_once(inner, payload).await {
-                Ok(v) => return Ok(v),
-                Err(e) => e,
-            }
+            let SidecarState::Active(active) = &*guard else { unreachable!() };
+            (active.writer_tx.clone(), active.pending.clone())
         };
 
-        // If the error looks like the process died, try one respawn + retry.
-        if is_sidecar_dead(&first_err) {
-            match Self::try_spawn(&self.script) {
-                Ok(inner) => {
-                    *guard = SidecarState::Active(inner);
-                    let SidecarState::Active(inner) = &mut *guard else { unreachable!() };
-                    return request_once(inner, payload).await;
-                }
-                Err(spawn_err) => {
-                    *guard = SidecarState::Unavailable(spawn_err.clone());
-                    return Err(format!(
-                        "sidecar died and respawn failed: {spawn_err} (original: {first_err})"
-                    ));
-                }
-            }
+        // Override any caller-supplied id so concurrent requests don't collide.
+        let id = next_request_id();
+        let mut payload = payload.clone();
+        payload["id"] = serde_json::Value::String(id.clone());
+
+        let mut line = match serde_json::to_string(&payload) {
+            Ok(s) => s,
+            Err(e) => return Err(e.to_string()),
+        };
+        line.push('\n');
+
+        let (tx, rx) = oneshot::channel();
+        pending.lock().unwrap().insert(id.clone(), tx);
+
+        if writer_tx.send(line.into_bytes()).is_err() {
+            pending.lock().unwrap().remove(&id);
+            self.mark_unavailable("sidecar writer task exited");
+            return Err("sidecar unavailable: writer closed".to_string());
         }
 
-        Err(first_err)
+        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                // Reader dropped the sender — either it exited (drain ran)
+                // or a parse error orphaned this id. Either way, the pipe is
+                // no longer trustworthy.
+                pending.lock().unwrap().remove(&id);
+                self.mark_unavailable("sidecar reader task exited");
+                Err("sidecar unavailable: pipe closed".to_string())
+            }
+            Err(_) => {
+                pending.lock().unwrap().remove(&id);
+                self.mark_unavailable("sidecar request timed out");
+                Err(format!(
+                    "sidecar request timed out after {}s",
+                    REQUEST_TIMEOUT.as_secs()
+                ))
+            }
+        }
+    }
+
+    fn mark_unavailable(&self, reason: &str) {
+        let mut guard = self.state.lock().unwrap();
+        // If another caller already swapped state, don't overwrite.
+        if matches!(*guard, SidecarState::Active(_)) {
+            *guard = SidecarState::Unavailable(reason.to_string());
+        }
     }
 }
 
-async fn request_once(
-    inner: &mut SidecarInner,
-    payload: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    match tokio::time::timeout(REQUEST_TIMEOUT, request_once_inner(inner, payload)).await {
-        Ok(r) => r,
-        Err(_) => Err(format!(
-            "sidecar request timed out after {}s",
-            REQUEST_TIMEOUT.as_secs()
-        )),
+async fn writer_loop(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Vec<u8>>) {
+    while let Some(bytes) = rx.recv().await {
+        if stdin.write_all(&bytes).await.is_err() {
+            break;
+        }
+        if stdin.flush().await.is_err() {
+            break;
+        }
     }
 }
 
-async fn request_once_inner(
-    inner: &mut SidecarInner,
-    payload: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let mut line = serde_json::to_string(payload).map_err(|e| e.to_string())?;
-    line.push('\n');
-    inner
-        .stdin
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| format!("sidecar write failed: {e}"))?;
-    inner
-        .stdin
-        .flush()
-        .await
-        .map_err(|e| format!("sidecar flush failed: {e}"))?;
-
-    let mut response_line = String::new();
-    let bytes = inner
-        .stdout
-        .read_line(&mut response_line)
-        .await
-        .map_err(|e| format!("sidecar read failed: {e}"))?;
-    if bytes == 0 {
-        return Err("sidecar closed stdout".to_string());
+async fn reader_loop(
+    mut stdout: BufReader<ChildStdout>,
+    pending: Pending,
+    state: Arc<Mutex<SidecarState>>,
+) {
+    loop {
+        let mut line = String::new();
+        match stdout.read_line(&mut line).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("sidecar: response parse error: {e}; line: {line:?}");
+                continue;
+            }
+        };
+        let Some(id) = parsed.get("id").and_then(|v| v.as_str()).map(String::from) else {
+            eprintln!("sidecar: response missing id: {line}");
+            continue;
+        };
+        if let Some(tx) = pending.lock().unwrap().remove(&id) {
+            let _ = tx.send(Ok(parsed));
+        }
+        // Unknown id (caller already gave up or timed out): drop silently.
     }
-    serde_json::from_str(response_line.trim())
-        .map_err(|e| format!("sidecar response parse error: {e}; line: {response_line:?}"))
-}
 
-fn is_sidecar_dead(err: &str) -> bool {
-    // A timeout means the response stream is desynced — even if the process
-    // is still alive, its next stdout line belongs to the abandoned request.
-    // Treat it like death so the caller respawns and starts clean.
-    err.contains("closed stdout")
-        || err.contains("write failed")
-        || err.contains("flush failed")
-        || err.contains("Broken pipe")
-        || err.contains("timed out")
+    // Pipe is dead. Mark the sidecar unavailable so the next caller respawns,
+    // and complete every still-waiting oneshot with a clear error.
+    {
+        let mut guard = state.lock().unwrap();
+        if matches!(*guard, SidecarState::Active(_)) {
+            *guard = SidecarState::Unavailable("sidecar pipe closed".to_string());
+        }
+    }
+    let drained: Vec<_> = pending.lock().unwrap().drain().collect();
+    for (_id, tx) in drained {
+        let _ = tx.send(Err("sidecar pipe closed".to_string()));
+    }
 }
 
 /// Resolve where the sidecar entrypoint lives + which command runs it.
@@ -296,4 +339,3 @@ fn bundled_node_filename() -> &'static str {
         "node"
     }
 }
-
