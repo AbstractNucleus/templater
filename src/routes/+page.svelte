@@ -619,8 +619,17 @@
     const id = selectedTemplate.id;
     const idx = templates.findIndex((t) => t.id === id);
     const next = templates.filter((t) => t.id !== id);
-    await persist(next);
+    const nextSettings = settings.placeholder_values[id] !== undefined
+      ? { ...settings, placeholder_values: omitKey(settings.placeholder_values, id) }
+      : settings;
+    await persist(next, nextSettings);
     selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
+  }
+
+  function omitKey<T extends object>(obj: T, key: string): T {
+    const copy = { ...obj } as Record<string, unknown>;
+    delete copy[key];
+    return copy as T;
   }
 
   async function handleSettingsUpdate(next: Settings): Promise<void> {
@@ -709,7 +718,10 @@
     const idx = templates.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const next = templates.filter((t) => t.id !== id);
-    await persist(next);
+    const nextSettings = settings.placeholder_values[id] !== undefined
+      ? { ...settings, placeholder_values: omitKey(settings.placeholder_values, id) }
+      : settings;
+    await persist(next, nextSettings);
     if (selectedTemplateId === id) {
       selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
     }
@@ -727,6 +739,24 @@
     const now = new Date().toISOString();
     const next = templates.map((t) => (t.id === id ? { ...t, last_used_at: now } : t));
     await persist(next);
+  }
+
+  async function recordPlaceholderValues(
+    templateId: string,
+    values: Record<string, string>,
+  ): Promise<void> {
+    // Strip empty entries to keep the persisted map lean.
+    const cleaned: Record<string, string> = {};
+    for (const [k, v] of Object.entries(values)) {
+      if (v.length > 0) cleaned[k] = v;
+    }
+    const nextMap = { ...settings.placeholder_values };
+    if (Object.keys(cleaned).length === 0) {
+      delete nextMap[templateId];
+    } else {
+      nextMap[templateId] = cleaned;
+    }
+    await persist(templates, { ...settings, placeholder_values: nextMap });
   }
 
   function slugify(s: string): string {
@@ -1017,6 +1047,7 @@
         canEdit={isEditorMode}
         {availableTags}
         {copyTrigger}
+        savedPlaceholderValues={settings.placeholder_values}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => (editing = true)}
@@ -1026,6 +1057,7 @@
         onDelete={handleDelete}
         onBaseOnTemplate={enterBaseMode}
         onCopySuccess={(id) => void recordCopy(id)}
+        onPlaceholderValuesChange={(id, vals) => void recordPlaceholderValues(id, vals)}
       />
     {/if}
     {#if loadError}

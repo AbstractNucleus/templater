@@ -42,6 +42,8 @@ export interface Settings {
   zoom: number;
   column_widths: ColumnWidths;
   paste_backend: PasteBackend;
+  /** Per-template placeholder fill-ins. Outer key: template id; inner: var → value. */
+  placeholder_values: Record<string, Record<string, string>>;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -68,4 +70,5 @@ export const DEFAULT_SETTINGS: Settings = {
   zoom: 1,
   column_widths: DEFAULT_COLUMN_WIDTHS,
   paste_backend: "agent",
+  placeholder_values: {},
 };

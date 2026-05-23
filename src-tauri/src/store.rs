@@ -21,6 +21,7 @@
 //!   3. Rename `<file>.tmp` → `<file>`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -96,6 +97,8 @@ pub struct Settings {
     pub column_widths: ColumnWidths,
     #[serde(default = "default_paste_backend")]
     pub paste_backend: String,
+    #[serde(default)]
+    pub placeholder_values: HashMap<String, HashMap<String, String>>,
 }
 
 fn default_theme() -> String {
@@ -128,6 +131,7 @@ impl Default for Settings {
             zoom: default_zoom(),
             column_widths: ColumnWidths::default(),
             paste_backend: default_paste_backend(),
+            placeholder_values: HashMap::new(),
         }
     }
 }

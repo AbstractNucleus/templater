@@ -13,6 +13,7 @@
     canEdit,
     availableTags,
     copyTrigger,
+    savedPlaceholderValues,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
@@ -22,6 +23,7 @@
     onDelete,
     onBaseOnTemplate,
     onCopySuccess,
+    onPlaceholderValuesChange,
   }: {
     template: Template | null;
     includeOpening: boolean;
@@ -31,6 +33,8 @@
     canEdit: boolean;
     availableTags: string[];
     copyTrigger: number;
+    /** Persisted per-template fill-ins. Outer key: template id. */
+    savedPlaceholderValues: Record<string, Record<string, string>>;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
@@ -40,6 +44,7 @@
     onDelete: () => void;
     onBaseOnTemplate: () => void;
     onCopySuccess: (templateId: string) => void;
+    onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
   } = $props();
 
   const signatureAvailable = $derived(globalSignature.trim().length > 0);
@@ -63,18 +68,38 @@
     }
   });
 
-  // Per-template fill-in values. Reset whenever the user switches templates so
-  // values from one template don't leak into the next; preserved across the
-  // edit ↔ view toggle so an accidental Edit/Cancel doesn't lose the user's work.
+  // Per-template fill-in values. Loaded from the persisted map on template
+  // switch and written back on edit via a debounced callback — values
+  // survive across template switches AND app restarts.
   let placeholderValues = $state<Record<string, string>>({});
   let lastTemplateId: string | null = null;
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  const PERSIST_DEBOUNCE_MS = 400;
+
   $effect(() => {
     const id = template?.id ?? null;
     if (id !== lastTemplateId) {
+      // Flush any pending writes for the previous template before swapping.
+      if (persistTimer && lastTemplateId !== null) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+        onPlaceholderValuesChange(lastTemplateId, placeholderValues);
+      }
       lastTemplateId = id;
-      placeholderValues = {};
+      placeholderValues = id ? { ...(savedPlaceholderValues[id] ?? {}) } : {};
     }
   });
+
+  function setPlaceholderValue(p: string, value: string): void {
+    placeholderValues = { ...placeholderValues, [p]: value };
+    if (persistTimer) clearTimeout(persistTimer);
+    const id = template?.id;
+    if (!id) return;
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      onPlaceholderValuesChange(id, placeholderValues);
+    }, PERSIST_DEBOUNCE_MS);
+  }
 
   const composed = $derived(
     template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
@@ -96,6 +121,13 @@
     try {
       await writeText(composedFilled);
       copyState = "ok";
+      // Flush any pending debounced placeholder write so a copy-then-close
+      // doesn't lose the fill-ins the user just typed.
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+        onPlaceholderValuesChange(id, placeholderValues);
+      }
       onCopySuccess(id);
     } catch {
       copyState = "error";
@@ -243,8 +275,7 @@
             type="text"
             placeholder={`{{${p}}}`}
             value={placeholderValues[p] ?? ""}
-            oninput={(e) =>
-              (placeholderValues = { ...placeholderValues, [p]: e.currentTarget.value })}
+            oninput={(e) => setPlaceholderValue(p, e.currentTarget.value)}
           />
         {/each}
       </div>
