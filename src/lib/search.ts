@@ -28,8 +28,17 @@ export interface SearchHit {
   nameHits: NameHit[];
   /** Tags (lowercased) that contributed to the match. */
   tagHits: string[];
-  /** Whether at least one query word was found in the body. */
-  hasBodyHit: boolean;
+  /**
+   * One-line excerpt of the body centered on the first matched word, broken
+   * into hit/non-hit segments for highlighted rendering. Null when no body
+   * word matched. The sidebar only renders this when the name itself didn't
+   * match — otherwise the name highlight already explains the hit.
+   */
+  bodyHit: BodyHit | null;
+}
+
+export interface BodyHit {
+  segments: NameSegment[];
 }
 
 const SCORE_NAME = 100;
@@ -50,7 +59,7 @@ export function searchTemplates(query: string, templates: Template[]): SearchHit
       matchedWords: 0,
       nameHits: [],
       tagHits: [],
-      hasBodyHit: false,
+      bodyHit: null,
     }));
   }
 
@@ -67,7 +76,7 @@ export function searchTemplates(query: string, templates: Template[]): SearchHit
     let matchedWords = 0;
     const nameHits: NameHit[] = [];
     const tagHitSet = new Set<string>();
-    let hasBodyHit = false;
+    let earliestBodyPos = -1;
 
     for (const word of words) {
       let wordScore = 0;
@@ -101,10 +110,12 @@ export function searchTemplates(query: string, templates: Template[]): SearchHit
         }
       }
 
-      // Body
-      if (bodyLower.includes(word)) {
+      // Body — track the earliest hit across all words so we can centre the
+      // excerpt on it.
+      const bodyPos = bodyLower.indexOf(word);
+      if (bodyPos >= 0) {
         wordScore = Math.max(wordScore, SCORE_BODY);
-        hasBodyHit = true;
+        if (earliestBodyPos < 0 || bodyPos < earliestBodyPos) earliestBodyPos = bodyPos;
       }
 
       if (wordScore > 0) {
@@ -114,13 +125,17 @@ export function searchTemplates(query: string, templates: Template[]): SearchHit
     }
 
     if (matchedWords > 0) {
+      const bodyHit =
+        earliestBodyPos >= 0
+          ? buildBodyHit(t.body, bodyLower, words, earliestBodyPos)
+          : null;
       results.push({
         template: t,
         score: total,
         matchedWords,
         nameHits: mergeOverlapping(nameHits.sort((a, b) => a.start - b.start)),
         tagHits: [...tagHitSet],
-        hasBodyHit,
+        bodyHit,
       });
     }
   }
@@ -149,6 +164,47 @@ function mergeOverlapping(hits: NameHit[]): NameHit[] {
     }
   }
   return out;
+}
+
+// Excerpt window around the first body hit. Wide enough to give context on
+// both sides at typical column widths; CSS ellipsis trims the visible end.
+const EXCERPT_BEFORE = 30;
+const EXCERPT_LEN = 100;
+
+function buildBodyHit(
+  body: string,
+  bodyLower: string,
+  words: string[],
+  firstPos: number,
+): BodyHit | null {
+  const start = Math.max(0, firstPos - EXCERPT_BEFORE);
+  const end = Math.min(body.length, start + EXCERPT_LEN);
+  const excerpt = body.slice(start, end);
+  const excerptLower = bodyLower.slice(start, end);
+
+  const ranges: NameHit[] = [];
+  for (const word of words) {
+    let p = excerptLower.indexOf(word);
+    while (p >= 0) {
+      ranges.push({ start: p, end: p + word.length });
+      p = excerptLower.indexOf(word, p + word.length);
+    }
+  }
+  if (ranges.length === 0) return null;
+  const merged = mergeOverlapping(ranges.sort((a, b) => a.start - b.start));
+
+  const segments: NameSegment[] = [];
+  if (start > 0) segments.push({ text: "…", hit: false });
+  let cursor = 0;
+  for (const r of merged) {
+    if (r.start > cursor) segments.push({ text: excerpt.slice(cursor, r.start), hit: false });
+    segments.push({ text: excerpt.slice(r.start, r.end), hit: true });
+    cursor = r.end;
+  }
+  if (cursor < excerpt.length) segments.push({ text: excerpt.slice(cursor), hit: false });
+  if (end < body.length) segments.push({ text: "…", hit: false });
+
+  return { segments };
 }
 
 /** Split a name into segments for highlighted rendering. */

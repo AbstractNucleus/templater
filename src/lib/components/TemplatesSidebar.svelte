@@ -123,13 +123,20 @@
             onclick={() => onTemplateSelect(hit.template.id)}
             oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
           >
-            {#each highlightName(hit.template.name, hit.nameHits) as seg}
-              {#if seg.hit}
-                <span class="hit">{seg.text}</span>
-              {:else}
-                {seg.text}
-              {/if}
-            {/each}
+            <span class="name">
+              {#each highlightName(hit.template.name, hit.nameHits) as seg}
+                {#if seg.hit}
+                  <span class="hit">{seg.text}</span>
+                {:else}
+                  {seg.text}
+                {/if}
+              {/each}
+            </span>
+            {#if hit.nameHits.length === 0 && hit.bodyHit}
+              <span class="excerpt">
+                {#each hit.bodyHit.segments as seg}{#if seg.hit}<span class="hit">{seg.text}</span>{:else}{seg.text}{/if}{/each}
+              </span>
+            {/if}
           </button>
         </li>
       {:else}
@@ -223,6 +230,20 @@
   .template-item.active {
     background: var(--bg-active);
     color: var(--text-strong);
+  }
+
+  .template-item .name {
+    display: block;
+  }
+
+  .template-item .excerpt {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.72rem;
+    color: var(--text-deemphasis);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .template-item .hit {
