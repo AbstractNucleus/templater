@@ -14,7 +14,9 @@
 //! next [`Store::save`] rewrites both files in the new shape.
 //!
 //! Save protocol per file (atomic):
-//!   1. Copy current file → `<file>.bak` if present.
+//!   1. Copy current file → `<file>.bak.<epoch>` if present, then prune to
+//!      the [`MAX_BACKUPS`] newest. Past versions used a single overwritten
+//!      `<file>.bak`; legacy files are listed for restore but never removed.
 //!   2. Serialize to `<file>.tmp` and `sync_all()`.
 //!   3. Rename `<file>.tmp` → `<file>`.
 
@@ -22,9 +24,15 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DATA_VERSION: u32 = 1;
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Backslash";
+
+/// How many timestamped backups to keep per file. Older ones are pruned on
+/// each save. Small enough to not eat disk; large enough to recover from a
+/// run of bad edits.
+const MAX_BACKUPS: usize = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
@@ -275,12 +283,9 @@ where
     F: FnOnce(&mut fs::File) -> Result<(), String>,
 {
     if path.exists() {
-        let bak = path.with_extension(
-            path.extension()
-                .map(|e| format!("{}.bak", e.to_string_lossy()))
-                .unwrap_or_else(|| "bak".to_string()),
-        );
+        let bak = backup_path_for(path);
         fs::copy(path, &bak).map_err(|e| format!("backup {}: {e}", bak.display()))?;
+        prune_backups(path).ok(); // best-effort, don't fail the save
     }
 
     let tmp = path.with_extension(
@@ -301,4 +306,147 @@ where
     fs::rename(&tmp, path)
         .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+fn now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Build `<path>.bak.<epoch>` next to `path`. Two saves within the same
+/// second would collide; the second `fs::copy` would overwrite the first,
+/// which is acceptable (both backups represent state from the same second).
+fn backup_path_for(path: &Path) -> PathBuf {
+    let epoch = now_epoch_secs();
+    path.with_extension(
+        path.extension()
+            .map(|e| format!("{}.bak.{epoch}", e.to_string_lossy()))
+            .unwrap_or_else(|| format!("bak.{epoch}")),
+    )
+}
+
+/// Enumerate `<dir>/<stem>.bak.*` entries, sorted by epoch descending.
+/// Legacy single-file `<stem>.bak` (no epoch suffix) is included with
+/// timestamp 0 so it sorts last — preserved for restore, never auto-pruned.
+fn collect_backups(path: &Path) -> Result<Vec<(PathBuf, u64)>, String> {
+    let Some(parent) = path.parent() else { return Ok(Vec::new()) };
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return Ok(Vec::new());
+    };
+    let prefix = format!("{file_name}.bak");
+
+    let entries = match fs::read_dir(parent) {
+        Ok(e) => e,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut out: Vec<(PathBuf, u64)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = match entry.file_name().into_string() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let suffix = &name[prefix.len()..];
+        let epoch: u64 = if suffix.is_empty() {
+            0 // legacy `.bak` without epoch
+        } else if let Some(rest) = suffix.strip_prefix('.') {
+            rest.parse().unwrap_or(0)
+        } else {
+            continue;
+        };
+        out.push((entry.path(), epoch));
+    }
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    Ok(out)
+}
+
+fn prune_backups(path: &Path) -> Result<(), String> {
+    let all = collect_backups(path)?;
+    // Only prune epoch-suffixed entries; the legacy `.bak` (epoch 0) stays.
+    let epoched: Vec<_> = all.into_iter().filter(|(_, e)| *e > 0).collect();
+    for (old, _) in epoched.into_iter().skip(MAX_BACKUPS) {
+        let _ = fs::remove_file(&old);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackupEntry {
+    pub name: String,
+    pub timestamp_secs: u64,
+    pub size: u64,
+}
+
+impl Store {
+    /// Backups of `templates.json`, newest first. Used by Settings → Backups.
+    pub fn list_template_backups(&self) -> Result<Vec<BackupEntry>, String> {
+        let backups = collect_backups(&self.templates_path)?;
+        let mut out = Vec::with_capacity(backups.len());
+        for (path, ts) in backups {
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            out.push(BackupEntry {
+                name,
+                timestamp_secs: ts,
+                size,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Replace `templates.json` with the contents of the named backup. The
+    /// current file is preserved as a fresh backup (via the standard save
+    /// path), so a mistaken restore is itself undoable.
+    pub fn restore_template_backup(&self, name: &str) -> Result<AppData, String> {
+        // Reject path-traversal — names must come from list_template_backups
+        // and contain only the filename.
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(format!("invalid backup name: {name}"));
+        }
+        let parent = self
+            .templates_path
+            .parent()
+            .ok_or_else(|| "templates path has no parent".to_string())?;
+        let backup_path = parent.join(name);
+        if !backup_path.exists() {
+            return Err(format!("backup not found: {name}"));
+        }
+
+        let text = fs::read_to_string(&backup_path)
+            .map_err(|e| format!("read {}: {e}", backup_path.display()))?;
+        // Parse to validate before clobbering the live file.
+        let file: TemplatesFileRead = serde_json::from_str(&text)
+            .or_else(|_| {
+                serde_json::from_str::<Vec<Template>>(&text).map(|templates| TemplatesFileRead {
+                    version: DATA_VERSION,
+                    templates,
+                    legacy_settings: None,
+                })
+            })
+            .map_err(|e| format!("backup is not valid templates JSON: {e}"))?;
+
+        // Preserve current settings; only templates are restored.
+        let current_settings = self
+            .load()
+            .ok()
+            .flatten()
+            .map(|d| d.settings)
+            .unwrap_or_default();
+
+        let data = AppData {
+            version: DATA_VERSION,
+            templates: file.templates,
+            settings: current_settings,
+        };
+        self.save(&data)?;
+        Ok(data)
+    }
 }

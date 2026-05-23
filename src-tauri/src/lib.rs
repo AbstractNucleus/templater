@@ -5,7 +5,7 @@ use sidecar::Sidecar;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Mutex;
-use store::{AppData, Store, Template, WindowGeometry, DATA_VERSION, DEFAULT_HOTKEY};
+use store::{AppData, BackupEntry, Store, Template, WindowGeometry, DATA_VERSION, DEFAULT_HOTKEY};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -186,6 +186,19 @@ fn get_env_warnings() -> EnvWarnings {
     EnvWarnings {
         api_key_override: std::env::var_os("ANTHROPIC_API_KEY").is_some(),
     }
+}
+
+#[tauri::command]
+fn list_template_backups(store: tauri::State<'_, Store>) -> Result<Vec<BackupEntry>, String> {
+    store.list_template_backups()
+}
+
+#[tauri::command]
+fn restore_template_backup(
+    name: String,
+    store: tauri::State<'_, Store>,
+) -> Result<AppData, String> {
+    store.restore_template_backup(&name)
 }
 
 #[tauri::command]
@@ -410,6 +423,8 @@ pub fn run() {
             export_templates,
             export_template,
             import_templates,
+            list_template_backups,
+            restore_template_backup,
             get_env_warnings,
             set_hotkey,
             open_data_dir,

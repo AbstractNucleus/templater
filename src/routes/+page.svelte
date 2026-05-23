@@ -27,6 +27,8 @@
     checkForUpdate,
     getAppVersion,
     onSidecarProgress,
+    listTemplateBackups,
+    restoreTemplateBackup,
     type Ranking,
     type ChatTurn,
   } from "$lib/api";
@@ -600,6 +602,14 @@
     await persist(templates, next);
   }
 
+  async function handleRestoreBackup(name: string): Promise<void> {
+    const data = await restoreTemplateBackup(name);
+    // Rust already wrote the restored data to disk; sync local state.
+    templates = data.templates;
+    settings = data.settings;
+    selectedTemplateId = templates[0]?.id ?? null;
+  }
+
   type PortResult =
     | { kind: "ok"; message: string }
     | { kind: "cancelled" }
@@ -996,6 +1006,8 @@
     onExportTemplates={handleExportTemplates}
     onImportTemplates={handleImportTemplates}
     onCheckUpdate={checkForUpdate}
+    onListBackups={listTemplateBackups}
+    onRestoreBackup={handleRestoreBackup}
   />
 {/if}
 

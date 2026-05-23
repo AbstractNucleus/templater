@@ -87,6 +87,20 @@ export async function importTemplates(path: string): Promise<ImportTemplatesResu
   return await invoke<ImportTemplatesResult>("import_templates", { path });
 }
 
+export interface BackupEntry {
+  name: string;
+  timestamp_secs: number;
+  size: number;
+}
+
+export async function listTemplateBackups(): Promise<BackupEntry[]> {
+  return await invoke<BackupEntry[]>("list_template_backups");
+}
+
+export async function restoreTemplateBackup(name: string): Promise<AppData> {
+  return await invoke<AppData>("restore_template_backup", { name });
+}
+
 export interface Ranking {
   template_id: string;
   score: number;
