@@ -24,10 +24,17 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
+
+/// Cap on a single sidecar round-trip. Picked so a slow first call (cold
+/// Claude API + cache miss ~3-5s) still has comfortable headroom, while a
+/// truly stuck process gets reaped instead of wedging every future request
+/// behind the same Mutex.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Sidecar {
     inner: Mutex<SidecarState>,
@@ -190,6 +197,19 @@ async fn request_once(
     inner: &mut SidecarInner,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    match tokio::time::timeout(REQUEST_TIMEOUT, request_once_inner(inner, payload)).await {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "sidecar request timed out after {}s",
+            REQUEST_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+async fn request_once_inner(
+    inner: &mut SidecarInner,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let mut line = serde_json::to_string(payload).map_err(|e| e.to_string())?;
     line.push('\n');
     inner
@@ -217,10 +237,14 @@ async fn request_once(
 }
 
 fn is_sidecar_dead(err: &str) -> bool {
+    // A timeout means the response stream is desynced — even if the process
+    // is still alive, its next stdout line belongs to the abandoned request.
+    // Treat it like death so the caller respawns and starts clean.
     err.contains("closed stdout")
         || err.contains("write failed")
         || err.contains("flush failed")
         || err.contains("Broken pipe")
+        || err.contains("timed out")
 }
 
 /// Resolve where the sidecar entrypoint lives + which command runs it.
