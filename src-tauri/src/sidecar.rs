@@ -171,8 +171,11 @@ impl Sidecar {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
-        tokio::spawn(writer_loop(stdin, writer_rx));
-        tokio::spawn(reader_loop(
+        // tauri::async_runtime::spawn uses Tauri's tokio handle — works from
+        // both the sync `setup` callback (no reactor on the current thread)
+        // and from inside async commands (reactor available).
+        tauri::async_runtime::spawn(writer_loop(stdin, writer_rx));
+        tauri::async_runtime::spawn(reader_loop(
             stdout,
             pending.clone(),
             state.clone(),
