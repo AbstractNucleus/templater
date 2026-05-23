@@ -1,7 +1,7 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
-  import { composeText } from "$lib/compose";
+  import { composeText, splitPlaceholders, extractVariables } from "$lib/compose";
   import TagPicker from "./TagPicker.svelte";
 
   let {
@@ -64,6 +64,9 @@
   const composed = $derived(
     template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
   );
+
+  const previewSegments = $derived(template ? splitPlaceholders(composed) : []);
+  const placeholders = $derived(template ? extractVariables(composed) : []);
 
   const breadcrumb = $derived.by(() => {
     if (!template) return "";
@@ -211,7 +214,16 @@
       </label>
     </div>
 
-    <pre class="preview">{composed}</pre>
+    <pre class="preview">{#each previewSegments as seg}{#if seg.placeholder}<span class="placeholder">{seg.text}</span>{:else}{seg.text}{/if}{/each}</pre>
+
+    {#if placeholders.length > 0}
+      <div class="placeholders">
+        <span class="placeholders-label">Placeholders</span>
+        {#each placeholders as p}
+          <span class="placeholder-chip">{`{{${p}}}`}</span>
+        {/each}
+      </div>
+    {/if}
 
     <div class="footer">
       <button class="base-btn" onclick={onBaseOnTemplate} title="Open this template in the agent editor">
@@ -367,6 +379,38 @@
     white-space: pre-wrap;
     overflow-y: auto;
     min-height: 120px;
+  }
+
+  .preview .placeholder {
+    color: var(--accent-info-text);
+    background: var(--accent-info-bg);
+    border-radius: 3px;
+    padding: 0 2px;
+  }
+
+  .placeholders {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 12px;
+  }
+
+  .placeholders-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-deemphasis);
+  }
+
+  .placeholder-chip {
+    background: var(--accent-info-bg);
+    color: var(--accent-info-text);
+    border: 1px solid var(--accent-info-border);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.72rem;
   }
 
   .footer {
