@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppData, PasteBackend, Template } from "./types";
 
 export async function loadAppData(): Promise<AppData | null> {
@@ -135,6 +136,17 @@ export async function editTemplate(
     throw new Error(res.error ?? "edit failed");
   }
   return { reasoning: res.reasoning ?? "", updated: res.updated };
+}
+
+/**
+ * Subscribe to streaming sidecar progress events. The sidecar emits these for
+ * agent edits — accumulated partial text as the model writes its structured
+ * output (JSON chunks). Returns an unlisten function.
+ */
+export function onSidecarProgress(handler: (text: string) => void): Promise<UnlistenFn> {
+  return listen<{ id: string; progress: { text: string } }>("sidecar-progress", (event) => {
+    handler(event.payload.progress.text);
+  });
 }
 
 export function explainRankError(raw: string): string {

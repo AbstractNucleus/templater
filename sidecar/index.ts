@@ -74,6 +74,14 @@ type Response =
   | { id: string; ok: true; [k: string]: unknown }
   | { id: string; ok: false; error: string };
 
+type ProgressEvent = { id: string; progress: { text: string } };
+
+function emitProgress(id: string, text: string): void {
+  // Progress lines carry no `ok` field — the Rust reader routes them to a
+  // Tauri event instead of completing the caller's oneshot.
+  process.stdout.write(JSON.stringify({ id, progress: { text } } satisfies ProgressEvent) + "\n");
+}
+
 type Ranking = { template_id: string; score: number };
 
 const RANK_MODEL = "claude-haiku-4-5-20251001";
@@ -346,10 +354,27 @@ async function runEditAgent(req: EditTemplateRequest): Promise<Response> {
       model: EDIT_MODEL,
       outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
       systemPrompt: EDIT_INSTRUCTIONS,
+      includePartialMessages: true,
     },
   });
 
+  // Accumulate streaming chunks (input_json_delta for structured output,
+  // text_delta for free text) and forward each accumulation as a progress
+  // event. Lets the UI render something other than "Thinking…" while the
+  // 2-8s edit round-trip is in flight.
+  let partial = "";
   for await (const msg of stream) {
+    if (msg.type === "stream_event") {
+      const event = msg.event as { type?: string; delta?: { type?: string; partial_json?: string; text?: string } };
+      if (event.type === "content_block_delta" && event.delta) {
+        const chunk = event.delta.partial_json ?? event.delta.text ?? "";
+        if (chunk.length > 0) {
+          partial += chunk;
+          emitProgress(req.id, partial);
+        }
+      }
+      continue;
+    }
     if (msg.type !== "result") continue;
     if (msg.subtype === "success") {
       const out = msg.structured_output as

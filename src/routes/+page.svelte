@@ -26,6 +26,7 @@
     importTemplates,
     checkForUpdate,
     getAppVersion,
+    onSidecarProgress,
     type Ranking,
     type ChatTurn,
   } from "$lib/api";
@@ -333,6 +334,7 @@
   let agentMessages = $state<ChatTurn[]>([]);
   let agentBusy = $state(false);
   let agentError = $state<string | null>(null);
+  let agentProgress = $state<string>("");
   let saveAsOpen = $state(false);
   let agentSidebarWidth = $state(DEFAULT_COLUMN_WIDTHS.agent);
   let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
@@ -776,6 +778,7 @@
   async function handleAgentPrompt(prompt: string): Promise<void> {
     if (agentBusy) return;
     agentError = null;
+    agentProgress = "";
     const history = [...agentMessages];
     agentMessages = [...history, { role: "user", content: prompt }];
     agentBusy = true;
@@ -795,8 +798,21 @@
       agentError = explainRankError(String(e));
     } finally {
       agentBusy = false;
+      agentProgress = "";
     }
   }
+
+  // Subscribe to streaming partials from the sidecar. The event fires for
+  // any agent edit in flight; since the UI only allows one at a time
+  // (agentBusy gate) we don't need to correlate by id.
+  $effect(() => {
+    const unlistenPromise = onSidecarProgress((text) => {
+      if (agentBusy) agentProgress = text;
+    });
+    return () => {
+      void unlistenPromise.then((u) => u());
+    };
+  });
 
   function openSaveAs(): void {
     saveAsOpen = true;
@@ -870,6 +886,7 @@
         messages={agentMessages}
         busy={agentBusy}
         error={agentError}
+        progress={agentProgress}
         sourceName={baseSourceName}
         width={agentSidebarWidth}
         onSubmit={handleAgentPrompt}

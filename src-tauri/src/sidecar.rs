@@ -29,10 +29,15 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
+
+/// Event name used to forward `{ id, progress: { text } }` lines from the
+/// sidecar to the frontend. Listened to by AgentSidebar to render streaming
+/// partials.
+pub const SIDECAR_PROGRESS_EVENT: &str = "sidecar-progress";
 
 /// Cap on a single sidecar round-trip. Picked so a slow first call (cold
 /// Claude API + cache miss ~3-5s) still has comfortable headroom, while a
@@ -51,6 +56,7 @@ type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Valu
 pub struct Sidecar {
     state: Arc<Mutex<SidecarState>>,
     script: SidecarScript,
+    app: AppHandle,
 }
 
 enum SidecarState {
@@ -90,19 +96,24 @@ impl Sidecar {
         let state = Arc::new(Mutex::new(SidecarState::Unavailable(
             "not yet started".to_string(),
         )));
-        match Self::try_spawn(&script, &state) {
+        match Self::try_spawn(&script, &state, app) {
             Ok(active) => *state.lock().unwrap() = SidecarState::Active(active),
             Err(e) => {
                 eprintln!("sidecar unavailable at startup: {e}");
                 *state.lock().unwrap() = SidecarState::Unavailable(e);
             }
         }
-        Self { state, script }
+        Self {
+            state,
+            script,
+            app: app.clone(),
+        }
     }
 
     fn try_spawn(
         script: &SidecarScript,
         state: &Arc<Mutex<SidecarState>>,
+        app: &AppHandle,
     ) -> Result<ActiveSidecar, String> {
         if !script.path.exists() {
             return Err(format!(
@@ -161,7 +172,12 @@ impl Sidecar {
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
         tokio::spawn(writer_loop(stdin, writer_rx));
-        tokio::spawn(reader_loop(stdout, pending.clone(), state.clone()));
+        tokio::spawn(reader_loop(
+            stdout,
+            pending.clone(),
+            state.clone(),
+            app.clone(),
+        ));
 
         Ok(ActiveSidecar {
             writer_tx,
@@ -177,7 +193,7 @@ impl Sidecar {
             let mut guard = self.state.lock().unwrap();
             if let SidecarState::Unavailable(prior) = &*guard {
                 let prior = prior.clone();
-                match Self::try_spawn(&self.script, &self.state) {
+                match Self::try_spawn(&self.script, &self.state, &self.app) {
                     Ok(active) => *guard = SidecarState::Active(active),
                     Err(e) => return Err(format!("sidecar unavailable: {e} (prior: {prior})")),
                 }
@@ -251,6 +267,7 @@ async fn reader_loop(
     mut stdout: BufReader<ChildStdout>,
     pending: Pending,
     state: Arc<Mutex<SidecarState>>,
+    app: AppHandle,
 ) {
     loop {
         let mut line = String::new();
@@ -270,6 +287,14 @@ async fn reader_loop(
             eprintln!("sidecar: response missing id: {line}");
             continue;
         };
+
+        // Progress lines (no `ok` field) are streaming updates — forward to
+        // the frontend without completing the caller's oneshot.
+        if parsed.get("progress").is_some() && parsed.get("ok").is_none() {
+            let _ = app.emit(SIDECAR_PROGRESS_EVENT, &parsed);
+            continue;
+        }
+
         if let Some(tx) = pending.lock().unwrap().remove(&id) {
             let _ = tx.send(Ok(parsed));
         }

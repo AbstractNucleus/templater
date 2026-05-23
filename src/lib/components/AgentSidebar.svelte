@@ -6,6 +6,7 @@
     messages,
     busy,
     error,
+    progress,
     sourceName,
     width,
     onSubmit,
@@ -14,6 +15,7 @@
     messages: ChatTurn[];
     busy: boolean;
     error: string | null;
+    progress: string;
     sourceName: string;
     width: number;
     onSubmit: (prompt: string) => void;
@@ -75,7 +77,11 @@
     {#if busy}
       <div class="msg assistant">
         <div class="role">assistant</div>
-        <div class="content thinking">Thinking…</div>
+        {#if progress.length > 0}
+          <div class="content streaming">{progress}</div>
+        {:else}
+          <div class="content thinking">Thinking…</div>
+        {/if}
       </div>
     {/if}
     {#if error}
@@ -200,6 +206,14 @@
   .content.thinking {
     color: var(--text-muted);
     font-style: italic;
+  }
+
+  .content.streaming {
+    color: var(--text-muted);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.75rem;
+    max-height: 220px;
+    overflow-y: auto;
   }
 
   .prompt-row {
