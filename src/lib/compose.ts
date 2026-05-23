@@ -25,17 +25,32 @@ export interface ComposedSegment {
   placeholder: boolean;
 }
 
-export function splitPlaceholders(text: string): ComposedSegment[] {
+export function splitPlaceholders(
+  text: string,
+  values: Record<string, string> = {},
+): ComposedSegment[] {
   const segments: ComposedSegment[] = [];
   let cursor = 0;
   for (const m of text.matchAll(PLACEHOLDER_RE)) {
     const start = m.index ?? 0;
     if (start > cursor) segments.push({ text: text.slice(cursor, start), placeholder: false });
-    segments.push({ text: m[0], placeholder: true });
+    const name = m[1].trim();
+    const v = values[name];
+    segments.push({ text: v && v.length > 0 ? v : m[0], placeholder: true });
     cursor = start + m[0].length;
   }
   if (cursor < text.length) segments.push({ text: text.slice(cursor), placeholder: false });
   return segments;
+}
+
+// Substitute {{var}} with values[var] across the whole text. Empty/missing
+// values leave the raw {{var}} in place so the user can still copy-and-edit
+// later if they didn't fill every slot.
+export function applyValues(text: string, values: Record<string, string>): string {
+  return text.replace(PLACEHOLDER_RE, (raw, rawName: string) => {
+    const v = values[rawName.trim()];
+    return v && v.length > 0 ? v : raw;
+  });
 }
 
 export function extractVariables(text: string): string[] {

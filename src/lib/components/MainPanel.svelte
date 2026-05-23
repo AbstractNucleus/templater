@@ -1,7 +1,7 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
-  import { composeText, splitPlaceholders, extractVariables } from "$lib/compose";
+  import { composeText, splitPlaceholders, extractVariables, applyValues } from "$lib/compose";
   import TagPicker from "./TagPicker.svelte";
 
   let {
@@ -61,11 +61,25 @@
     }
   });
 
+  // Per-template fill-in values. Reset whenever the user switches templates so
+  // values from one template don't leak into the next; preserved across the
+  // edit ↔ view toggle so an accidental Edit/Cancel doesn't lose the user's work.
+  let placeholderValues = $state<Record<string, string>>({});
+  let lastTemplateId: string | null = null;
+  $effect(() => {
+    const id = template?.id ?? null;
+    if (id !== lastTemplateId) {
+      lastTemplateId = id;
+      placeholderValues = {};
+    }
+  });
+
   const composed = $derived(
     template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
   );
+  const composedFilled = $derived(applyValues(composed, placeholderValues));
 
-  const previewSegments = $derived(template ? splitPlaceholders(composed) : []);
+  const previewSegments = $derived(template ? splitPlaceholders(composed, placeholderValues) : []);
   const placeholders = $derived(template ? extractVariables(composed) : []);
 
   const breadcrumb = $derived.by(() => {
@@ -77,7 +91,7 @@
   async function copyToClipboard(): Promise<void> {
     if (!template) return;
     try {
-      await writeText(composed);
+      await writeText(composedFilled);
       copyState = "ok";
     } catch {
       copyState = "error";
@@ -218,9 +232,16 @@
 
     {#if placeholders.length > 0}
       <div class="placeholders">
-        <span class="placeholders-label">Placeholders</span>
+        <span class="placeholders-label">Fill</span>
         {#each placeholders as p}
-          <span class="placeholder-chip">{`{{${p}}}`}</span>
+          <input
+            class="placeholder-input"
+            type="text"
+            placeholder={`{{${p}}}`}
+            value={placeholderValues[p] ?? ""}
+            oninput={(e) =>
+              (placeholderValues = { ...placeholderValues, [p]: e.currentTarget.value })}
+          />
         {/each}
       </div>
     {/if}
@@ -403,7 +424,7 @@
     color: var(--text-deemphasis);
   }
 
-  .placeholder-chip {
+  .placeholder-input {
     background: var(--accent-info-bg);
     color: var(--accent-info-text);
     border: 1px solid var(--accent-info-border);
@@ -411,6 +432,17 @@
     border-radius: 10px;
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     font-size: 0.72rem;
+    width: 140px;
+    outline: none;
+  }
+
+  .placeholder-input::placeholder {
+    color: var(--accent-info-text);
+    opacity: 0.55;
+  }
+
+  .placeholder-input:focus {
+    border-color: var(--border-focus);
   }
 
   .footer {
