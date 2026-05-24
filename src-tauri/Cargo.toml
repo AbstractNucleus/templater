@@ -1,6 +1,6 @@
 [package]
 name = "templater"
-version = "0.2.0"
+version = "0.3.0"
 description = "Templater — Tauri 2 desktop app for personal prose templating."
 authors = ["Noel <noelhkleen@gmail.com>"]
 edition = "2021"

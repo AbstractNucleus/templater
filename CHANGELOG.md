@@ -4,6 +4,49 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-05-24
+
+### Added
+
+- **Context system** — point Templater at folders of markdown, PDF, or
+  Excel reference material and the AI consults them during adapt + edit.
+  - New 📚 button in the title bar toggles a fourth right-side pane
+    listing sources, indexed files (with their AI summaries + tags), and
+    a capture-memory form.
+  - Per-file ingest pipeline: extract text (pdf-parse / SheetJS / fs),
+    Haiku-summarize, store in `context.db` (`node:sqlite`, no native
+    deps). Chokidar watcher per source keeps the index live; rescan
+    button + scan-on-startup cover edits made while the app was closed.
+  - Adapt and edit calls now pre-fetch context: a Haiku pick step
+    selects up to 3 relevant files and their text is injected into
+    Sonnet's system prompt. The chat panel reports "Consulted context:
+    foo.md, bar.pdf" so you can see what informed each draft.
+- **Capture memory** — paste a Slack thread or email into the context
+  pane; Haiku distills the durable signal and appends it to
+  `memories.md` under your chosen source root. The new entry re-ingests
+  automatically.
+- **Polish bundle (v0.3 precursor)** — modal Escape handling, selection
+  lifecycle fixes, sort + tag + adapt edge cases.
+- **10 prior features** — drag-reorder, multi-select, placeholder
+  typing, adapt-to-inbound, sidecar diagnostics, cheat sheet,
+  onboarding tour, sign-in flow, tag management, sidecar prune.
+
+### Changed
+
+- **Privacy story** — README and IDEA updated. Adding a source folder
+  is the opt-in; the dialog notes what leaves the machine. Per-file
+  Haiku summary at ingest, picker + selected file contents at adapt /
+  edit time, distilled signal at memory capture.
+- **Sidecar startup** — Rust now passes the app data dir as `argv[2]`
+  so the sidecar can place `context.db` alongside `templates.json` /
+  `settings.json`.
+
+### Migration
+
+- `Settings` grows `context_sources: string[]` (default `[]`) and
+  `column_widths.context: u32` (default 360). Both load transparently
+  via `#[serde(default)]` on the Rust side.
+
 ## [0.2.0] — 2026-05-23
 
 ### Added
