@@ -1,6 +1,6 @@
 <script lang="ts">
   import TagsSidebar from "$lib/components/TagsSidebar.svelte";
-  import TemplatesSidebar from "$lib/components/TemplatesSidebar.svelte";
+  import TemplatesSidebar, { type SelectModifier } from "$lib/components/TemplatesSidebar.svelte";
   import MainPanel from "$lib/components/MainPanel.svelte";
   import TitleBar from "$lib/components/TitleBar.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
@@ -9,6 +9,8 @@
   import EditorPane from "$lib/components/EditorPane.svelte";
   import SaveAsModal from "$lib/components/SaveAsModal.svelte";
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
+  import CheatSheet from "$lib/components/CheatSheet.svelte";
+  import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { starterTemplates } from "$lib/starterTemplates";
@@ -20,6 +22,7 @@
     getEnvWarnings,
     explainRankError,
     editTemplate,
+    adaptTemplate,
     openDataDir,
     exportTemplates,
     exportTemplate,
@@ -228,6 +231,13 @@
       return;
     }
 
+    // "?" toggles the cheat sheet. Skip when in an input so Shift+/ still types.
+    if (e.key === "?" && !isInputFocused() && !cheatSheetOpen) {
+      e.preventDefault();
+      cheatSheetOpen = true;
+      return;
+    }
+
     if (baseMode || editing) return;
     const inSearch = document.activeElement === searchInput;
     if (!inSearch && isInputFocused()) return;
@@ -326,10 +336,16 @@
   let excludedTagIds = $state<Set<string>>(new Set());
   let tagCombinator = $state<"and" | "or">("and");
   let selectedTemplateId = $state<string | null>(null);
+  /** Multi-selection from Ctrl/Shift-click. Always includes selectedTemplateId
+   *  when non-empty. When .size <= 1 the bulk bar is hidden and behavior is
+   *  identical to single-select. */
+  let bulkSelectedIds = $state<Set<string>>(new Set());
   let includeOpening = $state(true);
   let includeSignature = $state(true);
   let editing = $state(false);
   let settingsOpen = $state(false);
+  let cheatSheetOpen = $state(false);
+  let adaptBusy = $state(false);
 
   let rankings = $state<Ranking[] | null>(null);
   let rankLoading = $state(false);
@@ -457,6 +473,37 @@
 
   const inPasteMode = $derived(searchQuery.trim().length >= PASTE_THRESHOLD);
 
+  // Drag-reorder is only safe when the visible order IS the underlying array
+  // order. Any filter, search, or paste-mode ranking breaks that invariant.
+  const canReorderTemplates = $derived(
+    isEditorMode &&
+      !inPasteMode &&
+      searchQuery.trim().length === 0 &&
+      selectedTagIds.size === 0 &&
+      excludedTagIds.size === 0 &&
+      settings.sort_mode === "manual",
+  );
+
+  // Tag counts shared between the Tags sidebar UI and the SettingsModal tag
+  // manager. Mirrors the order rule in TagsSidebar (tag_order first, then
+  // count-desc / name-asc).
+  const settingsTagCounts = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const t of templates) for (const tag of t.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    const idx = new Map<string, number>();
+    settings.tag_order.forEach((t, i) => idx.set(t, i));
+    const all = [...counts.entries()];
+    all.sort((a, b) => {
+      const ai = idx.get(a[0]);
+      const bi = idx.get(b[0]);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return b[1] - a[1] || a[0].localeCompare(b[0]);
+    });
+    return all;
+  });
+
   // Ordered IDs the user can step through with ↑/↓. Paste mode follows the
   // ranked list; browse mode follows literal search results (which already
   // honour tag filters via `tagFiltered`). Stale ranking IDs are filtered out
@@ -503,6 +550,17 @@
         } else {
           templates = data.templates;
           settings = data.settings;
+          // Existing users who dismissed the legacy "minimises to tray" banner
+          // shouldn't be surprised by the new onboarding tour. Auto-graduate
+          // them so the tour only fires for genuinely fresh installs.
+          if (settings.close_hint_shown && !settings.onboarding_complete) {
+            settings = { ...settings, onboarding_complete: true };
+            await saveAppData({
+              version: DATA_VERSION,
+              templates,
+              settings,
+            });
+          }
         }
         tagsWidth = settings.column_widths.tags;
         templatesWidth = settings.column_widths.templates;
@@ -574,8 +632,34 @@
     tagCombinator = tagCombinator === "and" ? "or" : "and";
   }
 
-  function handleTemplateSelect(id: string): void {
+  function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
     if (editing) editing = false;
+    if (modifier === "ctrl") {
+      // Toggle in the bulk set. Anchor (selectedTemplateId) moves to the
+      // clicked item if it ends up still selected, otherwise stays put.
+      const next = new Set(bulkSelectedIds.size > 0 ? bulkSelectedIds : selectedTemplateId ? [selectedTemplateId] : []);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      bulkSelectedIds = next;
+      selectedTemplateId = next.has(id) ? id : (next.values().next().value ?? null);
+      return;
+    }
+    if (modifier === "shift" && selectedTemplateId !== null) {
+      const ids = visibleTemplateIds;
+      const a = ids.indexOf(selectedTemplateId);
+      const b = ids.indexOf(id);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        bulkSelectedIds = new Set(ids.slice(lo, hi + 1));
+        selectedTemplateId = id;
+        return;
+      }
+    }
+    // Plain click — clears multi, picks the one.
+    bulkSelectedIds = new Set();
     selectedTemplateId = selectedTemplateId === id ? null : id;
   }
 
@@ -747,10 +831,6 @@
     }
   }
 
-  async function dismissCloseHint(): Promise<void> {
-    await persist(templates, { ...settings, close_hint_shown: true });
-  }
-
   async function duplicateTemplateById(id: string): Promise<void> {
     if (!isEditorMode) return;
     const src = templates.find((t) => t.id === id);
@@ -791,6 +871,128 @@
     pushUndo("pin");
     const next = templates.map((t) => (t.id === id ? { ...t, pinned: !t.pinned } : t));
     await persist(next);
+  }
+
+  // Drag-reorder writes through the templates array directly. Sort mode is
+  // forced to "manual" here — if a user explicitly drags, they expect that
+  // order to stick over the recency sort.
+  async function handleTemplatesReorder(newOrderIds: string[]): Promise<void> {
+    if (!isEditorMode) return;
+    pushUndo("reorder");
+    const byId = new Map(templates.map((t) => [t.id, t]));
+    const next: Template[] = [];
+    for (const id of newOrderIds) {
+      const t = byId.get(id);
+      if (t) next.push(t);
+    }
+    // Defensive: any id that fell out of the new order keeps its trailing
+    // position so we never lose a template.
+    for (const t of templates) if (!newOrderIds.includes(t.id)) next.push(t);
+    await persist(next, { ...settings, sort_mode: "manual" });
+  }
+
+  async function handleTagsReorder(newOrder: string[]): Promise<void> {
+    await persist(templates, { ...settings, tag_order: newOrder });
+  }
+
+  function handleSortModeToggle(): void {
+    const next = settings.sort_mode === "manual" ? "recent" : "manual";
+    void persist(templates, { ...settings, sort_mode: next });
+  }
+
+  async function handleRenameTag(from: string, to: string): Promise<void> {
+    if (!isEditorMode) return;
+    if (from === to || to.length === 0) return;
+    pushUndo("rename tag");
+    const next = templates.map((t) =>
+      t.tags.includes(from)
+        ? { ...t, tags: dedupe(t.tags.map((tag) => (tag === from ? to : tag))) }
+        : t,
+    );
+    // Update tag_order so the renamed tag keeps its position.
+    const newOrder = settings.tag_order.map((t) => (t === from ? to : t));
+    await persist(next, { ...settings, tag_order: dedupe(newOrder) });
+  }
+
+  async function handleDeleteTag(tag: string): Promise<void> {
+    if (!isEditorMode) return;
+    pushUndo("remove tag");
+    const next = templates.map((t) =>
+      t.tags.includes(tag) ? { ...t, tags: t.tags.filter((x) => x !== tag) } : t,
+    );
+    const newOrder = settings.tag_order.filter((t) => t !== tag);
+    const nextSelected = new Set(selectedTagIds);
+    nextSelected.delete(tag);
+    selectedTagIds = nextSelected;
+    const nextExcluded = new Set(excludedTagIds);
+    nextExcluded.delete(tag);
+    excludedTagIds = nextExcluded;
+    await persist(next, { ...settings, tag_order: newOrder });
+  }
+
+  function dedupe(items: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of items) {
+      if (seen.has(item)) continue;
+      seen.add(item);
+      out.push(item);
+    }
+    return out;
+  }
+
+  async function bulkDelete(ids: Set<string>): Promise<void> {
+    if (!isEditorMode || ids.size === 0) return;
+    pushUndo(`delete ${ids.size}`);
+    const next = templates.filter((t) => !ids.has(t.id));
+    const nextPlaceholders = { ...settings.placeholder_values };
+    for (const id of ids) delete nextPlaceholders[id];
+    bulkSelectedIds = new Set();
+    if (selectedTemplateId !== null && ids.has(selectedTemplateId)) {
+      selectedTemplateId = next[0]?.id ?? null;
+    }
+    await persist(next, { ...settings, placeholder_values: nextPlaceholders });
+  }
+
+  async function bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
+    if (!isEditorMode || ids.size === 0) return;
+    const trimmed = tag.trim();
+    if (trimmed.length === 0) return;
+    pushUndo(`tag ${ids.size}`);
+    const next = templates.map((t) =>
+      ids.has(t.id) && !t.tags.includes(trimmed) ? { ...t, tags: [...t.tags, trimmed] } : t,
+    );
+    await persist(next);
+  }
+
+  async function adaptToInbound(): Promise<void> {
+    if (!selectedTemplate || adaptBusy) return;
+    const inbound = searchQuery.trim();
+    if (inbound.length < PASTE_THRESHOLD) return;
+    adaptBusy = true;
+    agentError = null;
+    try {
+      const { reasoning, updated } = await adaptTemplate(
+        { opening: selectedTemplate.opening, body: selectedTemplate.body },
+        inbound,
+        settings.paste_backend,
+      );
+      // Enter base mode with the adapted draft pre-filled. Seed the chat with
+      // the implicit "adapt this" turn so further refinement has context.
+      baseKind = "base";
+      baseSourceName = selectedTemplate.name;
+      baseDraft = updated;
+      agentMessages = [
+        { role: "user", content: `Adapt this template to the inbound message:\n\n${inbound}` },
+        { role: "assistant", content: reasoning || "(no reasoning provided)" },
+      ];
+      agentBusy = false;
+      baseMode = true;
+    } catch (e) {
+      agentError = explainRankError(String(e));
+    } finally {
+      adaptBusy = false;
+    }
   }
 
   // Bumped from MainPanel after a successful copy. Updates last_used_at so
@@ -846,6 +1048,31 @@
   function openContextForTemplate(id: string, x: number, y: number): void {
     const tpl = templates.find((t) => t.id === id);
     if (!tpl) return;
+
+    // Bulk menu: when the right-clicked row is part of a >1 selection, show
+    // bulk actions instead of per-template ones. Otherwise fall through to
+    // the single-template menu.
+    const bulk = bulkSelectedIds;
+    if (bulk.size > 1 && bulk.has(id) && isEditorMode) {
+      const count = bulk.size;
+      contextMenu = {
+        x,
+        y,
+        items: [
+          {
+            label: `Add tag to ${count}…`,
+            onClick: () => (bulkTagPromptOpen = true),
+          },
+          {
+            label: `Delete ${count}`,
+            danger: true,
+            onClick: () => (bulkDeleteConfirmOpen = true),
+          },
+        ],
+      };
+      return;
+    }
+
     const items: ContextMenuItem[] = [];
     if (isEditorMode) {
       items.push({
@@ -863,6 +1090,23 @@
       });
     }
     contextMenu = { x, y, items };
+  }
+
+  let bulkDeleteConfirmOpen = $state(false);
+  let bulkTagPromptOpen = $state(false);
+  let bulkTagDraft = $state("");
+
+  async function confirmBulkDelete(): Promise<void> {
+    bulkDeleteConfirmOpen = false;
+    await bulkDelete(bulkSelectedIds);
+  }
+
+  async function confirmBulkTag(): Promise<void> {
+    const tag = bulkTagDraft.trim();
+    bulkTagPromptOpen = false;
+    bulkTagDraft = "";
+    if (tag.length === 0) return;
+    await bulkAddTag(bulkSelectedIds, tag);
   }
 
   function openContextForEmpty(x: number, y: number): void {
@@ -1063,12 +1307,14 @@
         {selectedTagIds}
         {excludedTagIds}
         {tagCombinator}
+        tagOrder={settings.tag_order}
         width={tagsWidth}
         onTagToggle={handleTagToggle}
         onTagExclude={handleTagExclude}
         onTagsClear={handleTagsClear}
         onCombinatorToggle={handleCombinatorToggle}
         onContextEmpty={openContextForEmpty}
+        onTagReorder={(next) => void handleTagsReorder(next)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1080,6 +1326,7 @@
         {searchResults}
         {templates}
         {selectedTemplateId}
+        {bulkSelectedIds}
         {searchQuery}
         {rankings}
         {rankLoading}
@@ -1087,11 +1334,15 @@
         pasteThreshold={PASTE_THRESHOLD}
         width={templatesWidth}
         canCreate={isEditorMode}
+        canReorder={canReorderTemplates}
+        sortMode={settings.sort_mode}
         onTemplateSelect={handleTemplateSelect}
         onNew={handleNew}
         onRetryRank={retryRank}
         onContextTemplate={openContextForTemplate}
         onContextEmpty={openContextForEmpty}
+        onReorder={(ids) => void handleTemplatesReorder(ids)}
+        onSortModeToggle={handleSortModeToggle}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1109,6 +1360,8 @@
         {availableTags}
         {copyTrigger}
         savedPlaceholderValues={settings.placeholder_values}
+        inboundText={inPasteMode ? searchQuery : null}
+        {adaptBusy}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => (editing = true)}
@@ -1117,6 +1370,7 @@
         onDuplicate={handleDuplicate}
         onDelete={handleDelete}
         onBaseOnTemplate={enterBaseMode}
+        onAdaptToInbound={() => void adaptToInbound()}
         onCopySuccess={(id) => void recordCopy(id)}
         onPlaceholderValuesChange={(id, vals) => void recordPlaceholderValues(id, vals)}
       />
@@ -1126,12 +1380,6 @@
     {/if}
     {#if undoToast}
       <div class="undo-toast">{undoToast}</div>
-    {/if}
-    {#if loaded && !settings.close_hint_shown}
-      <div class="hint-banner">
-        <span>Tip: closing the window minimises to tray. Quit fully via the tray icon.</span>
-        <button class="banner-action" onclick={dismissCloseHint}>Got it</button>
-      </div>
     {/if}
   </div>
 </div>
@@ -1143,6 +1391,7 @@
     {settings}
     {envApiKeyOverride}
     currentVersion={appVersion}
+    tagCounts={settingsTagCounts}
     onClose={() => (settingsOpen = false)}
     onUpdate={handleSettingsUpdate}
     onExportTemplates={handleExportTemplates}
@@ -1150,7 +1399,101 @@
     onCheckUpdate={checkForUpdate}
     onListBackups={listTemplateBackups}
     onRestoreBackup={handleRestoreBackup}
+    onRenameTag={handleRenameTag}
+    onDeleteTag={handleDeleteTag}
+    onOpenCheatSheet={() => {
+      settingsOpen = false;
+      cheatSheetOpen = true;
+    }}
   />
+{/if}
+
+{#if cheatSheetOpen}
+  <CheatSheet
+    globalHotkey={settings.global_hotkey}
+    onClose={() => (cheatSheetOpen = false)}
+  />
+{/if}
+
+{#if loaded && !settings.onboarding_complete}
+  <OnboardingTour
+    onDismiss={() => {
+      void persist(templates, {
+        ...settings,
+        onboarding_complete: true,
+        close_hint_shown: true,
+      });
+    }}
+  />
+{/if}
+
+{#if bulkDeleteConfirmOpen}
+  <div
+    class="confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Confirm bulk delete"
+    tabindex="-1"
+    onclick={(e) => e.target === e.currentTarget && (bulkDeleteConfirmOpen = false)}
+    onkeydown={(e) => {
+      if (e.key === "Escape") bulkDeleteConfirmOpen = false;
+      else if (e.key === "Enter") void confirmBulkDelete();
+    }}
+  >
+    <div class="confirm-modal">
+      <h3>Delete {bulkSelectedIds.size} templates?</h3>
+      <p class="confirm-warn">Ctrl+Z will restore them.</p>
+      <div class="confirm-actions">
+        <button class="confirm-btn" onclick={() => (bulkDeleteConfirmOpen = false)}>Cancel</button>
+        <!-- svelte-ignore a11y_autofocus -->
+        <button class="confirm-btn danger" onclick={() => void confirmBulkDelete()} autofocus>
+          Delete {bulkSelectedIds.size}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if bulkTagPromptOpen}
+  <div
+    class="confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Bulk add tag"
+    tabindex="-1"
+    onclick={(e) =>
+      e.target === e.currentTarget && (bulkTagPromptOpen = false)}
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        bulkTagPromptOpen = false;
+        bulkTagDraft = "";
+      } else if (e.key === "Enter") {
+        void confirmBulkTag();
+      }
+    }}
+  >
+    <div class="confirm-modal">
+      <h3>Add tag to {bulkSelectedIds.size} templates</h3>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        class="bulk-tag-input"
+        type="text"
+        placeholder="tag name"
+        bind:value={bulkTagDraft}
+        autofocus
+      />
+      <div class="confirm-actions">
+        <button
+          class="confirm-btn"
+          onclick={() => {
+            bulkTagPromptOpen = false;
+            bulkTagDraft = "";
+          }}>Cancel</button
+        >
+        <button class="confirm-btn" onclick={() => void confirmBulkTag()}>Add</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if saveAsOpen}
@@ -1399,21 +1742,6 @@
     color: var(--text-placeholder);
   }
 
-  .banner-action {
-    background: transparent;
-    border: 1px solid var(--accent-warning-border);
-    color: var(--accent-warning-text);
-    padding: 2px 10px;
-    border-radius: 3px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.75rem;
-  }
-
-  .banner-action:hover {
-    background: var(--bg-hover);
-  }
-
   .loading {
     margin: auto;
     color: var(--text-subtle);
@@ -1447,22 +1775,6 @@
     padding: 6px 12px;
     font-size: 0.8rem;
     border-top: 1px solid var(--accent-danger-border);
-  }
-
-  .hint-banner {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--accent-info-bg);
-    color: var(--accent-info-text);
-    padding: 6px 12px;
-    font-size: 0.8rem;
-    border-top: 1px solid var(--accent-info-border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
   }
 
   .undo-toast {
@@ -1552,5 +1864,23 @@
 
   .confirm-btn.danger:hover {
     background: var(--accent-danger-border);
+  }
+
+  .bulk-tag-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 0.9rem;
+    margin: 0 0 18px;
+  }
+
+  .bulk-tag-input:focus {
+    outline: none;
+    border-color: var(--border-focus);
   }
 </style>

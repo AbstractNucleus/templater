@@ -47,9 +47,9 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../sidecar/dist",
-      "../sidecar/node_modules",
-      "../sidecar/package.json"
+      "../sidecar/prod-bundle/dist",
+      "../sidecar/prod-bundle/node_modules",
+      "../sidecar/prod-bundle/package.json"
     ],
     "externalBin": [
       "binaries/node"

@@ -152,6 +152,40 @@ export async function editTemplate(
   return { reasoning: res.reasoning ?? "", updated: res.updated };
 }
 
+export async function adaptTemplate(
+  draft: EditedDraft,
+  inbound: string,
+  backend: PasteBackend,
+): Promise<{ reasoning: string; updated: EditedDraft }> {
+  const res = await invoke<EditResponse>("adapt_template", { draft, inbound, backend });
+  if (!res.ok || !res.updated) {
+    throw new Error(res.error ?? "adapt failed");
+  }
+  return { reasoning: res.reasoning ?? "", updated: res.updated };
+}
+
+export interface DiagEntry {
+  op: string;
+  started_at_ms: number;
+  duration_ms: number;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface SidecarDiagnostics {
+  state: "active" | "unavailable";
+  state_reason: string | null;
+  entries: DiagEntry[];
+}
+
+export async function getSidecarDiagnostics(): Promise<SidecarDiagnostics> {
+  return await invoke<SidecarDiagnostics>("get_sidecar_diagnostics");
+}
+
+export async function openClaudeLogin(): Promise<void> {
+  await invoke<void>("open_claude_login");
+}
+
 /**
  * Subscribe to streaming sidecar progress events. The sidecar emits these for
  * agent edits — accumulated partial text as the model writes its structured

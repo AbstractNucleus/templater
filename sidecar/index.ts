@@ -68,7 +68,15 @@ type EditTemplateRequest = {
   prompt: string;
 };
 
-type Request = PingRequest | RankRequest | EditTemplateRequest;
+type AdaptTemplateRequest = {
+  id: string;
+  op: "adapt-template";
+  backend: Backend;
+  draft: { opening: string; body: string };
+  inbound: string;
+};
+
+type Request = PingRequest | RankRequest | EditTemplateRequest | AdaptTemplateRequest;
 
 type Response =
   | { id: string; ok: true; [k: string]: unknown }
@@ -449,6 +457,140 @@ async function runEditApi(req: EditTemplateRequest): Promise<Response> {
   };
 }
 
+// adapt-template runs on Sonnet (not Haiku) because it's actual drafting with
+// context, not the simple classification rank does. Reuses the edit JSON
+// schema so the response shape stays uniform across edit + adapt.
+const ADAPT_MODEL = "claude-sonnet-4-6";
+
+const ADAPT_INSTRUCTIONS = `You adapt a reply-template draft to fit a specific inbound message.
+
+You are given:
+- The current draft (opening + body) — a generic template.
+- The inbound message it should reply to.
+
+Produce a tailored draft that responds directly to the inbound. Preserve the
+template's intent and tone, but make it specific: reference details from the
+inbound where it improves the reply, and drop boilerplate that no longer fits.
+
+Rules:
+- Keep {{variable}} placeholders unless concrete info from the inbound lets
+  you fill them in naturally.
+- "opening" is the greeting line; "body" is everything else.
+- Reasoning (one short paragraph) should explain what you changed and why.`;
+
+function buildAdaptPrompt(req: AdaptTemplateRequest): string {
+  return `INBOUND MESSAGE:
+${req.inbound}
+
+CURRENT DRAFT:
+Opening: ${req.draft.opening}
+Body:
+${req.draft.body}`;
+}
+
+async function handleAdaptTemplate(req: AdaptTemplateRequest): Promise<Response> {
+  if (req.backend === "api") return runAdaptApi(req);
+  return runAdaptAgent(req);
+}
+
+async function runAdaptAgent(req: AdaptTemplateRequest): Promise<Response> {
+  const stream = query({
+    prompt: buildAdaptPrompt(req),
+    options: {
+      model: ADAPT_MODEL,
+      outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
+      systemPrompt: ADAPT_INSTRUCTIONS,
+      includePartialMessages: true,
+    },
+  });
+
+  let partial = "";
+  for await (const msg of stream) {
+    if (msg.type === "stream_event") {
+      const event = msg.event as { type?: string; delta?: { type?: string; partial_json?: string; text?: string } };
+      if (event.type === "content_block_delta" && event.delta) {
+        const chunk = event.delta.partial_json ?? event.delta.text ?? "";
+        if (chunk.length > 0) {
+          partial += chunk;
+          emitProgress(req.id, partial);
+        }
+      }
+      continue;
+    }
+    if (msg.type !== "result") continue;
+    if (msg.subtype === "success") {
+      const out = msg.structured_output as
+        | { reasoning?: string; updated?: { opening?: string; body?: string } }
+        | undefined;
+      if (!out || !out.updated || typeof out.updated.body !== "string") {
+        return { id: req.id, ok: false, error: "agent sdk returned no updated draft" };
+      }
+      return {
+        id: req.id,
+        ok: true,
+        reasoning: out.reasoning ?? "",
+        updated: {
+          opening: out.updated.opening ?? "",
+          body: out.updated.body,
+        },
+      };
+    }
+    return {
+      id: req.id,
+      ok: false,
+      error: `agent sdk ${msg.subtype}: ${(msg.errors ?? []).join("; ") || "unknown"}`,
+    };
+  }
+  return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
+}
+
+async function runAdaptApi(req: AdaptTemplateRequest): Promise<Response> {
+  let client: Anthropic;
+  try {
+    client = getApiClient();
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+
+  let msg;
+  try {
+    msg = await client.messages.create({
+      model: ADAPT_MODEL,
+      max_tokens: 2048,
+      system: ADAPT_INSTRUCTIONS,
+      tools: [
+        {
+          name: EDIT_TOOL_NAME,
+          description: "Submit the adapted draft and reasoning as structured output.",
+          input_schema: EDIT_SCHEMA as unknown as ApiInputSchema,
+        },
+      ],
+      tool_choice: { type: "tool", name: EDIT_TOOL_NAME },
+      messages: [{ role: "user", content: buildAdaptPrompt(req) }],
+    });
+  } catch (err) {
+    return { id: req.id, ok: false, error: `anthropic api: ${(err as Error).message}` };
+  }
+
+  const block = msg.content.find((b) => b.type === "tool_use");
+  if (!block || block.type !== "tool_use" || block.name !== EDIT_TOOL_NAME) {
+    return { id: req.id, ok: false, error: "anthropic api returned no tool_use block" };
+  }
+  const out = block.input as { reasoning?: string; updated?: { opening?: string; body?: string } };
+  if (!out || !out.updated || typeof out.updated.body !== "string") {
+    return { id: req.id, ok: false, error: "anthropic api returned no updated draft" };
+  }
+  return {
+    id: req.id,
+    ok: true,
+    reasoning: out.reasoning ?? "",
+    updated: {
+      opening: out.updated.opening ?? "",
+      body: out.updated.body,
+    },
+  };
+}
+
 async function handle(request: Request): Promise<Response> {
   switch (request.op) {
     case "ping":
@@ -457,6 +599,8 @@ async function handle(request: Request): Promise<Response> {
       return await handleRank(request);
     case "edit-template":
       return await handleEditTemplate(request);
+    case "adapt-template":
+      return await handleAdaptTemplate(request);
     default: {
       const _exhaustive: never = request;
       return { id: (_exhaustive as { id: string }).id, ok: false, error: "unknown op" };

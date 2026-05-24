@@ -23,12 +23,12 @@
 //! - Release builds (tauri build): run a bundled `node` against the
 //!   pre-compiled `sidecar/dist/index.js` shipped as a Tauri resource.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
@@ -53,10 +53,37 @@ fn next_request_id() -> String {
 
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, String>>>>>;
 
+/// Newest-last ring of recent sidecar calls. Drives the Diagnostics panel in
+/// Settings so the user can see what the sidecar has been doing without
+/// digging through stderr.
+const DIAG_CAPACITY: usize = 50;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagEntry {
+    /// "ping" | "rank" | "edit-template" | "adapt-template" — what the caller asked for.
+    pub op: String,
+    /// Unix epoch ms when the request was sent.
+    pub started_at_ms: u64,
+    /// Wall-clock round-trip in ms. Includes serialization + sidecar work + parse.
+    pub duration_ms: u64,
+    pub ok: bool,
+    /// First ~200 chars of the error when `ok` is false. Truncated to avoid bloating the panel.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Diagnostics {
+    /// "active" or "unavailable".
+    pub state: &'static str,
+    pub state_reason: Option<String>,
+    pub entries: Vec<DiagEntry>,
+}
+
 pub struct Sidecar {
     state: Arc<Mutex<SidecarState>>,
     script: SidecarScript,
     app: AppHandle,
+    diag: Arc<Mutex<VecDeque<DiagEntry>>>,
 }
 
 enum SidecarState {
@@ -107,6 +134,7 @@ impl Sidecar {
             state,
             script,
             app: app.clone(),
+            diag: Arc::new(Mutex::new(VecDeque::with_capacity(DIAG_CAPACITY))),
         }
     }
 
@@ -190,6 +218,30 @@ impl Sidecar {
     }
 
     pub async fn request(&self, payload: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let op = payload
+            .get("op")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let started_at_ms = now_epoch_ms();
+        let started = std::time::Instant::now();
+        let outcome = self.request_inner(payload).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let entry = DiagEntry {
+            op,
+            started_at_ms,
+            duration_ms,
+            ok: outcome.is_ok(),
+            error: outcome.as_ref().err().map(|e| truncate(e, 200)),
+        };
+        push_diag(&self.diag, entry);
+        outcome
+    }
+
+    async fn request_inner(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         // Snapshot the writer + pending Arc, respawning from Unavailable if
         // needed. Lock is released before any await.
         let (writer_tx, pending) = {
@@ -243,6 +295,22 @@ impl Sidecar {
                     REQUEST_TIMEOUT.as_secs()
                 ))
             }
+        }
+    }
+
+    pub fn diagnostics(&self) -> Diagnostics {
+        let (state, state_reason) = {
+            let guard = self.state.lock().unwrap();
+            match &*guard {
+                SidecarState::Active(_) => ("active", None),
+                SidecarState::Unavailable(r) => ("unavailable", Some(r.clone())),
+            }
+        };
+        let entries = self.diag.lock().unwrap().iter().cloned().collect();
+        Diagnostics {
+            state,
+            state_reason,
+            entries,
         }
     }
 
@@ -338,11 +406,14 @@ fn resolve_script(app: &AppHandle) -> SidecarScript {
         .resource_dir()
         .ok()
         .unwrap_or_else(|| PathBuf::from("."));
-    // `../sidecar/...` paths declared in tauri.conf.json's bundle.resources
-    // land under `_up_/` in the runtime resource_dir.
+    // `../sidecar/prod-bundle/...` paths declared in tauri.conf.json's
+    // bundle.resources land under `_up_/sidecar/prod-bundle/` in the runtime
+    // resource_dir. The prod-bundle directory is a freshly-installed,
+    // devDeps-pruned copy of the sidecar — see scripts/build-sidecar-prod.mjs.
     let script = resource_dir
         .join("_up_")
         .join("sidecar")
+        .join("prod-bundle")
         .join("dist")
         .join("index.js");
 
@@ -366,4 +437,31 @@ fn bundled_node_filename() -> &'static str {
     } else {
         "node"
     }
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn push_diag(diag: &Arc<Mutex<VecDeque<DiagEntry>>>, entry: DiagEntry) {
+    let mut buf = diag.lock().unwrap();
+    if buf.len() >= DIAG_CAPACITY {
+        buf.pop_front();
+    }
+    buf.push_back(entry);
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    // char-boundary safe truncation
+    let mut end = max;
+    while !s.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }

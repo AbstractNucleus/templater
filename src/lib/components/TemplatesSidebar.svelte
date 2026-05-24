@@ -1,12 +1,15 @@
 <script lang="ts">
-  import type { Template } from "$lib/types";
+  import type { Template, SortMode } from "$lib/types";
   import type { Ranking } from "$lib/api";
   import { highlightName, type SearchHit } from "$lib/search";
+
+  export type SelectModifier = "none" | "ctrl" | "shift";
 
   let {
     templates,
     searchResults,
     selectedTemplateId,
+    bulkSelectedIds,
     searchQuery,
     rankings,
     rankLoading,
@@ -14,15 +17,20 @@
     pasteThreshold,
     width,
     canCreate,
+    canReorder,
+    sortMode,
     onTemplateSelect,
     onNew,
     onRetryRank,
     onContextTemplate,
     onContextEmpty,
+    onReorder,
+    onSortModeToggle,
   }: {
     templates: Template[];
     searchResults: SearchHit[];
     selectedTemplateId: string | null;
+    bulkSelectedIds: Set<string>;
     searchQuery: string;
     rankings: Ranking[] | null;
     rankLoading: boolean;
@@ -30,11 +38,18 @@
     pasteThreshold: number;
     width: number;
     canCreate: boolean;
-    onTemplateSelect: (id: string) => void;
+    /** True only when the visible order matches the underlying array order
+     *  (browse mode, no search, no tag filter, manual sort). Drag is gated
+     *  on this so the user can't reorder a filtered view ambiguously. */
+    canReorder: boolean;
+    sortMode: SortMode;
+    onTemplateSelect: (id: string, modifier: SelectModifier) => void;
     onNew: () => void;
     onRetryRank: () => void;
     onContextTemplate: (id: string, x: number, y: number) => void;
     onContextEmpty: (x: number, y: number) => void;
+    onReorder: (newOrderIds: string[]) => void;
+    onSortModeToggle: () => void;
   } = $props();
 
   function handleEmptyContext(e: MouseEvent): void {
@@ -47,6 +62,12 @@
     e.preventDefault();
     e.stopPropagation();
     onContextTemplate(id, e.clientX, e.clientY);
+  }
+
+  function modifierOf(e: MouseEvent): SelectModifier {
+    if (e.shiftKey) return "shift";
+    if (e.ctrlKey || e.metaKey) return "ctrl";
+    return "none";
   }
 
   const templateById = $derived.by(() => {
@@ -68,6 +89,59 @@
     ) as HTMLElement | null;
     btn?.scrollIntoView({ block: "nearest" });
   });
+
+  // Drag state. We track only the dragged id and the current hover target;
+  // the actual reorder fires on drop.
+  let draggingId = $state<string | null>(null);
+  let dragOverId = $state<string | null>(null);
+  let dragOverHalf = $state<"top" | "bottom">("top");
+
+  function handleDragStart(e: DragEvent, id: string): void {
+    if (!canReorder) return;
+    draggingId = id;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      // Required for Firefox to actually start the drag.
+      e.dataTransfer.setData("text/plain", id);
+    }
+  }
+
+  function handleDragOver(e: DragEvent, overId: string): void {
+    if (!canReorder || draggingId === null) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    dragOverHalf = e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
+    dragOverId = overId;
+  }
+
+  function handleDragLeave(overId: string): void {
+    if (dragOverId === overId) dragOverId = null;
+  }
+
+  function handleDrop(e: DragEvent, overId: string): void {
+    if (!canReorder || draggingId === null) return;
+    e.preventDefault();
+    const fromId = draggingId;
+    const half = dragOverHalf;
+    draggingId = null;
+    dragOverId = null;
+    if (fromId === overId) return;
+    const ids = templates.map((t) => t.id);
+    const fromIdx = ids.indexOf(fromId);
+    if (fromIdx < 0) return;
+    ids.splice(fromIdx, 1);
+    let toIdx = ids.indexOf(overId);
+    if (toIdx < 0) return;
+    if (half === "bottom") toIdx += 1;
+    ids.splice(toIdx, 0, fromId);
+    onReorder(ids);
+  }
+
+  function handleDragEnd(): void {
+    draggingId = null;
+    dragOverId = null;
+  }
 </script>
 
 <aside bind:this={sidebarEl} class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
@@ -75,10 +149,28 @@
     <div class="section-label">
       {inPasteMode ? "Ranked matches" : "Templates"}
     </div>
-    {#if canCreate}
-      <button class="new-btn" title="New template" onclick={onNew}>+</button>
-    {/if}
+    <div class="header-controls">
+      {#if !inPasteMode}
+        <button
+          class="sort-btn"
+          title={sortMode === "manual"
+            ? "Manual order. Drag templates to reorder. Click to switch to recent."
+            : "Sorted by most recently copied. Click to switch to manual."}
+          onclick={onSortModeToggle}
+        >{sortMode === "manual" ? "⇅" : "↻"}</button>
+      {/if}
+      {#if canCreate}
+        <button class="new-btn" title="New template" onclick={onNew}>+</button>
+      {/if}
+    </div>
   </div>
+
+  {#if bulkSelectedIds.size > 1}
+    <div class="bulk-bar">
+      <span class="bulk-count">{bulkSelectedIds.size} selected</span>
+      <span class="bulk-hint">right-click for actions</span>
+    </div>
+  {/if}
 
   {#if inPasteMode}
     <ul class="template-list">
@@ -101,7 +193,7 @@
                 class="template-item"
                 class:active={selectedTemplateId === tpl.id}
                 data-id={tpl.id}
-                onclick={() => onTemplateSelect(tpl.id)}
+                onclick={(e) => onTemplateSelect(tpl.id, modifierOf(e))}
                 oncontextmenu={(e) => handleTemplateContext(e, tpl.id)}
               >
                 <span class="name">{tpl.name}</span>
@@ -123,9 +215,19 @@
           <button
             class="template-item"
             class:active={selectedTemplateId === hit.template.id}
+            class:bulk={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
             class:pinned={hit.template.pinned}
+            class:dragging={draggingId === hit.template.id}
+            class:drag-over-top={dragOverId === hit.template.id && dragOverHalf === "top"}
+            class:drag-over-bottom={dragOverId === hit.template.id && dragOverHalf === "bottom"}
             data-id={hit.template.id}
-            onclick={() => onTemplateSelect(hit.template.id)}
+            draggable={canReorder}
+            ondragstart={(e) => handleDragStart(e, hit.template.id)}
+            ondragover={(e) => handleDragOver(e, hit.template.id)}
+            ondragleave={() => handleDragLeave(hit.template.id)}
+            ondrop={(e) => handleDrop(e, hit.template.id)}
+            ondragend={handleDragEnd}
+            onclick={(e) => onTemplateSelect(hit.template.id, modifierOf(e))}
             oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
           >
             <span class="name">
@@ -189,7 +291,14 @@
     margin: 0;
   }
 
-  .new-btn {
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .new-btn,
+  .sort-btn {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text);
@@ -203,9 +312,33 @@
     padding: 0;
   }
 
-  .new-btn:hover {
+  .new-btn:hover,
+  .sort-btn:hover {
     background: var(--bg-hover);
     border-color: var(--border-strong);
+  }
+
+  .bulk-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    margin: 0 2px 6px;
+    background: var(--accent-info-bg);
+    border: 1px solid var(--accent-info-border);
+    border-radius: 4px;
+    font-size: 0.72rem;
+    color: var(--accent-info-text);
+  }
+
+  .bulk-count {
+    font-weight: 600;
+  }
+
+  .bulk-hint {
+    font-style: italic;
+    opacity: 0.8;
   }
 
   ul {
@@ -229,6 +362,7 @@
     cursor: pointer;
     font: inherit;
     font-size: 0.85rem;
+    position: relative;
   }
 
   .template-item:hover {
@@ -238,6 +372,33 @@
   .template-item.active {
     background: var(--bg-active);
     color: var(--text-strong);
+  }
+
+  .template-item.bulk {
+    box-shadow: inset 3px 0 0 var(--accent-info-border);
+  }
+
+  .template-item.dragging {
+    opacity: 0.4;
+  }
+
+  .template-item.drag-over-top::before,
+  .template-item.drag-over-bottom::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    height: 2px;
+    background: var(--accent-info-border);
+    border-radius: 1px;
+  }
+
+  .template-item.drag-over-top::before {
+    top: -1px;
+  }
+
+  .template-item.drag-over-bottom::after {
+    bottom: -1px;
   }
 
   .template-item .name {

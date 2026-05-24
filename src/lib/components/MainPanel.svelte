@@ -1,7 +1,7 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
-  import { composeText, splitPlaceholders, extractVariables, applyValues } from "$lib/compose";
+  import { composeText, splitPlaceholders, extractPlaceholders, applyValues } from "$lib/compose";
   import TagPicker from "./TagPicker.svelte";
 
   let {
@@ -14,6 +14,8 @@
     availableTags,
     copyTrigger,
     savedPlaceholderValues,
+    inboundText,
+    adaptBusy,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
@@ -22,6 +24,7 @@
     onDuplicate,
     onDelete,
     onBaseOnTemplate,
+    onAdaptToInbound,
     onCopySuccess,
     onPlaceholderValuesChange,
   }: {
@@ -35,6 +38,10 @@
     copyTrigger: number;
     /** Persisted per-template fill-ins. Outer key: template id. */
     savedPlaceholderValues: Record<string, Record<string, string>>;
+    /** The pasted inbound message in paste-match mode. null/empty disables Adapt. */
+    inboundText: string | null;
+    /** True while an adapt-to-inbound request is in flight. */
+    adaptBusy: boolean;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
@@ -43,6 +50,7 @@
     onDuplicate: () => void;
     onDelete: () => void;
     onBaseOnTemplate: () => void;
+    onAdaptToInbound: () => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
   } = $props();
@@ -90,8 +98,8 @@
     }
   });
 
-  function setPlaceholderValue(p: string, value: string): void {
-    placeholderValues = { ...placeholderValues, [p]: value };
+  function setPlaceholderValue(key: string, value: string): void {
+    placeholderValues = { ...placeholderValues, [key]: value };
     if (persistTimer) clearTimeout(persistTimer);
     const id = template?.id;
     if (!id) return;
@@ -107,7 +115,8 @@
   const composedFilled = $derived(applyValues(composed, placeholderValues));
 
   const previewSegments = $derived(template ? splitPlaceholders(composed, placeholderValues) : []);
-  const placeholders = $derived(template ? extractVariables(composed) : []);
+  const placeholders = $derived(template ? extractPlaceholders(composed) : []);
+  const canAdapt = $derived(inboundText != null && inboundText.trim().length > 0);
 
   const breadcrumb = $derived.by(() => {
     if (!template) return "";
@@ -269,19 +278,43 @@
     {#if placeholders.length > 0}
       <div class="placeholders">
         <span class="placeholders-label">Fill</span>
-        {#each placeholders as p}
-          <input
-            class="placeholder-input"
-            type="text"
-            placeholder={`{{${p}}}`}
-            value={placeholderValues[p] ?? ""}
-            oninput={(e) => setPlaceholderValue(p, e.currentTarget.value)}
-          />
+        {#each placeholders as p (p.key)}
+          {#if p.kind.type === "choice"}
+            <select
+              class="placeholder-input placeholder-select"
+              value={placeholderValues[p.key] ?? ""}
+              onchange={(e) => setPlaceholderValue(p.key, e.currentTarget.value)}
+              title={p.label}
+            >
+              <option value="">{`{{${p.key}}}`}</option>
+              {#each p.kind.options as opt}
+                <option value={opt}>{opt}</option>
+              {/each}
+            </select>
+          {:else}
+            <input
+              class="placeholder-input"
+              type="text"
+              placeholder={`{{${p.key}}}`}
+              value={placeholderValues[p.key] ?? ""}
+              oninput={(e) => setPlaceholderValue(p.key, e.currentTarget.value)}
+            />
+          {/if}
         {/each}
       </div>
     {/if}
 
     <div class="footer">
+      {#if canAdapt}
+        <button
+          class="base-btn"
+          onclick={onAdaptToInbound}
+          disabled={adaptBusy}
+          title="Adapt this draft to fit the pasted inbound message (uses Sonnet)"
+        >
+          {adaptBusy ? "Adapting…" : "Adapt to inbound"}
+        </button>
+      {/if}
       <button class="base-btn" onclick={onBaseOnTemplate} title="Open this template in the agent editor">
         Base on template
       </button>
@@ -478,6 +511,26 @@
 
   .placeholder-input:focus {
     border-color: var(--border-focus);
+  }
+
+  .placeholder-select {
+    width: auto;
+    min-width: 100px;
+    padding-right: 18px;
+    appearance: none;
+    background-image: linear-gradient(
+      45deg,
+      transparent 50%,
+      var(--accent-info-text) 50%
+    ),
+    linear-gradient(
+      135deg,
+      var(--accent-info-text) 50%,
+      transparent 50%
+    );
+    background-position: calc(100% - 11px) 50%, calc(100% - 7px) 50%;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
   }
 
   .footer {

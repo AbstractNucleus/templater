@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { applyValues, composeText, extractVariables, splitPlaceholders } from "./compose";
+import {
+  applyValues,
+  composeText,
+  extractPlaceholders,
+  parsePlaceholder,
+  splitPlaceholders,
+} from "./compose";
 import type { Template } from "./types";
 
 const baseTemplate: Template = {
@@ -13,6 +19,9 @@ const baseTemplate: Template = {
   pinned: false,
   last_used_at: null,
 };
+
+// Fixed clock for reproducible date tests (local time).
+const FIXED_NOW = new Date(2026, 4, 24, 10, 0, 0); // 2026-05-24 10:00 local
 
 describe("composeText", () => {
   it("joins opening, body, signature with double newlines", () => {
@@ -73,6 +82,29 @@ describe("splitPlaceholders", () => {
       placeholder: true,
     });
   });
+
+  it("auto-fills {{date}} in ISO format", () => {
+    const segs = splitPlaceholders("Today is {{date}}.", {}, FIXED_NOW);
+    expect(segs[1]).toEqual({ text: "2026-05-24", placeholder: true });
+  });
+
+  it("auto-fills {{date:long}}", () => {
+    const segs = splitPlaceholders("Today is {{date:long}}.", {}, FIXED_NOW);
+    expect(segs[1].placeholder).toBe(true);
+    // exact format depends on Intl locale but should contain year + 2026 + May
+    expect(segs[1].text).toMatch(/2026/);
+    expect(segs[1].text).toMatch(/May/);
+  });
+
+  it("resolves {{choice:a|b}} by its full key", () => {
+    const segs = splitPlaceholders("Pick {{choice:yes|no}}.", { "choice:yes|no": "yes" });
+    expect(segs[1]).toEqual({ text: "yes", placeholder: true });
+  });
+
+  it("leaves choice raw when no selection", () => {
+    const segs = splitPlaceholders("Pick {{choice:yes|no}}.", {});
+    expect(segs[1]).toEqual({ text: "{{choice:yes|no}}", placeholder: true });
+  });
 });
 
 describe("applyValues", () => {
@@ -91,18 +123,61 @@ describe("applyValues", () => {
   it("replaces every occurrence", () => {
     expect(applyValues("{{x}} and {{x}}", { x: "y" })).toBe("y and y");
   });
+
+  it("substitutes {{date}} with today's ISO date", () => {
+    expect(applyValues("on {{date}}", {}, FIXED_NOW)).toBe("on 2026-05-24");
+  });
+
+  it("substitutes {{choice:a|b}} via its full key", () => {
+    expect(applyValues("Pick {{choice:yes|no}}.", { "choice:yes|no": "no" })).toBe(
+      "Pick no.",
+    );
+  });
 });
 
-describe("extractVariables", () => {
-  it("returns unique trimmed names in first-seen order", () => {
-    expect(extractVariables("{{a}} {{ b }} {{a}} {{c}}")).toEqual(["a", "b", "c"]);
+describe("parsePlaceholder", () => {
+  it("classifies a bare token as text", () => {
+    const p = parsePlaceholder("name");
+    expect(p.kind).toEqual({ type: "text" });
+    expect(p.key).toBe("name");
+  });
+
+  it("classifies date with default ISO format", () => {
+    expect(parsePlaceholder("date").kind).toEqual({ type: "date", format: "iso" });
+  });
+
+  it("classifies date:long", () => {
+    expect(parsePlaceholder("date:long").kind).toEqual({ type: "date", format: "long" });
+  });
+
+  it("parses choice options", () => {
+    const p = parsePlaceholder("choice:yes|no|maybe");
+    expect(p.kind).toEqual({ type: "choice", options: ["yes", "no", "maybe"] });
+    expect(p.label).toBe("yes / no / maybe");
+  });
+});
+
+describe("extractPlaceholders", () => {
+  it("returns unique placeholders in first-seen order", () => {
+    const out = extractPlaceholders("{{a}} {{ b }} {{a}} {{c}}");
+    expect(out.map((p) => p.key)).toEqual(["a", "b", "c"]);
   });
 
   it("returns empty for no placeholders", () => {
-    expect(extractVariables("plain")).toEqual([]);
+    expect(extractPlaceholders("plain")).toEqual([]);
   });
 
   it("skips empty placeholder names", () => {
-    expect(extractVariables("{{ }} {{x}}")).toEqual(["x"]);
+    expect(extractPlaceholders("{{ }} {{x}}").map((p) => p.key)).toEqual(["x"]);
+  });
+
+  it("excludes date placeholders (no UI needed)", () => {
+    expect(extractPlaceholders("{{name}} on {{date}}").map((p) => p.key)).toEqual(["name"]);
+  });
+
+  it("includes choice placeholders", () => {
+    const out = extractPlaceholders("{{choice:yes|no}}");
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toEqual({ type: "choice", options: ["yes", "no"] });
   });
 });

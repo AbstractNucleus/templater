@@ -6,23 +6,28 @@
     selectedTagIds,
     excludedTagIds,
     tagCombinator,
+    tagOrder,
     width,
     onTagToggle,
     onTagExclude,
     onTagsClear,
     onCombinatorToggle,
     onContextEmpty,
+    onTagReorder,
   }: {
     templates: Template[];
     selectedTagIds: Set<string>;
     excludedTagIds: Set<string>;
     tagCombinator: "and" | "or";
+    /** Persisted order from drag-reorder. Tags not in this list fall back to count-desc. */
+    tagOrder: string[];
     width: number;
     onTagToggle: (tag: string) => void;
     onTagExclude: (tag: string) => void;
     onTagsClear: () => void;
     onCombinatorToggle: () => void;
     onContextEmpty: (x: number, y: number) => void;
+    onTagReorder: (newOrder: string[]) => void;
   } = $props();
 
   function handleSidebarContext(e: MouseEvent): void {
@@ -36,7 +41,19 @@
     for (const t of templates) {
       for (const tag of t.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    // Honor persisted order first, then fall back to count-desc / name-asc.
+    const orderIndex = new Map<string, number>();
+    tagOrder.forEach((t, i) => orderIndex.set(t, i));
+    const all = [...counts.entries()];
+    all.sort((a, b) => {
+      const ai = orderIndex.get(a[0]);
+      const bi = orderIndex.get(b[0]);
+      if (ai !== undefined && bi !== undefined) return ai - bi;
+      if (ai !== undefined) return -1;
+      if (bi !== undefined) return 1;
+      return b[1] - a[1] || a[0].localeCompare(b[0]);
+    });
+    return all;
   });
 
   const hasAnyFilter = $derived(selectedTagIds.size > 0 || excludedTagIds.size > 0);
@@ -50,6 +67,55 @@
     e.preventDefault();
     e.stopPropagation();
     onTagExclude(tag);
+  }
+
+  let draggingTag = $state<string | null>(null);
+  let dragOverTag = $state<string | null>(null);
+  let dragOverHalf = $state<"top" | "bottom">("top");
+
+  function handleDragStart(e: DragEvent, tag: string): void {
+    draggingTag = tag;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", tag);
+    }
+  }
+
+  function handleDragOver(e: DragEvent, overTag: string): void {
+    if (draggingTag === null) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    dragOverHalf = e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
+    dragOverTag = overTag;
+  }
+
+  function handleDragLeave(overTag: string): void {
+    if (dragOverTag === overTag) dragOverTag = null;
+  }
+
+  function handleDrop(e: DragEvent, overTag: string): void {
+    if (draggingTag === null) return;
+    e.preventDefault();
+    const fromTag = draggingTag;
+    const half = dragOverHalf;
+    draggingTag = null;
+    dragOverTag = null;
+    if (fromTag === overTag) return;
+    const visible = tagCounts.map(([tag]) => tag);
+    const fromIdx = visible.indexOf(fromTag);
+    if (fromIdx < 0) return;
+    visible.splice(fromIdx, 1);
+    let toIdx = visible.indexOf(overTag);
+    if (toIdx < 0) return;
+    if (half === "bottom") toIdx += 1;
+    visible.splice(toIdx, 0, fromTag);
+    onTagReorder(visible);
+  }
+
+  function handleDragEnd(): void {
+    draggingTag = null;
+    dragOverTag = null;
   }
 </script>
 
@@ -82,6 +148,15 @@
           class="tag"
           class:active={selectedTagIds.has(tag)}
           class:excluded={excludedTagIds.has(tag)}
+          class:dragging={draggingTag === tag}
+          class:drag-over-top={dragOverTag === tag && dragOverHalf === "top"}
+          class:drag-over-bottom={dragOverTag === tag && dragOverHalf === "bottom"}
+          draggable={true}
+          ondragstart={(e) => handleDragStart(e, tag)}
+          ondragover={(e) => handleDragOver(e, tag)}
+          ondragleave={() => handleDragLeave(tag)}
+          ondrop={(e) => handleDrop(e, tag)}
+          ondragend={handleDragEnd}
           onclick={() => handleTagClick(tag)}
           oncontextmenu={(e) => handleTagContext(e, tag)}
         >
@@ -185,6 +260,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    position: relative;
   }
 
   .tag-count {
@@ -213,6 +289,29 @@
   .tag.excluded .tag-count {
     color: var(--accent-danger-text);
     opacity: 0.7;
+  }
+
+  .tag.dragging {
+    opacity: 0.4;
+  }
+
+  .tag.drag-over-top::before,
+  .tag.drag-over-bottom::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    height: 2px;
+    background: var(--accent-info-border);
+    border-radius: 1px;
+  }
+
+  .tag.drag-over-top::before {
+    top: -1px;
+  }
+
+  .tag.drag-over-bottom::after {
+    bottom: -1px;
   }
 
   .empty {

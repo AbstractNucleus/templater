@@ -30,6 +30,8 @@ export type Mode = "editor" | "user";
 
 export type PasteBackend = "agent" | "api";
 
+export type SortMode = "manual" | "recent";
+
 export interface Settings {
   always_on_top_default: boolean;
   global_hotkey: string;
@@ -44,6 +46,11 @@ export interface Settings {
   paste_backend: PasteBackend;
   /** Per-template placeholder fill-ins. Outer key: template id; inner: var → value. */
   placeholder_values: Record<string, Record<string, string>>;
+  /** "recent" sorts non-pinned by last_used_at; "manual" preserves drag order. */
+  sort_mode: SortMode;
+  /** Persisted tag order from drag-reorder. Tags absent here fall back to count-desc. */
+  tag_order: string[];
+  onboarding_complete: boolean;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -71,4 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   column_widths: DEFAULT_COLUMN_WIDTHS,
   paste_backend: "agent",
   placeholder_values: {},
+  sort_mode: "recent",
+  tag_order: [],
+  onboarding_complete: false,
 };

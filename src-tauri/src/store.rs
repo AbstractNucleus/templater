@@ -99,6 +99,12 @@ pub struct Settings {
     pub paste_backend: String,
     #[serde(default)]
     pub placeholder_values: HashMap<String, HashMap<String, String>>,
+    #[serde(default = "default_sort_mode")]
+    pub sort_mode: String,
+    #[serde(default)]
+    pub tag_order: Vec<String>,
+    #[serde(default)]
+    pub onboarding_complete: bool,
 }
 
 fn default_theme() -> String {
@@ -117,6 +123,10 @@ fn default_paste_backend() -> String {
     "agent".to_string()
 }
 
+fn default_sort_mode() -> String {
+    "recent".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -132,6 +142,9 @@ impl Default for Settings {
             column_widths: ColumnWidths::default(),
             paste_backend: default_paste_backend(),
             placeholder_values: HashMap::new(),
+            sort_mode: default_sort_mode(),
+            tag_order: Vec::new(),
+            onboarding_complete: false,
         }
     }
 }

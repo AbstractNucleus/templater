@@ -1,6 +1,12 @@
 <script lang="ts">
   import type { Mode, PasteBackend, Settings, Theme } from "$lib/types";
-  import { setHotkey, type BackupEntry } from "$lib/api";
+  import {
+    setHotkey,
+    getSidecarDiagnostics,
+    openClaudeLogin,
+    type BackupEntry,
+    type SidecarDiagnostics,
+  } from "$lib/api";
 
   type PortResult =
     | { kind: "ok"; message: string }
@@ -27,6 +33,7 @@
     settings,
     envApiKeyOverride,
     currentVersion,
+    tagCounts,
     onClose,
     onUpdate,
     onExportTemplates,
@@ -34,10 +41,15 @@
     onCheckUpdate,
     onListBackups,
     onRestoreBackup,
+    onRenameTag,
+    onDeleteTag,
+    onOpenCheatSheet,
   }: {
     settings: Settings;
     envApiKeyOverride: boolean;
     currentVersion: string;
+    /** Tag name → number of templates using it, sorted by display order. */
+    tagCounts: [string, number][];
     onClose: () => void;
     onUpdate: (next: Settings) => void;
     onExportTemplates: () => Promise<PortResult>;
@@ -45,6 +57,11 @@
     onCheckUpdate: () => Promise<UpdateInfo | null>;
     onListBackups: () => Promise<BackupEntry[]>;
     onRestoreBackup: (name: string) => Promise<void>;
+    /** Rename `from` to `to` across every template that uses it. */
+    onRenameTag: (from: string, to: string) => Promise<void>;
+    /** Strip `tag` from every template that has it. */
+    onDeleteTag: (tag: string) => Promise<void>;
+    onOpenCheatSheet: () => void;
   } = $props();
 
   let backups = $state<BackupEntry[] | null>(null);
@@ -184,6 +201,98 @@
     onUpdate({ ...settings, paste_backend: next });
   }
 
+  // Diagnostics: polls every 2s while the modal is open. Cheap (a lock + clone)
+  // and lets the user watch in-flight requests land in real time.
+  let diagnostics = $state<SidecarDiagnostics | null>(null);
+  let diagError = $state<string | null>(null);
+
+  $effect(() => {
+    let cancelled = false;
+    async function load(): Promise<void> {
+      try {
+        const d = await getSidecarDiagnostics();
+        if (!cancelled) diagnostics = d;
+      } catch (e) {
+        if (!cancelled) diagError = String(e);
+      }
+    }
+    void load();
+    const id = setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  });
+
+  function formatTimeOfDay(ms: number): string {
+    return new Date(ms).toLocaleTimeString();
+  }
+
+  let claudeLoginBusy = $state(false);
+  let claudeLoginError = $state<string | null>(null);
+  async function handleClaudeLogin(): Promise<void> {
+    claudeLoginBusy = true;
+    claudeLoginError = null;
+    try {
+      await openClaudeLogin();
+    } catch (e) {
+      claudeLoginError = String(e);
+    } finally {
+      claudeLoginBusy = false;
+    }
+  }
+
+  // Tag management: rename moves every occurrence of `from` → `to`; delete
+  // strips the tag from every template. Both go through the parent so the
+  // undo stack covers them.
+  let renamingTag = $state<string | null>(null);
+  let renameDraft = $state("");
+  let tagBusy = $state(false);
+  let tagError = $state<string | null>(null);
+
+  function startRename(tag: string): void {
+    renamingTag = tag;
+    renameDraft = tag;
+    tagError = null;
+  }
+
+  function cancelRename(): void {
+    renamingTag = null;
+    renameDraft = "";
+  }
+
+  async function commitRename(): Promise<void> {
+    if (!renamingTag) return;
+    const from = renamingTag;
+    const to = renameDraft.trim();
+    if (to.length === 0 || to === from) {
+      cancelRename();
+      return;
+    }
+    tagBusy = true;
+    tagError = null;
+    try {
+      await onRenameTag(from, to);
+      cancelRename();
+    } catch (e) {
+      tagError = String(e);
+    } finally {
+      tagBusy = false;
+    }
+  }
+
+  async function commitDelete(tag: string): Promise<void> {
+    tagBusy = true;
+    tagError = null;
+    try {
+      await onDeleteTag(tag);
+    } catch (e) {
+      tagError = String(e);
+    } finally {
+      tagBusy = false;
+    }
+  }
+
   function handleBackdrop(e: MouseEvent): void {
     if (e.target === e.currentTarget) onClose();
   }
@@ -301,9 +410,21 @@
       {#if settings.paste_backend === "agent"}
         <div class="hint">
           Uses your Claude subscription via the Agent SDK — bills against the subscription
-          credit pool even when <code>ANTHROPIC_API_KEY</code> is set. Sign in via
-          <code>claude login</code> if paste-match fails.
+          credit pool even when <code>ANTHROPIC_API_KEY</code> is set.
         </div>
+        <div class="port-row">
+          <button class="port-btn" disabled={claudeLoginBusy} onclick={handleClaudeLogin}>
+            {claudeLoginBusy ? "Opening terminal…" : "Sign in to Claude"}
+          </button>
+        </div>
+        {#if claudeLoginError}
+          <div class="capture-error">{claudeLoginError}</div>
+        {:else}
+          <div class="hint">
+            Opens a terminal running <code>claude login</code>. Complete the auth flow there;
+            the app picks up the new session on the next paste-match call.
+          </div>
+        {/if}
       {:else if envApiKeyOverride}
         <div class="hint">
           Calls Anthropic's Messages API directly with <code>ANTHROPIC_API_KEY</code>. Billed at
@@ -376,6 +497,65 @@
         {/if}
       </div>
     </section>
+
+    {#if settings.mode === "editor"}
+      <section>
+        <div class="section-label">Tags</div>
+        {#if tagCounts.length === 0}
+          <div class="hint">No tags yet.</div>
+        {:else}
+          <ul class="tag-manage-list">
+            {#each tagCounts as [tag, count] (tag)}
+              <li class="tag-manage-row">
+                {#if renamingTag === tag}
+                  <input
+                    class="tag-rename-input"
+                    type="text"
+                    bind:value={renameDraft}
+                    disabled={tagBusy}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void commitRename();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        cancelRename();
+                      }
+                    }}
+                  />
+                  <button class="tag-btn" disabled={tagBusy} onclick={() => void commitRename()}>
+                    Save
+                  </button>
+                  <button class="tag-btn" disabled={tagBusy} onclick={cancelRename}>Cancel</button>
+                {:else}
+                  <span class="tag-name">{tag}</span>
+                  <span class="tag-count-tag">{count}</span>
+                  <div class="tag-actions">
+                    <button class="tag-btn" disabled={tagBusy} onclick={() => startRename(tag)}>
+                      Rename
+                    </button>
+                    <button
+                      class="tag-btn danger"
+                      disabled={tagBusy}
+                      onclick={() => void commitDelete(tag)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        {#if tagError}
+          <div class="capture-error">{tagError}</div>
+        {/if}
+        <div class="hint">
+          Rename moves every occurrence; Remove strips the tag from every template that has it.
+          Both go through the undo stack — Ctrl+Z reverts.
+        </div>
+      </section>
+    {/if}
 
     <section>
       <div class="section-label">Backups</div>
@@ -464,6 +644,54 @@
       </div>
       {#if captureError}
         <div class="capture-error">{captureError}</div>
+      {/if}
+    </section>
+
+    <section>
+      <div class="section-label">Keyboard shortcuts</div>
+      <div class="port-row">
+        <button class="port-btn" onclick={onOpenCheatSheet}>Show cheat sheet</button>
+      </div>
+      <div class="hint">Or press <code>?</code> any time the search isn't focused.</div>
+    </section>
+
+    <section>
+      <div class="section-label">Diagnostics</div>
+      {#if diagError}
+        <div class="capture-error">{diagError}</div>
+      {:else if !diagnostics}
+        <div class="hint">Loading…</div>
+      {:else}
+        <div class="hint">
+          Sidecar state:
+          <span class:state-ok={diagnostics.state === "active"} class:state-bad={diagnostics.state === "unavailable"}>
+            <strong>{diagnostics.state}</strong>
+          </span>
+          {#if diagnostics.state_reason}
+            <span class="diag-reason"> — {diagnostics.state_reason}</span>
+          {/if}
+        </div>
+        {#if diagnostics.entries.length === 0}
+          <div class="hint">No requests yet this session.</div>
+        {:else}
+          <ul class="diag-list">
+            {#each diagnostics.entries.slice(-12).reverse() as e (e.started_at_ms)}
+              <li class="diag-row" class:bad={!e.ok}>
+                <span class="diag-time">{formatTimeOfDay(e.started_at_ms)}</span>
+                <span class="diag-op">{e.op}</span>
+                <span class="diag-duration">{e.duration_ms}ms</span>
+                <span class="diag-status">{e.ok ? "ok" : "err"}</span>
+                {#if e.error}
+                  <span class="diag-err" title={e.error}>{e.error}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          <div class="hint">
+            Most recent first. Polled every 2s while this panel is open. The full ring keeps the
+            last 50 calls.
+          </div>
+        {/if}
       {/if}
     </section>
 
@@ -840,5 +1068,171 @@
 
   .port-btn.danger:hover:not(:disabled) {
     background: var(--accent-danger-border);
+  }
+
+  .tag-manage-list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .tag-manage-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.82rem;
+  }
+
+  .tag-manage-row:last-child {
+    border-bottom: none;
+  }
+
+  .tag-manage-row .tag-name {
+    flex: 1;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tag-manage-row .tag-count-tag {
+    color: var(--text-subtle);
+    font-size: 0.74rem;
+    min-width: 28px;
+    text-align: right;
+  }
+
+  .tag-actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .tag-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.72rem;
+  }
+
+  .tag-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+
+  .tag-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+
+  .tag-btn.danger {
+    color: var(--accent-danger-text);
+    border-color: var(--accent-danger-border);
+  }
+
+  .tag-btn.danger:hover:not(:disabled) {
+    background: var(--accent-danger-bg);
+  }
+
+  .tag-rename-input {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font: inherit;
+    font-size: 0.78rem;
+  }
+
+  .tag-rename-input:focus {
+    outline: none;
+    border-color: var(--border-focus);
+  }
+
+  .diag-list {
+    list-style: none;
+    margin: 4px 0 6px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.74rem;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .diag-row {
+    display: flex;
+    gap: 10px;
+    padding: 3px 8px;
+    border-bottom: 1px solid var(--border);
+    align-items: baseline;
+  }
+
+  .diag-row:last-child {
+    border-bottom: none;
+  }
+
+  .diag-row.bad {
+    background: var(--rank-error-bg);
+  }
+
+  .diag-time {
+    color: var(--text-subtle);
+    flex-shrink: 0;
+    width: 78px;
+  }
+
+  .diag-op {
+    color: var(--text);
+    flex-shrink: 0;
+    width: 110px;
+  }
+
+  .diag-duration {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    width: 60px;
+    text-align: right;
+  }
+
+  .diag-status {
+    color: var(--accent-positive-text);
+    flex-shrink: 0;
+    width: 32px;
+  }
+
+  .diag-row.bad .diag-status {
+    color: var(--accent-danger-text);
+  }
+
+  .diag-err {
+    color: var(--accent-danger-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  .state-ok strong {
+    color: var(--accent-positive-text);
+  }
+
+  .state-bad strong {
+    color: var(--accent-danger-text);
+  }
+
+  .diag-reason {
+    color: var(--text-muted);
   }
 </style>
