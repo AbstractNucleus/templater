@@ -36,6 +36,14 @@
       ],
     },
     {
+      label: "Placeholders",
+      rows: [
+        { keys: "{{name}}", desc: "Free-text variable, filled in before copy" },
+        { keys: "{{date}}", desc: "Today's date. Use {{date:long}} for long format" },
+        { keys: "{{choice:a|b|c}}", desc: "Dropdown picker with the listed options" },
+      ],
+    },
+    {
       label: "Selection",
       rows: [
         { keys: "Click", desc: "Select one template" },
