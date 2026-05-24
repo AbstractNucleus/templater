@@ -22,6 +22,7 @@ export interface ColumnWidths {
   tags: number;
   templates: number;
   agent: number;
+  context: number;
 }
 
 export type Theme = "dark" | "light";
@@ -51,12 +52,15 @@ export interface Settings {
   /** Persisted tag order from drag-reorder. Tags absent here fall back to count-desc. */
   tag_order: string[];
   onboarding_complete: boolean;
+  /** Absolute paths to folders the AI may consult during adapt + edit. */
+  context_sources: string[];
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   tags: 180,
   templates: 260,
   agent: 340,
+  context: 360,
 };
 
 export interface AppData {
@@ -81,4 +85,5 @@ export const DEFAULT_SETTINGS: Settings = {
   sort_mode: "recent",
   tag_order: [],
   onboarding_complete: false,
+  context_sources: [],
 };

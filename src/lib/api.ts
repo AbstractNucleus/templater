@@ -152,16 +152,153 @@ export async function editTemplate(
   return { reasoning: res.reasoning ?? "", updated: res.updated };
 }
 
+export interface ContextUsage {
+  path: string;
+  summary: string;
+  reason: string;
+}
+
+interface AdaptResponse extends EditResponse {
+  context_used?: ContextUsage[];
+}
+
 export async function adaptTemplate(
   draft: EditedDraft,
   inbound: string,
   backend: PasteBackend,
-): Promise<{ reasoning: string; updated: EditedDraft }> {
-  const res = await invoke<EditResponse>("adapt_template", { draft, inbound, backend });
+): Promise<{ reasoning: string; updated: EditedDraft; contextUsed: ContextUsage[] }> {
+  const res = await invoke<AdaptResponse>("adapt_template", { draft, inbound, backend });
   if (!res.ok || !res.updated) {
     throw new Error(res.error ?? "adapt failed");
   }
-  return { reasoning: res.reasoning ?? "", updated: res.updated };
+  return {
+    reasoning: res.reasoning ?? "",
+    updated: res.updated,
+    contextUsed: res.context_used ?? [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Context corpus
+// ---------------------------------------------------------------------------
+
+export type ContextFileStatus = "pending" | "ingested" | "failed";
+
+export interface ContextSourceStatus {
+  path: string;
+  file_count: number;
+  ingested_count: number;
+  failed_count: number;
+  pending_count: number;
+  last_ingested_at: number | null;
+  exists: boolean;
+}
+
+export interface ContextStatus {
+  sources: ContextSourceStatus[];
+  in_flight: number;
+}
+
+export interface ContextFile {
+  path: string;
+  source_root: string;
+  ext: string;
+  mtime_ms: number;
+  size_bytes?: number;
+  summary: string;
+  tags: string[];
+  status: ContextFileStatus;
+  error: string | null;
+  ingested_at: number | null;
+}
+
+export interface ContextSearchHit {
+  path: string;
+  source_root: string;
+  ext: string;
+  mtime_ms: number;
+  summary: string;
+  tags: string[];
+  score: number;
+}
+
+interface OkResponse {
+  ok: boolean;
+  error?: string;
+  [k: string]: unknown;
+}
+
+function unwrap<T>(res: OkResponse, key: string, fallback: T, action: string): T {
+  if (!res.ok) throw new Error(res.error ?? `${action} failed`);
+  return (res[key] as T) ?? fallback;
+}
+
+export async function setContextSources(
+  sources: string[],
+  backend: PasteBackend,
+): Promise<ContextStatus> {
+  const res = await invoke<OkResponse>("context_set_sources", { sources, backend });
+  return unwrap<ContextStatus>(res, "status", { sources: [], in_flight: 0 }, "set sources");
+}
+
+export async function getContextStatus(): Promise<ContextStatus> {
+  const res = await invoke<OkResponse>("context_status");
+  return unwrap<ContextStatus>(res, "status", { sources: [], in_flight: 0 }, "context status");
+}
+
+export async function listContextFiles(source?: string): Promise<ContextFile[]> {
+  const res = await invoke<OkResponse>("context_list_files", { source: source ?? null });
+  return unwrap<ContextFile[]>(res, "files", [], "list files");
+}
+
+export async function rescanContext(source?: string): Promise<ContextStatus> {
+  const res = await invoke<OkResponse>("context_rescan", { source: source ?? null });
+  return unwrap<ContextStatus>(res, "status", { sources: [], in_flight: 0 }, "rescan");
+}
+
+export interface ContextFileText {
+  path: string;
+  text: string;
+  truncated: boolean;
+}
+
+export async function readContextFile(path: string): Promise<ContextFileText> {
+  const res = await invoke<OkResponse>("context_read_file", { path });
+  if (!res.ok) throw new Error(res.error ?? "read file failed");
+  return {
+    path: String(res.path ?? path),
+    text: String(res.text ?? ""),
+    truncated: Boolean(res.truncated),
+  };
+}
+
+export async function searchContext(query: string, limit?: number): Promise<ContextSearchHit[]> {
+  const res = await invoke<OkResponse>("context_search", { query, limit: limit ?? null });
+  return unwrap<ContextSearchHit[]>(res, "files", [], "search");
+}
+
+export interface CaptureMemoryResult {
+  appendedTo: string;
+  signal: string;
+}
+
+export async function captureMemory(
+  raw: string,
+  source: string,
+  filename: string | undefined,
+  backend: PasteBackend,
+): Promise<CaptureMemoryResult> {
+  const res = await invoke<OkResponse>("context_capture_memory", {
+    raw,
+    source,
+    filename: filename ?? null,
+    backend,
+  });
+  if (!res.ok) throw new Error(res.error ?? "capture failed");
+  return {
+    appendedTo: String(res.appendedTo ?? ""),
+    signal: String(res.signal ?? ""),
+  };
 }
 
 export interface DiagEntry {

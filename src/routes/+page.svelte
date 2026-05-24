@@ -11,6 +11,7 @@
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
   import CheatSheet from "$lib/components/CheatSheet.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
+  import ContextPane from "$lib/components/ContextPane.svelte";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { starterTemplates } from "$lib/starterTemplates";
@@ -32,6 +33,7 @@
     onSidecarProgress,
     listTemplateBackups,
     restoreTemplateBackup,
+    setContextSources,
     type Ranking,
     type ChatTurn,
   } from "$lib/api";
@@ -56,9 +58,13 @@
   const TAGS_MAX = 400;
   const TEMPLATES_MIN = 160;
   const TEMPLATES_MAX = 500;
+  const CONTEXT_MIN = 280;
+  const CONTEXT_MAX = 600;
 
   let tagsWidth = $state(DEFAULT_COLUMN_WIDTHS.tags);
   let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
+  let contextWidth = $state(DEFAULT_COLUMN_WIDTHS.context);
+  let contextOpen = $state(false);
   let searchInput: HTMLInputElement | undefined = $state();
 
   function clearSearch(): void {
@@ -301,25 +307,42 @@
     }
   }
 
-  function startResize(target: "tags" | "templates" | "agent"): (e: PointerEvent) => void {
+  function startResize(target: "tags" | "templates" | "agent" | "context"): (e: PointerEvent) => void {
     return (e) => {
       e.preventDefault();
       const handle = e.currentTarget as HTMLElement;
       const startX = e.clientX;
-      const startWidth =
-        target === "tags" ? tagsWidth : target === "templates" ? templatesWidth : agentSidebarWidth;
+      const widthOf = (t: typeof target): number =>
+        t === "tags" ? tagsWidth : t === "templates" ? templatesWidth : t === "agent" ? agentSidebarWidth : contextWidth;
+      const startWidth = widthOf(target);
       const min =
-        target === "tags" ? TAGS_MIN : target === "templates" ? TEMPLATES_MIN : AGENT_MIN;
+        target === "tags"
+          ? TAGS_MIN
+          : target === "templates"
+            ? TEMPLATES_MIN
+            : target === "agent"
+              ? AGENT_MIN
+              : CONTEXT_MIN;
       const max =
-        target === "tags" ? TAGS_MAX : target === "templates" ? TEMPLATES_MAX : AGENT_MAX;
+        target === "tags"
+          ? TAGS_MAX
+          : target === "templates"
+            ? TEMPLATES_MAX
+            : target === "agent"
+              ? AGENT_MAX
+              : CONTEXT_MAX;
+      // Context pane sits on the RIGHT; dragging its handle left should grow
+      // the pane, which means inverting the X delta.
+      const sign = target === "context" ? -1 : 1;
       handle.setPointerCapture(e.pointerId);
       handle.classList.add("dragging");
 
       function onMove(ev: PointerEvent): void {
-        const next = Math.max(min, Math.min(max, startWidth + ev.clientX - startX));
+        const next = Math.max(min, Math.min(max, startWidth + sign * (ev.clientX - startX)));
         if (target === "tags") tagsWidth = next;
         else if (target === "templates") templatesWidth = next;
-        else agentSidebarWidth = next;
+        else if (target === "agent") agentSidebarWidth = next;
+        else contextWidth = next;
       }
 
       function onUp(): void {
@@ -328,11 +351,7 @@
         handle.removeEventListener("pointercancel", onUp);
         handle.releasePointerCapture(e.pointerId);
         handle.classList.remove("dragging");
-        const final = target === "tags"
-          ? tagsWidth
-          : target === "templates"
-            ? templatesWidth
-            : agentSidebarWidth;
+        const final = widthOf(target);
         if (final !== settings.column_widths[target]) {
           void persist(templates, {
             ...settings,
@@ -592,6 +611,7 @@
         tagsWidth = settings.column_widths.tags;
         templatesWidth = settings.column_widths.templates;
         agentSidebarWidth = settings.column_widths.agent;
+        contextWidth = settings.column_widths.context ?? DEFAULT_COLUMN_WIDTHS.context;
         selectedTemplateId = templates[0]?.id ?? null;
       } catch (e) {
         loadError = String(e);
@@ -1027,7 +1047,7 @@
     if (inbound.length < PASTE_THRESHOLD) return;
     adaptBusy = true;
     try {
-      const { reasoning, updated } = await adaptTemplate(
+      const { reasoning, updated, contextUsed } = await adaptTemplate(
         { opening: src.opening, body: src.body },
         inbound,
         settings.paste_backend,
@@ -1037,9 +1057,14 @@
       baseKind = "base";
       baseSourceName = src.name;
       baseDraft = updated;
+      const reasoningText = reasoning || "(no reasoning provided)";
+      const contextLine =
+        contextUsed.length > 0
+          ? `\n\nConsulted context: ${contextUsed.map((c) => c.path.split(/[\\/]/).pop()).join(", ")}`
+          : "";
       agentMessages = [
         { role: "user", content: `Adapt this template to the inbound message:\n\n${inbound}` },
-        { role: "assistant", content: reasoning || "(no reasoning provided)" },
+        { role: "assistant", content: reasoningText + contextLine },
       ];
       agentError = null;
       agentBusy = false;
@@ -1291,6 +1316,17 @@
     }
   });
 
+  // Keep the sidecar's source list in sync with persisted settings. Idempotent
+  // on the sidecar side — repeat calls with the same args are cheap.
+  $effect(() => {
+    if (!loaded) return;
+    const sources = settings.context_sources;
+    const backend = settings.paste_backend;
+    void setContextSources(sources, backend).catch(() => {
+      /* sidecar may be down; pane will surface the error */
+    });
+  });
+
   $effect(() => {
     // Webview-level zoom (Ctrl+/− style) reflows scrollbars and hit-testing
     // correctly — CSS `zoom` clips fixed-height flex layouts.
@@ -1302,7 +1338,11 @@
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
 
 <div class="frame">
-  <TitleBar onOpenSettings={() => (settingsOpen = true)} />
+  <TitleBar
+    onOpenSettings={() => (settingsOpen = true)}
+    onToggleContext={() => (contextOpen = !contextOpen)}
+    {contextOpen}
+  />
   {#if !baseMode}
     <div class="search-row">
       <div class="search-wrap">
@@ -1431,6 +1471,23 @@
         onAdaptToInbound={() => void adaptToInbound()}
         onCopySuccess={(id) => void recordCopy(id)}
         onPlaceholderValuesChange={(id, vals) => void recordPlaceholderValues(id, vals)}
+      />
+    {/if}
+    {#if contextOpen && loaded}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="col-resize"
+        title="Drag to resize"
+        onpointerdown={startResize("context")}
+      ></div>
+      <ContextPane
+        width={contextWidth}
+        sources={settings.context_sources}
+        backend={settings.paste_backend}
+        onClose={() => (contextOpen = false)}
+        onSourcesChange={async (next) => {
+          await persist(templates, { ...settings, context_sources: next });
+        }}
       />
     {/if}
     {#if loadError}

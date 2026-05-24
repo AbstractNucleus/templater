@@ -1,7 +1,15 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
 
-  let { onOpenSettings }: { onOpenSettings: () => void } = $props();
+  let {
+    onOpenSettings,
+    onToggleContext,
+    contextOpen,
+  }: {
+    onOpenSettings: () => void;
+    onToggleContext: () => void;
+    contextOpen: boolean;
+  } = $props();
 
   let pinned = $state(false);
 
@@ -42,6 +50,13 @@
     >
       {pinned ? "📌" : "📍"}
     </button>
+    <button
+      class="btn"
+      class:active={contextOpen}
+      title={contextOpen ? "Hide context" : "Show context"}
+      aria-pressed={contextOpen}
+      onclick={onToggleContext}
+    >📚</button>
     <button class="btn" title="Settings" onclick={onOpenSettings}>⚙</button>
     <button class="btn" title="Minimise" onclick={minimise}>—</button>
     <button class="btn close-btn" title="Close to tray" onclick={close}>×</button>

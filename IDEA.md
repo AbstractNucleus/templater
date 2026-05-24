@@ -27,10 +27,11 @@ Originated from vault page `[[templates-widget]]` (promoted 2026-05-19). Origina
 |---|---|
 | `src-tauri/src/lib.rs` | Tauri builder, all `#[tauri::command]`s, tray + global hotkey + window-lifecycle setup |
 | `src-tauri/src/store.rs` | Two-file atomic read/write (`templates.json` + `settings.json`); legacy unified-file and v0 migrations |
-| `src-tauri/src/sidecar.rs` | Spawns `npx tsx sidecar/index.ts` at startup; serialised request/response over stdio JSON |
-| `sidecar/index.ts` | `ping`, `rank`, `edit-template` ops; warm-subprocess management for `rank` |
+| `src-tauri/src/sidecar.rs` | Spawns `npx tsx sidecar/index.ts <app_data_dir>` at startup; serialised request/response over stdio JSON |
+| `sidecar/index.ts` | `ping`, `rank`, `edit-template`, `adapt-template`, all `context-*` ops; warm-subprocess management for `rank`; pre-fetch retrieval for adapt + edit |
+| `sidecar/context.ts` | Context corpus: SQLite (`node:sqlite`) index, chokidar watcher, file extractors (md/pdf/xlsx), Haiku summarizer wiring, file picker, memory capture |
 | `src/routes/+page.svelte` | Top-level page; holds app state and orchestrates components |
-| `src/lib/components/` | `TitleBar`, `TagsSidebar`, `TemplatesSidebar`, `MainPanel`, `AgentSidebar`, `EditorPane`, `SaveAsModal`, `ContextMenu`, `ResizeHandles`, `SettingsModal` |
+| `src/lib/components/` | `TitleBar`, `TagsSidebar`, `TemplatesSidebar`, `MainPanel`, `AgentSidebar`, `EditorPane`, `SaveAsModal`, `ContextMenu`, `ResizeHandles`, `SettingsModal`, `ContextPane` |
 | `src/lib/api.ts` | Thin `invoke()` wrappers + `explainRankError` |
 | `src/lib/types.ts` | `Template`, `Settings`, `AppData`, `DEFAULT_SETTINGS` |
 | `src/lib/mocks.ts` | Seed templates used on first launch when no data file exists |
@@ -202,6 +203,54 @@ Error states:
 - No strong matches → "No strong matches" with literal search results as fallback.
 
 Architecture: catalog is inlined into the prompt (no embeddings, no vector DB). At personal scale (<200 templates) the SDK credit cost is trivial — a Max20 plan ($200/mo Agent SDK credit) easily absorbs hundreds of matches a day.
+
+## Context system
+
+The context system gives the AI access to reference material (markdown, PDF, Excel) the user keeps in folders of their choice. Adapt and edit calls consult it; rank doesn't (latency budget too tight).
+
+**Storage:**
+
+- `context.db` next to `templates.json` / `settings.json`. SQLite via `node:sqlite` (built into Node 22.5+, zero native deps — picked over `better-sqlite3` so the prod bundle stays free of node-gyp compile steps).
+- One row per file: `{ path, source_root, mtime_ms, size_bytes, ext, extracted_text, summary, tags, status, error, ingested_at }`.
+- Source-root list lives in `settings.context_sources` (portable as part of settings).
+
+**Ingest pipeline (per file, on add or mtime change):**
+
+1. Extract text — `fs.readFile` for `.md`/`.txt`/`.csv`, `pdf-parse` for `.pdf`, SheetJS (`xlsx`) for `.xlsx`/`.xls`.
+2. Cap at 200k chars per file.
+3. Send the first 8k chars + filename to Haiku for `{ summary, tags }` (one to two sentences, 3-6 lowercase topic tags).
+4. Upsert into SQLite, marking `status = 'ingested'` (or `'failed'` with an error message).
+
+Concurrency: a fixed 4-wide worker pool drains the ingest queue; `chokidar` watchers per source root keep it fed. Cold-scan on source-add walks the tree once.
+
+**Retrieval (pre-fetch pattern, not agentic tool-use):**
+
+When adapt or edit runs against a non-empty index:
+
+1. Haiku gets the file list (path | summary | tags) + the query (inbound text for adapt, prompt+draft for edit) and returns 0-3 picks via structured output.
+2. The sidecar reads each picked file's extracted text (capped at 30k chars).
+3. Picks are embedded in the draft call's `systemPrompt` as a `FILE: … WHY: … CONTENT:` block. Sonnet drafts with them in scope.
+4. The response carries `context_used: [{ path, summary, reason }, ...]` so the UI can show which files informed the draft.
+
+Pre-fetch was chosen over agentic MCP tool-use because (a) the Agent SDK and Anthropic API have different tool surfaces, so one pre-fetch path serves both backends, and (b) at this scale a single Haiku pick is as good as multiple round trips. Picker fall-back: if the file count exceeds 200, prefilter by keyword overlap before sending to Haiku.
+
+**Capture memory:**
+
+A dedicated form in the context pane takes pasted Slack/email/notes, runs them through Haiku with the memory-extraction prompt (distill durable signal, drop greetings/scheduling), and appends `## <timestamp>\n\n<signal>` to `memories.md` under a chosen source root. The new content re-ingests automatically via the watcher.
+
+**Sidecar ops added:**
+
+- `context-set-sources` `{ sources, backend }` — replaces the active source list, diffs against current to start/stop watchers and purge removed rows; kicks off initial scan.
+- `context-status` — per-source file counts, last-ingested time, in-flight queue depth, existence check.
+- `context-list-files` `{ source? }` — file metadata (path, summary, tags, status).
+- `context-rescan` `{ source? }` — drop rows and re-walk.
+- `context-read-file` `{ path }` — extracted text, capped.
+- `context-search` `{ query, limit? }` — keyword-scored search over summaries + tags + extracted text. Drives the in-pane file browser; the picker uses Haiku ranking instead.
+- `context-capture-memory` `{ raw, source, filename?, backend }` — Haiku extract → append → re-ingest.
+
+**Privacy impact:**
+
+What leaves the machine grew: previously only the paste-match call. Now also the per-file summary call at ingest, the picker call at adapt/edit time, the selected file contents at draft time, and pasted snippets during memory capture. The "Add source folder" dialog notes this. No per-source opt-out — adding the source is the opt-in.
 
 ## Window behaviour
 

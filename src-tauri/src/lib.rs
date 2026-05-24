@@ -81,6 +81,109 @@ async fn adapt_template(
 }
 
 #[tauri::command]
+async fn context_set_sources(
+    sources: Vec<String>,
+    backend: String,
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({
+            "id": "context-set-sources",
+            "op": "context-set-sources",
+            "sources": sources,
+            "backend": backend,
+        }))
+        .await
+}
+
+#[tauri::command]
+async fn context_status(
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({ "id": "context-status", "op": "context-status" }))
+        .await
+}
+
+#[tauri::command]
+async fn context_list_files(
+    source: Option<String>,
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({
+            "id": "context-list-files",
+            "op": "context-list-files",
+            "source": source,
+        }))
+        .await
+}
+
+#[tauri::command]
+async fn context_rescan(
+    source: Option<String>,
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({
+            "id": "context-rescan",
+            "op": "context-rescan",
+            "source": source,
+        }))
+        .await
+}
+
+#[tauri::command]
+async fn context_read_file(
+    path: String,
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({
+            "id": "context-read-file",
+            "op": "context-read-file",
+            "path": path,
+        }))
+        .await
+}
+
+#[tauri::command]
+async fn context_search(
+    query: String,
+    limit: Option<u32>,
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({
+            "id": "context-search",
+            "op": "context-search",
+            "query": query,
+            "limit": limit,
+        }))
+        .await
+}
+
+#[tauri::command]
+async fn context_capture_memory(
+    raw: String,
+    source: String,
+    filename: Option<String>,
+    backend: String,
+    state: tauri::State<'_, Sidecar>,
+) -> Result<serde_json::Value, String> {
+    state
+        .request(&serde_json::json!({
+            "id": "context-capture-memory",
+            "op": "context-capture-memory",
+            "raw": raw,
+            "source": source,
+            "filename": filename,
+            "backend": backend,
+        }))
+        .await
+}
+
+#[tauri::command]
 fn get_sidecar_diagnostics(state: tauri::State<'_, Sidecar>) -> Diagnostics {
     state.diagnostics()
 }
@@ -381,8 +484,6 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            app.manage(Sidecar::start(&app.handle()));
-
             let dir = app
                 .path()
                 .app_data_dir()
@@ -390,6 +491,11 @@ pub fn run() {
             std::fs::create_dir_all(&dir).map_err(|e| -> Box<dyn std::error::Error> {
                 format!("mkdir {}: {e}", dir.display()).into()
             })?;
+
+            // Sidecar needs the data dir so it can place context.db next to
+            // templates.json / settings.json.
+            app.manage(Sidecar::start(&app.handle(), dir.clone()));
+
             let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
 
             let loaded_settings = store.load().ok().flatten().map(|d| d.settings);
@@ -416,6 +522,30 @@ pub fn run() {
                 }
             }
             app.manage(store);
+
+            // Push the persisted source list to the sidecar so the watcher
+            // and SQLite index come up before the user touches anything.
+            // Non-blocking: ingest summaries run in the background.
+            if let Some(settings) = &loaded_settings {
+                let sources = settings.context_sources.clone();
+                let backend = if settings.paste_backend.is_empty() {
+                    "agent".to_string()
+                } else {
+                    settings.paste_backend.clone()
+                };
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let sidecar = handle.state::<Sidecar>();
+                    let _ = sidecar
+                        .request(&serde_json::json!({
+                            "id": "context-init",
+                            "op": "context-set-sources",
+                            "sources": sources,
+                            "backend": backend,
+                        }))
+                        .await;
+                });
+            }
 
             #[cfg(desktop)]
             {
@@ -492,6 +622,13 @@ pub fn run() {
             get_env_warnings,
             set_hotkey,
             open_data_dir,
+            context_set_sources,
+            context_status,
+            context_list_files,
+            context_rescan,
+            context_read_file,
+            context_search,
+            context_capture_memory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

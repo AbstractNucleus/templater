@@ -84,6 +84,9 @@ pub struct Sidecar {
     script: SidecarScript,
     app: AppHandle,
     diag: Arc<Mutex<VecDeque<DiagEntry>>>,
+    /// Passed as the sidecar's argv[2] so it can persist the context index
+    /// (context.db) next to the app's other data files.
+    app_data_dir: PathBuf,
 }
 
 enum SidecarState {
@@ -118,12 +121,12 @@ enum SidecarCommand {
 impl Sidecar {
     /// Infallible constructor — tries to spawn the sidecar, falling back to an
     /// `Unavailable` state if Node/npx isn't on PATH or the script is missing.
-    pub fn start(app: &AppHandle) -> Self {
+    pub fn start(app: &AppHandle, app_data_dir: PathBuf) -> Self {
         let script = resolve_script(app);
         let state = Arc::new(Mutex::new(SidecarState::Unavailable(
             "not yet started".to_string(),
         )));
-        match Self::try_spawn(&script, &state, app) {
+        match Self::try_spawn(&script, &state, app, &app_data_dir) {
             Ok(active) => *state.lock().unwrap() = SidecarState::Active(active),
             Err(e) => {
                 eprintln!("sidecar unavailable at startup: {e}");
@@ -135,6 +138,7 @@ impl Sidecar {
             script,
             app: app.clone(),
             diag: Arc::new(Mutex::new(VecDeque::with_capacity(DIAG_CAPACITY))),
+            app_data_dir,
         }
     }
 
@@ -142,6 +146,7 @@ impl Sidecar {
         script: &SidecarScript,
         state: &Arc<Mutex<SidecarState>>,
         app: &AppHandle,
+        app_data_dir: &PathBuf,
     ) -> Result<ActiveSidecar, String> {
         if !script.path.exists() {
             return Err(format!(
@@ -174,6 +179,7 @@ impl Sidecar {
 
         command
             .arg(&script.path)
+            .arg(app_data_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -248,7 +254,7 @@ impl Sidecar {
             let mut guard = self.state.lock().unwrap();
             if let SidecarState::Unavailable(prior) = &*guard {
                 let prior = prior.clone();
-                match Self::try_spawn(&self.script, &self.state, &self.app) {
+                match Self::try_spawn(&self.script, &self.state, &self.app, &self.app_data_dir) {
                     Ok(active) => *guard = SidecarState::Active(active),
                     Err(e) => return Err(format!("sidecar unavailable: {e} (prior: {prior})")),
                 }

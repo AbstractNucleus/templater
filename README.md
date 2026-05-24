@@ -44,9 +44,31 @@ That's it. The app drops a tray icon, opens an 800×600 window, and seeds itself
 
 Open Settings → **Updates** → *Check for updates*. The app fetches the latest signed release from the public releases repo and walks you through the install. Signed updates only — if the signature doesn't match the public key embedded in the app, it refuses to install. No background polling, no telemetry, only checks when you click the button.
 
+## Context
+
+The **Context** pane (📚 in the title bar) lets the AI consult your own reference material — markdown, PDF, or Excel files in folders you choose — when it adapts or edits a template. Add a source folder, and the sidecar:
+
+1. Walks the folder, extracts text from each file (md / pdf / xlsx).
+2. Asks Haiku for a one-line summary + topic tags per file (one-time per file; re-runs on mtime change).
+3. Stores everything in `context.db` next to your templates.
+4. Watches the folder live via `chokidar` so edits propagate without restarting the app.
+
+When you hit **Adapt to inbound** or chat with the agent editor, Haiku picks up to 3 relevant files from the index and Sonnet drafts with their contents in scope. The chat panel reports which files informed each draft.
+
+The pane also has a **Capture memory** form: paste a Slack thread or email and Haiku distills the durable signal into a paragraph appended to `memories.md` under the source you pick. The new content re-ingests automatically.
+
 ## Privacy
 
-Everything is local. Templates live in `templates.json`, preferences in `settings.json` next to it — on Windows under `%APPDATA%\com.noel.templatewidget\`, on macOS under `~/Library/Application Support/com.noel.templatewidget/`. The only thing that ever leaves the machine is the paste-match call — when you paste a long message, the template catalog + your pasted text go to Anthropic's API via the Agent SDK. No telemetry, no analytics, no account.
+Templates live in `templates.json`, preferences in `settings.json`, and the context index in `context.db` — all under `%APPDATA%\com.noel.templatewidget\` on Windows, `~/Library/Application Support/com.noel.templatewidget/` on macOS.
+
+What leaves the machine:
+
+- **Paste-match**: when you paste a long message, the template catalog + your pasted text go to Anthropic (Haiku).
+- **Adapt / edit**: the picker call sends file summaries + your query to Haiku; the draft call sends the inbound + chosen file contents to Sonnet.
+- **Ingest summaries**: each context file is sent to Haiku once for summarization (and again whenever its mtime changes).
+- **Capture memory**: pasted snippets go to Haiku for extraction; the result is written locally.
+
+Adding a source folder is an explicit opt-in — the **Add source folder** dialog spells this out. No telemetry, no analytics, no account.
 
 ---
 

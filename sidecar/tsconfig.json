@@ -13,6 +13,6 @@
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["index.ts", "src/**/*.ts"],
+  "include": ["index.ts", "context.ts", "src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

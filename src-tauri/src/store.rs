@@ -63,6 +63,12 @@ pub struct ColumnWidths {
     pub tags: u32,
     pub templates: u32,
     pub agent: u32,
+    #[serde(default = "default_context_width")]
+    pub context: u32,
+}
+
+fn default_context_width() -> u32 {
+    360
 }
 
 impl Default for ColumnWidths {
@@ -71,6 +77,7 @@ impl Default for ColumnWidths {
             tags: 180,
             templates: 260,
             agent: 340,
+            context: 360,
         }
     }
 }
@@ -105,6 +112,11 @@ pub struct Settings {
     pub tag_order: Vec<String>,
     #[serde(default)]
     pub onboarding_complete: bool,
+    /// Absolute paths to folders the AI may consult during adapt + edit calls.
+    /// Persisted in settings.json; mirrored to the sidecar via
+    /// `context-set-sources` on startup and whenever the list changes.
+    #[serde(default)]
+    pub context_sources: Vec<String>,
 }
 
 fn default_theme() -> String {
@@ -145,6 +157,7 @@ impl Default for Settings {
             sort_mode: default_sort_mode(),
             tag_order: Vec::new(),
             onboarding_complete: false,
+            context_sources: Vec::new(),
         }
     }
 }

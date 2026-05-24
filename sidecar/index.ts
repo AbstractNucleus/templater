@@ -2,24 +2,27 @@
  * Sidecar entrypoint. Reads newline-delimited JSON requests from stdin,
  * writes newline-delimited JSON responses to stdout.
  *
- * Protocol (request):  { "id": string, "op": "ping" | "rank", ...args }
- * Protocol (response): { "id": string, "ok": true, ... } | { "id": string, "ok": false, "error": string }
+ * CLI: argv[2] is the app data dir (provided by the Rust spawner). Context
+ * index lives at `<app_data_dir>/context.db`. If argv[2] is missing we
+ * fall back to cwd — non-fatal but context features won't persist sensibly.
  *
- * Concurrency: Rust serializes calls via a Mutex, so at most one request is
- * in flight at a time. We handle each line awaited-in-order.
+ * Concurrency: writer/reader on the Rust side multiplex multiple in-flight
+ * requests over the same pipe, keyed by `id`.
  *
  * Performance:
  *   1. WarmQuery: a Claude CLI subprocess is kept pre-spawned with the rank
  *      system prompt baked in, so each rank skips the ~1-2s startup handshake.
  *   2. Prompt caching: the catalog is placed BEFORE SYSTEM_PROMPT_DYNAMIC_BOUNDARY
- *      in systemPrompt[]. Anthropic caches that prefix (5-min TTL). Catalog
- *      changes (template edited/added/deleted) → cache miss + warm rebuild.
- *
- * Cache hit path (template list stable, requests within 5min): ~0.5-0.8s.
- * Cache miss / first call after launch: ~2s.
+ *      in systemPrompt[]. Anthropic caches that prefix (5-min TTL).
+ *   3. Context pre-fetch: adapt + edit ask a Haiku picker to select 0-3
+ *      relevant indexed files, then read them and inject into the Sonnet
+ *      draft call's system prompt. Single-shot retrieval (one Haiku + one
+ *      Sonnet) rather than agentic loop — equivalent quality at this scale,
+ *      simpler code, identical across Agent and API backends.
  */
 
 import { createInterface } from "node:readline";
+import path from "node:path";
 import {
   query,
   startup,
@@ -27,6 +30,24 @@ import {
   type WarmQuery,
 } from "@anthropic-ai/claude-agent-sdk";
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  captureMemory as ctxCaptureMemory,
+  contextListFiles,
+  contextStatus,
+  initContext,
+  pickRelevantFiles,
+  readContextFile,
+  rescanAll,
+  rescanSource,
+  searchContextFiles,
+  setSources as ctxSetSources,
+  type PickedFile,
+  type PickerCandidate,
+  type PickResult,
+} from "./context.js";
+
+const APP_DATA_DIR = process.argv[2] ?? process.cwd();
+const CONTEXT_DB_PATH = path.join(APP_DATA_DIR, "context.db");
 
 // Capture the API key once at startup, then strip it from the process env so
 // the Agent SDK and any subprocess it spawns can never observe it. This makes
@@ -38,6 +59,10 @@ const apiKeyForApiMode: string | null = process.env.ANTHROPIC_API_KEY ?? null;
 delete process.env.ANTHROPIC_API_KEY;
 
 type Backend = "agent" | "api";
+
+/** Backend used by context-side calls (ingest summaries, memory extraction).
+ *  Adapt + edit + rank still pass their own backend per request. */
+let contextBackend: Backend = "agent";
 
 type PingRequest = { id: string; op: "ping" };
 
@@ -76,7 +101,39 @@ type AdaptTemplateRequest = {
   inbound: string;
 };
 
-type Request = PingRequest | RankRequest | EditTemplateRequest | AdaptTemplateRequest;
+type ContextSetSourcesRequest = {
+  id: string;
+  op: "context-set-sources";
+  sources: string[];
+  backend: Backend;
+};
+
+type ContextStatusRequest = { id: string; op: "context-status" };
+type ContextListFilesRequest = { id: string; op: "context-list-files"; source?: string };
+type ContextRescanRequest = { id: string; op: "context-rescan"; source?: string };
+type ContextReadFileRequest = { id: string; op: "context-read-file"; path: string };
+type ContextSearchRequest = { id: string; op: "context-search"; query: string; limit?: number };
+type ContextCaptureMemoryRequest = {
+  id: string;
+  op: "context-capture-memory";
+  raw: string;
+  source: string;
+  filename?: string;
+  backend: Backend;
+};
+
+type Request =
+  | PingRequest
+  | RankRequest
+  | EditTemplateRequest
+  | AdaptTemplateRequest
+  | ContextSetSourcesRequest
+  | ContextStatusRequest
+  | ContextListFilesRequest
+  | ContextRescanRequest
+  | ContextReadFileRequest
+  | ContextSearchRequest
+  | ContextCaptureMemoryRequest;
 
 type Response =
   | { id: string; ok: true; [k: string]: unknown }
@@ -145,11 +202,6 @@ function rankOptions(catalog: CatalogEntry[]) {
   };
 }
 
-/**
- * Cheap-but-unique key identifying a catalog's content. If anything that
- * affects the systemPrompt changes (id, name, body snippet, order), the key
- * changes and we rebuild the warm subprocess.
- */
 function catalogKey(catalog: CatalogEntry[]): string {
   return catalog
     .map((t) => `${t.id}\0${t.name}\0${(t.body ?? "").slice(0, 200)}`)
@@ -195,13 +247,10 @@ async function runRankAgent(req: RankRequest): Promise<Response> {
   try {
     const handle = await takeWarmRank(req.catalog);
     stream = handle.query(userPrompt);
-  } catch (err) {
-    // Cold fallback if WarmQuery setup failed (e.g. SDK auth issue).
-    // Prompt cache still applies on subsequent cold calls within 5min.
+  } catch {
     stream = query({ prompt: userPrompt, options: opts });
   }
 
-  // Pre-warm the next subprocess with the same catalog so cache-hit path stays warm.
   prewarmRank(req.catalog).catch(() => {});
 
   for await (const msg of stream) {
@@ -222,14 +271,6 @@ async function runRankAgent(req: RankRequest): Promise<Response> {
   return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
 }
 
-// Direct Anthropic Messages API path — used when the user picks "Anthropic
-// API" in Settings. Bypasses the Agent SDK entirely so paste-match works
-// with raw API billing on accounts without Agent SDK access.
-//
-// Structured output is enforced via tool_use (the API's equivalent of the
-// Agent SDK's outputFormat). Prompt caching mirrors the Agent SDK behaviour:
-// the catalog block carries cache_control:"ephemeral" so the catalog prefix
-// is cached for 5min and reused across requests with the same template list.
 let apiClient: Anthropic | null = null;
 function getApiClient(): Anthropic {
   if (apiClient) return apiClient;
@@ -243,10 +284,6 @@ function getApiClient(): Anthropic {
 const RANK_TOOL_NAME = "submit_rankings";
 const EDIT_TOOL_NAME = "submit_edit";
 
-// The schemas are `as const` so the Agent SDK can read literal types from
-// them; the Anthropic SDK's Tool.InputSchema wants a mutable shape, so cast
-// at the boundary rather than dropping `as const` and losing type info for
-// the Agent path.
 type ApiInputSchema = Anthropic.Messages.Tool["input_schema"];
 
 async function runRankApi(req: RankRequest): Promise<Response> {
@@ -295,6 +332,211 @@ async function runRankApi(req: RankRequest): Promise<Response> {
   }
   return { id: req.id, ok: true, rankings: out.rankings };
 }
+
+// ---------------------------------------------------------------------------
+// Context: summarizer + picker + memory extractor
+// ---------------------------------------------------------------------------
+
+const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
+const PICK_MODEL = "claude-haiku-4-5-20251001";
+const MEMORY_MODEL = "claude-haiku-4-5-20251001";
+
+const SUMMARY_SCHEMA = {
+  type: "object",
+  required: ["summary", "tags"],
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string", description: "One to two short sentences describing what this file is about and when you'd reach for it." },
+    tags: {
+      type: "array",
+      items: { type: "string" },
+      description: "3-6 short topic keywords (lowercase, single words or short phrases).",
+    },
+  },
+} as const;
+
+const SUMMARY_INSTRUCTIONS = `You distill reference documents into a one-line gist plus a few topic tags.
+The summary will help an AI later decide whether this file is relevant to a question.
+Aim for 1-2 sentences. Tags should be short, lowercase, and topical (e.g. "refund-policy", "onboarding").`;
+
+const PICK_SCHEMA = {
+  type: "object",
+  required: ["picks"],
+  additionalProperties: false,
+  properties: {
+    picks: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["path", "reason"],
+        additionalProperties: false,
+        properties: {
+          path: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
+
+const PICK_INSTRUCTIONS = `You select reference files that are relevant to a query.
+You are given a candidate list (path | summary | tags) and a query.
+Return 0..k picks — fewer is better than forcing weak matches. Only pick files that
+clearly help. Use the exact path from the candidate list.`;
+
+const MEMORY_SCHEMA = {
+  type: "object",
+  required: ["signal"],
+  additionalProperties: false,
+  properties: {
+    signal: {
+      type: "string",
+      description: "The durable, reusable knowledge distilled from the raw input. Drop greetings, scheduling chatter, and one-off context.",
+    },
+  },
+} as const;
+
+const MEMORY_INSTRUCTIONS = `You extract durable signal from pasted messages (Slack threads, emails, notes).
+Return one tight paragraph capturing the reusable knowledge — facts, decisions, procedures, names of people-and-what-they-own.
+Drop greetings, scheduling, and one-off context. If the input has no durable signal, return an empty string.`;
+
+async function runStructuredAgent<T>(
+  prompt: string,
+  systemPrompt: string,
+  schema: Record<string, unknown>,
+  model: string,
+): Promise<T> {
+  // Cast at the boundary — the SDK wants a specific schema shape that's
+  // strict-typed via `as const` at the literal site, but our helper is
+  // schema-agnostic.
+  const outputFormat = { type: "json_schema" as const, schema } as unknown as {
+    type: "json_schema";
+    schema: Record<string, unknown>;
+  };
+  const stream = query({
+    prompt,
+    options: {
+      model,
+      outputFormat,
+      systemPrompt,
+    },
+  });
+  for await (const msg of stream) {
+    if (msg.type !== "result") continue;
+    if (msg.subtype === "success") {
+      if (msg.structured_output == null) {
+        throw new Error("agent sdk returned success without structured_output");
+      }
+      return msg.structured_output as T;
+    }
+    throw new Error(`agent sdk ${msg.subtype}: ${(msg.errors ?? []).join("; ") || "unknown"}`);
+  }
+  throw new Error("agent sdk stream ended without result");
+}
+
+async function runStructuredApi<T>(
+  prompt: string,
+  systemPrompt: string,
+  schema: unknown,
+  model: string,
+  toolName: string,
+): Promise<T> {
+  const client = getApiClient();
+  const msg = await client.messages.create({
+    model,
+    max_tokens: 1024,
+    system: systemPrompt,
+    tools: [
+      {
+        name: toolName,
+        description: "Submit the structured response.",
+        input_schema: schema as ApiInputSchema,
+      },
+    ],
+    tool_choice: { type: "tool", name: toolName },
+    messages: [{ role: "user", content: prompt }],
+  });
+  const block = msg.content.find((b) => b.type === "tool_use");
+  if (!block || block.type !== "tool_use") {
+    throw new Error("anthropic api returned no tool_use block");
+  }
+  if (block.input == null) {
+    throw new Error("anthropic api returned tool_use with null input");
+  }
+  return block.input as T;
+}
+
+async function summarizeFile(text: string, filename: string): Promise<{ summary: string; tags: string[] }> {
+  const userPrompt = `FILENAME: ${filename}\n\nCONTENT (truncated):\n${text}`;
+  if (contextBackend === "api") {
+    return await runStructuredApi<{ summary: string; tags: string[] }>(
+      userPrompt,
+      SUMMARY_INSTRUCTIONS,
+      SUMMARY_SCHEMA,
+      SUMMARY_MODEL,
+      "submit_summary",
+    );
+  }
+  return await runStructuredAgent<{ summary: string; tags: string[] }>(
+    userPrompt,
+    SUMMARY_INSTRUCTIONS,
+    SUMMARY_SCHEMA,
+    SUMMARY_MODEL,
+  );
+}
+
+async function pickFiles(query: string, candidates: PickerCandidate[], k: number, backend: Backend): Promise<PickResult[]> {
+  const candidateLines = candidates
+    .map((c) => `- ${c.path} | ${c.summary} | tags: ${c.tags.join(", ")}`)
+    .join("\n");
+  const userPrompt = `QUERY:\n${query}\n\nCANDIDATES (path | summary | tags):\n${candidateLines}\n\nReturn up to ${k} picks.`;
+  if (backend === "api") {
+    const out = await runStructuredApi<{ picks: PickResult[] }>(
+      userPrompt,
+      PICK_INSTRUCTIONS,
+      PICK_SCHEMA,
+      PICK_MODEL,
+      "submit_picks",
+    );
+    return out.picks ?? [];
+  }
+  const out = await runStructuredAgent<{ picks: PickResult[] }>(
+    userPrompt,
+    PICK_INSTRUCTIONS,
+    PICK_SCHEMA,
+    PICK_MODEL,
+  );
+  return out.picks ?? [];
+}
+
+async function extractMemory(raw: string, backend: Backend): Promise<string> {
+  const prompt = `RAW INPUT:\n${raw}`;
+  if (backend === "api") {
+    const out = await runStructuredApi<{ signal: string }>(
+      prompt,
+      MEMORY_INSTRUCTIONS,
+      MEMORY_SCHEMA,
+      MEMORY_MODEL,
+      "submit_memory",
+    );
+    return out.signal ?? "";
+  }
+  const out = await runStructuredAgent<{ signal: string }>(prompt, MEMORY_INSTRUCTIONS, MEMORY_SCHEMA, MEMORY_MODEL);
+  return out.signal ?? "";
+}
+
+function renderContextBlock(picks: PickedFile[]): string {
+  if (picks.length === 0) return "";
+  const parts: string[] = ["The following reference material was selected as relevant. Use it to inform the draft when applicable; ignore anything that doesn't fit."];
+  for (const p of picks) {
+    parts.push(`---\nFILE: ${p.path}\nWHY: ${p.reason}\nCONTENT:\n${p.text}`);
+  }
+  return parts.join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Edit template (with context pre-fetch)
+// ---------------------------------------------------------------------------
 
 const EDIT_MODEL = "claude-haiku-4-5-20251001";
 
@@ -350,26 +592,33 @@ NEW INSTRUCTION:
 ${req.prompt}`;
 }
 
-async function handleEditTemplate(req: EditTemplateRequest): Promise<Response> {
-  if (req.backend === "api") return runEditApi(req);
-  return runEditAgent(req);
+async function fetchContextForEdit(req: EditTemplateRequest): Promise<PickedFile[]> {
+  const query = `${req.prompt}\n\nCurrent draft body:\n${req.draft.body}`;
+  return await pickRelevantFiles(query, (q, cs, k) => pickFiles(q, cs, k, req.backend));
 }
 
-async function runEditAgent(req: EditTemplateRequest): Promise<Response> {
+function editSystemPrompt(contextBlock: string): string {
+  return contextBlock.length > 0 ? `${EDIT_INSTRUCTIONS}\n\n${contextBlock}` : EDIT_INSTRUCTIONS;
+}
+
+async function handleEditTemplate(req: EditTemplateRequest): Promise<Response> {
+  const picks = await fetchContextForEdit(req);
+  const contextBlock = renderContextBlock(picks);
+  if (req.backend === "api") return runEditApi(req, contextBlock);
+  return runEditAgent(req, contextBlock);
+}
+
+async function runEditAgent(req: EditTemplateRequest, contextBlock: string): Promise<Response> {
   const stream = query({
     prompt: buildEditPrompt(req),
     options: {
       model: EDIT_MODEL,
       outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
-      systemPrompt: EDIT_INSTRUCTIONS,
+      systemPrompt: editSystemPrompt(contextBlock),
       includePartialMessages: true,
     },
   });
 
-  // Accumulate streaming chunks (input_json_delta for structured output,
-  // text_delta for free text) and forward each accumulation as a progress
-  // event. Lets the UI render something other than "Thinking…" while the
-  // 2-8s edit round-trip is in flight.
   let partial = "";
   for await (const msg of stream) {
     if (msg.type === "stream_event") {
@@ -410,7 +659,7 @@ async function runEditAgent(req: EditTemplateRequest): Promise<Response> {
   return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
 }
 
-async function runEditApi(req: EditTemplateRequest): Promise<Response> {
+async function runEditApi(req: EditTemplateRequest, contextBlock: string): Promise<Response> {
   let client: Anthropic;
   try {
     client = getApiClient();
@@ -423,7 +672,7 @@ async function runEditApi(req: EditTemplateRequest): Promise<Response> {
     msg = await client.messages.create({
       model: EDIT_MODEL,
       max_tokens: 2048,
-      system: EDIT_INSTRUCTIONS,
+      system: editSystemPrompt(contextBlock),
       tools: [
         {
           name: EDIT_TOOL_NAME,
@@ -457,9 +706,10 @@ async function runEditApi(req: EditTemplateRequest): Promise<Response> {
   };
 }
 
-// adapt-template runs on Sonnet (not Haiku) because it's actual drafting with
-// context, not the simple classification rank does. Reuses the edit JSON
-// schema so the response shape stays uniform across edit + adapt.
+// ---------------------------------------------------------------------------
+// Adapt template (with context pre-fetch)
+// ---------------------------------------------------------------------------
+
 const ADAPT_MODEL = "claude-sonnet-4-6";
 
 const ADAPT_INSTRUCTIONS = `You adapt a reply-template draft to fit a specific inbound message.
@@ -488,18 +738,36 @@ Body:
 ${req.draft.body}`;
 }
 
-async function handleAdaptTemplate(req: AdaptTemplateRequest): Promise<Response> {
-  if (req.backend === "api") return runAdaptApi(req);
-  return runAdaptAgent(req);
+async function fetchContextForAdapt(req: AdaptTemplateRequest): Promise<PickedFile[]> {
+  return await pickRelevantFiles(req.inbound, (q, cs, k) => pickFiles(q, cs, k, req.backend));
 }
 
-async function runAdaptAgent(req: AdaptTemplateRequest): Promise<Response> {
+function adaptSystemPrompt(contextBlock: string): string {
+  return contextBlock.length > 0 ? `${ADAPT_INSTRUCTIONS}\n\n${contextBlock}` : ADAPT_INSTRUCTIONS;
+}
+
+async function handleAdaptTemplate(req: AdaptTemplateRequest): Promise<Response> {
+  const picks = await fetchContextForAdapt(req);
+  const contextBlock = renderContextBlock(picks);
+  if (req.backend === "api") return runAdaptApi(req, contextBlock, picks);
+  return runAdaptAgent(req, contextBlock, picks);
+}
+
+function pickedFilesPayload(picks: PickedFile[]): Array<{ path: string; summary: string; reason: string }> {
+  return picks.map((p) => ({ path: p.path, summary: p.summary, reason: p.reason }));
+}
+
+async function runAdaptAgent(
+  req: AdaptTemplateRequest,
+  contextBlock: string,
+  picks: PickedFile[],
+): Promise<Response> {
   const stream = query({
     prompt: buildAdaptPrompt(req),
     options: {
       model: ADAPT_MODEL,
       outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
-      systemPrompt: ADAPT_INSTRUCTIONS,
+      systemPrompt: adaptSystemPrompt(contextBlock),
       includePartialMessages: true,
     },
   });
@@ -533,6 +801,7 @@ async function runAdaptAgent(req: AdaptTemplateRequest): Promise<Response> {
           opening: out.updated.opening ?? "",
           body: out.updated.body,
         },
+        context_used: pickedFilesPayload(picks),
       };
     }
     return {
@@ -544,7 +813,11 @@ async function runAdaptAgent(req: AdaptTemplateRequest): Promise<Response> {
   return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
 }
 
-async function runAdaptApi(req: AdaptTemplateRequest): Promise<Response> {
+async function runAdaptApi(
+  req: AdaptTemplateRequest,
+  contextBlock: string,
+  picks: PickedFile[],
+): Promise<Response> {
   let client: Anthropic;
   try {
     client = getApiClient();
@@ -557,7 +830,7 @@ async function runAdaptApi(req: AdaptTemplateRequest): Promise<Response> {
     msg = await client.messages.create({
       model: ADAPT_MODEL,
       max_tokens: 2048,
-      system: ADAPT_INSTRUCTIONS,
+      system: adaptSystemPrompt(contextBlock),
       tools: [
         {
           name: EDIT_TOOL_NAME,
@@ -588,8 +861,109 @@ async function runAdaptApi(req: AdaptTemplateRequest): Promise<Response> {
       opening: out.updated.opening ?? "",
       body: out.updated.body,
     },
+    context_used: pickedFilesPayload(picks),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Context ops
+// ---------------------------------------------------------------------------
+
+async function handleContextSetSources(req: ContextSetSourcesRequest): Promise<Response> {
+  contextBackend = req.backend;
+  try {
+    await ctxSetSources(req.sources);
+    return { id: req.id, ok: true, status: contextStatus() };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+function handleContextStatus(req: ContextStatusRequest): Response {
+  try {
+    return { id: req.id, ok: true, status: contextStatus() };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+function handleContextListFiles(req: ContextListFilesRequest): Response {
+  try {
+    const files = contextListFiles(req.source).map((f) => ({
+      path: f.path,
+      source_root: f.source_root,
+      ext: f.ext,
+      mtime_ms: f.mtime_ms,
+      size_bytes: f.size_bytes,
+      summary: f.summary,
+      tags: f.tags,
+      status: f.status,
+      error: f.error,
+      ingested_at: f.ingested_at,
+    }));
+    return { id: req.id, ok: true, files };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+async function handleContextRescan(req: ContextRescanRequest): Promise<Response> {
+  try {
+    if (req.source) {
+      await rescanSource(req.source);
+    } else {
+      await rescanAll();
+    }
+    return { id: req.id, ok: true, status: contextStatus() };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+function handleContextReadFile(req: ContextReadFileRequest): Response {
+  try {
+    const r = readContextFile(req.path);
+    if (!r) return { id: req.id, ok: false, error: "file not in index" };
+    return { id: req.id, ok: true, ...r };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+function handleContextSearch(req: ContextSearchRequest): Response {
+  try {
+    const files = searchContextFiles(req.query, req.limit ?? 30).map((f) => ({
+      path: f.path,
+      source_root: f.source_root,
+      ext: f.ext,
+      mtime_ms: f.mtime_ms,
+      summary: f.summary,
+      tags: f.tags,
+      score: f.score,
+    }));
+    return { id: req.id, ok: true, files };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+async function handleContextCaptureMemory(req: ContextCaptureMemoryRequest): Promise<Response> {
+  try {
+    const result = await ctxCaptureMemory(
+      req.raw,
+      req.source,
+      (raw) => extractMemory(raw, req.backend),
+      req.filename,
+    );
+    return { id: req.id, ok: true, ...result };
+  } catch (err) {
+    return { id: req.id, ok: false, error: (err as Error).message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
 
 async function handle(request: Request): Promise<Response> {
   switch (request.op) {
@@ -601,11 +975,33 @@ async function handle(request: Request): Promise<Response> {
       return await handleEditTemplate(request);
     case "adapt-template":
       return await handleAdaptTemplate(request);
+    case "context-set-sources":
+      return await handleContextSetSources(request);
+    case "context-status":
+      return handleContextStatus(request);
+    case "context-list-files":
+      return handleContextListFiles(request);
+    case "context-rescan":
+      return await handleContextRescan(request);
+    case "context-read-file":
+      return handleContextReadFile(request);
+    case "context-search":
+      return handleContextSearch(request);
+    case "context-capture-memory":
+      return await handleContextCaptureMemory(request);
     default: {
       const _exhaustive: never = request;
       return { id: (_exhaustive as { id: string }).id, ok: false, error: "unknown op" };
     }
   }
+}
+
+// Initialize context index lazily but synchronously at startup so the first
+// context-set-sources call doesn't race against table creation.
+try {
+  initContext(CONTEXT_DB_PATH, summarizeFile);
+} catch (err) {
+  process.stderr.write(`context init failed: ${(err as Error).message}\n`);
 }
 
 const rl = createInterface({ input: process.stdin });
@@ -634,4 +1030,4 @@ rl.on("close", () => process.exit(0));
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
 
-process.stderr.write(`sidecar ready (pid ${process.pid})\n`);
+process.stderr.write(`sidecar ready (pid ${process.pid}, data dir ${APP_DATA_DIR})\n`);
