@@ -168,7 +168,14 @@ impl Sidecar {
                 if !node.exists() {
                     return Err(format!("bundled node not found at {}", node.display()));
                 }
-                Command::new(node)
+                let mut c = Command::new(node);
+                // node:sqlite is experimental in Node 22.x and requires this
+                // flag. The bundled binary is pinned at 22.11.0 (see
+                // scripts/fetch-node-binary.mjs) where the module exists but
+                // refuses to load without the flag. Bump the bundled version
+                // and drop this once node:sqlite is stable in the pinned line.
+                c.arg("--experimental-sqlite");
+                c
             }
         };
 
