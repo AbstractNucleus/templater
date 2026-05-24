@@ -5,6 +5,15 @@
     if (e.target === e.currentTarget) onClose();
   }
 
+  function handleWindowKey(e: KeyboardEvent): void {
+    // svelte:window catches Escape regardless of focus — the backdrop's
+    // onkeydown only fires when it itself is focused, which it usually isn't.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+    }
+  }
+
   type Row = { keys: string; desc: string };
 
   // Section → rows. Mirrors what's actually wired in +page.svelte's
@@ -51,6 +60,8 @@
   ]);
 </script>
 
+<svelte:window onkeydown={handleWindowKey} />
+
 <div
   class="backdrop"
   role="dialog"
@@ -58,7 +69,7 @@
   aria-label="Keyboard shortcuts"
   tabindex="-1"
   onclick={handleBackdrop}
-  onkeydown={(e) => e.key === "Escape" && onClose()}
+  onkeydown={() => {}}
 >
   <div class="modal">
     <header>

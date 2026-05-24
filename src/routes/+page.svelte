@@ -200,6 +200,29 @@
       return;
     }
     if (settingsOpen) return;
+    // Bulk-action modals + cheat sheet own Escape while open. Returning here
+    // prevents the rest of the handler from running (e.g. arrow keys moving
+    // selection underneath an open dialog).
+    if (bulkDeleteConfirmOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        bulkDeleteConfirmOpen = false;
+      }
+      return;
+    }
+    if (bulkTagPromptOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        bulkTagPromptOpen = false;
+        bulkTagDraft = "";
+      }
+      return;
+    }
+    if (cheatSheetOpen) {
+      // CheatSheet.svelte has its own window listener for Escape — just
+      // suppress global shortcuts so e.g. arrow keys don't move selection.
+      return;
+    }
     const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.altKey;
     if (ctrlOnly && (e.key === "+" || e.key === "=")) {
       e.preventDefault();
@@ -424,12 +447,16 @@
     return [...set].sort();
   });
 
-  // Browse order: pinned first, then by most-recently-copied, then the
-  // template's own insertion order (stable sort). Applied before tag/search
-  // so the empty-query view reflects user priority.
+  // Browse order: pinned first, then either by most-recently-copied or by
+  // raw array order (manual sort). Applied before tag/search so the empty-
+  // query view reflects user priority. In manual mode we skip the recency
+  // branch entirely — otherwise a copy after a drag-reorder would silently
+  // bubble the copied template back to the top.
   const browseOrdered = $derived.by(() => {
+    const useRecency = settings.sort_mode === "recent";
     return [...templates].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (!useRecency) return 0;
       const aT = a.last_used_at ?? "";
       const bT = b.last_used_at ?? "";
       if (aT !== bT) return aT > bT ? -1 : 1;
@@ -763,6 +790,7 @@
       : settings;
     await persist(next, nextSettings);
     selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
+    pruneBulkSelection(new Set([id]));
   }
 
   function omitKey<T extends object>(obj: T, key: string): T {
@@ -782,6 +810,7 @@
     templates = data.templates;
     settings = data.settings;
     selectedTemplateId = templates[0]?.id ?? null;
+    bulkSelectedIds = new Set();
   }
 
   type PortResult =
@@ -820,6 +849,7 @@
       const result = await importTemplates(path);
       // Rust has already persisted the merged list; just sync local state.
       templates = result.templates;
+      bulkSelectedIds = new Set();
       const dupNote =
         result.skipped > 0 ? ` (${pluralise(result.skipped, "duplicate")} skipped)` : "";
       return {
@@ -864,6 +894,14 @@
     if (selectedTemplateId === id) {
       selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
     }
+    pruneBulkSelection(new Set([id]));
+  }
+
+  function pruneBulkSelection(removedIds: Set<string>): void {
+    if (bulkSelectedIds.size === 0) return;
+    const next = new Set<string>();
+    for (const id of bulkSelectedIds) if (!removedIds.has(id)) next.add(id);
+    bulkSelectedIds = next;
   }
 
   async function togglePin(id: string): Promise<void> {
@@ -911,6 +949,20 @@
     );
     // Update tag_order so the renamed tag keeps its position.
     const newOrder = settings.tag_order.map((t) => (t === from ? to : t));
+    // Mirror into the active filter sets — without this, a tag selected as a
+    // filter keeps its old name in the set and silently matches zero rows.
+    if (selectedTagIds.has(from)) {
+      const s = new Set(selectedTagIds);
+      s.delete(from);
+      s.add(to);
+      selectedTagIds = s;
+    }
+    if (excludedTagIds.has(from)) {
+      const s = new Set(excludedTagIds);
+      s.delete(from);
+      s.add(to);
+      excludedTagIds = s;
+    }
     await persist(next, { ...settings, tag_order: dedupe(newOrder) });
   }
 
@@ -966,30 +1018,36 @@
   }
 
   async function adaptToInbound(): Promise<void> {
-    if (!selectedTemplate || adaptBusy) return;
+    // Snapshot the source up front — selectedTemplate is reactive, so reading
+    // it after the await would race with a mid-flight selection change and
+    // mislabel the resulting baseSourceName.
+    const src = selectedTemplate;
+    if (!src || adaptBusy) return;
     const inbound = searchQuery.trim();
     if (inbound.length < PASTE_THRESHOLD) return;
     adaptBusy = true;
-    agentError = null;
     try {
       const { reasoning, updated } = await adaptTemplate(
-        { opening: selectedTemplate.opening, body: selectedTemplate.body },
+        { opening: src.opening, body: src.body },
         inbound,
         settings.paste_backend,
       );
       // Enter base mode with the adapted draft pre-filled. Seed the chat with
       // the implicit "adapt this" turn so further refinement has context.
       baseKind = "base";
-      baseSourceName = selectedTemplate.name;
+      baseSourceName = src.name;
       baseDraft = updated;
       agentMessages = [
         { role: "user", content: `Adapt this template to the inbound message:\n\n${inbound}` },
         { role: "assistant", content: reasoning || "(no reasoning provided)" },
       ];
+      agentError = null;
       agentBusy = false;
       baseMode = true;
     } catch (e) {
-      agentError = explainRankError(String(e));
+      // AgentSidebar isn't rendered until baseMode flips, so agentError would
+      // be invisible. Surface via the global error banner instead.
+      loadError = `Adapt failed: ${explainRankError(String(e))}`;
     } finally {
       adaptBusy = false;
     }

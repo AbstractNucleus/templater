@@ -249,6 +249,10 @@
   let renameDraft = $state("");
   let tagBusy = $state(false);
   let tagError = $state<string | null>(null);
+  // Two-step delete: a tag delete strips it from every template that has it,
+  // which can be 50+ rows. Undo covers it but isn't discoverable enough for a
+  // silent destructive action — require an explicit second click.
+  let confirmingDeleteTag = $state<string | null>(null);
 
   function startRename(tag: string): void {
     renamingTag = tag;
@@ -286,6 +290,7 @@
     tagError = null;
     try {
       await onDeleteTag(tag);
+      confirmingDeleteTag = null;
     } catch (e) {
       tagError = String(e);
     } finally {
@@ -309,14 +314,29 @@
   }
 
   async function handleCaptureKeydown(e: KeyboardEvent): Promise<void> {
+    // Escape lives at the window level so it works without the user clicking
+    // into the modal first. Drains nested states (capture → rename → delete
+    // confirm) before closing the modal itself.
+    if (e.key === "Escape") {
+      if (capturing) {
+        capturing = false;
+        e.preventDefault();
+        return;
+      }
+      // The rename input has its own Escape handler — let it run.
+      if (renamingTag) return;
+      if (confirmingDeleteTag) {
+        confirmingDeleteTag = null;
+        e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      onClose();
+      return;
+    }
     if (!capturing) return;
     e.preventDefault();
     e.stopPropagation();
-
-    if (e.key === "Escape") {
-      capturing = false;
-      return;
-    }
     if (isModifierKey(e.code)) return;
 
     const parts: string[] = [];
@@ -516,9 +536,14 @@
                     onkeydown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
+                        e.stopPropagation();
                         void commitRename();
                       } else if (e.key === "Escape") {
+                        // stopPropagation so the modal-level Escape handler
+                        // doesn't see renamingTag=null after this clears it
+                        // and close the whole modal.
                         e.preventDefault();
+                        e.stopPropagation();
                         cancelRename();
                       }
                     }}
@@ -527,6 +552,22 @@
                     Save
                   </button>
                   <button class="tag-btn" disabled={tagBusy} onclick={cancelRename}>Cancel</button>
+                {:else if confirmingDeleteTag === tag}
+                  <span class="tag-confirm-text">Remove "{tag}" from {count} template{count === 1 ? "" : "s"}?</span>
+                  <div class="tag-actions">
+                    <button class="tag-btn" disabled={tagBusy} onclick={() => (confirmingDeleteTag = null)}>
+                      Cancel
+                    </button>
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <button
+                      class="tag-btn danger"
+                      disabled={tagBusy}
+                      onclick={() => void commitDelete(tag)}
+                      autofocus
+                    >
+                      {tagBusy ? "Removing…" : "Remove"}
+                    </button>
+                  </div>
                 {:else}
                   <span class="tag-name">{tag}</span>
                   <span class="tag-count-tag">{count}</span>
@@ -537,7 +578,7 @@
                     <button
                       class="tag-btn danger"
                       disabled={tagBusy}
-                      onclick={() => void commitDelete(tag)}
+                      onclick={() => (confirmingDeleteTag = tag)}
                     >
                       Remove
                     </button>
@@ -1099,6 +1140,15 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .tag-confirm-text {
+    flex: 1;
+    color: var(--accent-warning-text);
+    font-size: 0.78rem;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .tag-manage-row .tag-count-tag {
