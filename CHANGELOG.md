@@ -4,6 +4,29 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-05-25
+
+### Changed
+
+- **Capture memory moved to the title bar.** The capture form now lives in
+  a dedicated popover triggered by a new title-bar button — no need to
+  open the context pane just to drop a snippet in. The context pane stays
+  focused on browsing indexed sources and files.
+
+### Fixed
+
+- Modal popover no longer leaks keyboard shortcuts to the underlying
+  app: Ctrl+F / Ctrl+L / zoom no longer steal focus or clear search
+  while the capture popover is open.
+- Window drag-drop is now disabled so a missed click on the title bar
+  doesn't accidentally start a drag.
+- Dev sidecar inherits `--experimental-sqlite` via `NODE_OPTIONS` so
+  `tsx` boots `node:sqlite` cleanly, mirroring the bundled-node path.
+
+### Docs
+
+- Cheat sheet documents the `{{placeholder}}` syntax.
+
 ## [0.3.0] — 2026-05-24
 
 ### Added
