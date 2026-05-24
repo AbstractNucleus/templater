@@ -162,6 +162,9 @@ impl Sidecar {
                 let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
                 let mut c = Command::new(npx);
                 c.arg("tsx");
+                // Mirrors the BundledNode branch — node:sqlite is experimental in
+                // Node 22.x. tsx forwards NODE_OPTIONS to the underlying node.
+                c.env("NODE_OPTIONS", "--experimental-sqlite");
                 c
             }
             SidecarCommand::BundledNode(node) => {

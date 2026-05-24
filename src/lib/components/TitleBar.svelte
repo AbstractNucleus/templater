@@ -5,10 +5,14 @@
     onOpenSettings,
     onToggleContext,
     contextOpen,
+    onToggleCapture,
+    captureOpen,
   }: {
     onOpenSettings: () => void;
     onToggleContext: () => void;
     contextOpen: boolean;
+    onToggleCapture: () => void;
+    captureOpen: boolean;
   } = $props();
 
   let pinned = $state(false);
@@ -42,6 +46,20 @@
 <header class="titlebar" data-tauri-drag-region>
   <div class="title" data-tauri-drag-region>Templater</div>
   <div class="actions">
+    <button
+      class="btn"
+      class:active={captureOpen}
+      title={captureOpen ? "Close memory capture" : "Capture memory"}
+      aria-pressed={captureOpen}
+      aria-label="Capture memory"
+      onclick={onToggleCapture}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        <path d="M9 10h6" />
+        <path d="M12 7v6" />
+      </svg>
+    </button>
     <button
       class="btn"
       class:active={pinned}

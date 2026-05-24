@@ -1,7 +1,6 @@
 <script lang="ts">
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
-    captureMemory,
     getContextStatus,
     listContextFiles,
     readContextFile,
@@ -34,11 +33,6 @@
   let searchQuery = $state("");
   let loading = $state(false);
   let errorBanner = $state<string | null>(null);
-
-  let captureRaw = $state("");
-  let captureTarget = $state<string>("");
-  let captureBusy = $state(false);
-  let captureResult = $state<{ path: string; signal: string } | null>(null);
 
   let preview = $state<{ path: string; text: string; truncated: boolean } | null>(null);
 
@@ -83,14 +77,6 @@
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  });
-
-  $effect(() => {
-    // Default the capture target to the first source whenever it appears.
-    if (captureTarget.length === 0 && sources.length > 0) {
-      captureTarget = sources[0];
-    }
-    if (sources.length === 0) captureTarget = "";
   });
 
   async function addSource(): Promise<void> {
@@ -156,24 +142,6 @@
       preview = await readContextFile(path);
     } catch (e) {
       errorBanner = String(e);
-    }
-  }
-
-  async function runCapture(): Promise<void> {
-    if (captureBusy) return;
-    const raw = captureRaw.trim();
-    if (raw.length === 0 || captureTarget.length === 0) return;
-    captureBusy = true;
-    captureResult = null;
-    try {
-      const r = await captureMemory(raw, captureTarget, undefined, backend);
-      captureResult = { path: r.appendedTo, signal: r.signal };
-      captureRaw = "";
-      await refresh();
-    } catch (e) {
-      errorBanner = `Capture failed: ${e}`;
-    } finally {
-      captureBusy = false;
     }
   }
 
@@ -293,45 +261,6 @@
       {/if}
     </section>
 
-    <section class="block">
-      <div class="block-hdr"><h3>Capture memory</h3></div>
-      <p class="hint">
-        Paste a Slack thread, email, or note. Haiku distills the durable signal and appends it
-        to <code>memories.md</code> in the chosen source.
-      </p>
-      <textarea
-        class="capture-input"
-        rows="5"
-        placeholder="Paste a message thread or note…"
-        value={captureRaw}
-        oninput={(e) => (captureRaw = e.currentTarget.value)}
-        disabled={captureBusy || sources.length === 0}
-      ></textarea>
-      <div class="capture-row">
-        <select
-          class="src-select"
-          bind:value={captureTarget}
-          disabled={sources.length === 0 || captureBusy}
-        >
-          {#each sources as s}
-            <option value={s}>{basename(s)}</option>
-          {/each}
-        </select>
-        <button
-          class="primary"
-          onclick={() => void runCapture()}
-          disabled={captureBusy || captureRaw.trim().length === 0 || captureTarget.length === 0}
-        >
-          {captureBusy ? "Capturing…" : "Capture"}
-        </button>
-      </div>
-      {#if captureResult}
-        <div class="capture-ok">
-          <div class="ok-hdr">Saved to <code>{basename(captureResult.path)}</code></div>
-          <div class="ok-signal">{captureResult.signal}</div>
-        </div>
-      {/if}
-    </section>
   </div>
 </aside>
 
@@ -658,67 +587,6 @@
     margin-top: 3px;
   }
 
-  .capture-input {
-    width: 100%;
-    box-sizing: border-box;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 7px 10px;
-    border-radius: 4px;
-    font: inherit;
-    font-size: 0.78rem;
-    resize: vertical;
-    min-height: 80px;
-  }
-
-  .capture-input:focus {
-    outline: none;
-    border-color: var(--border-focus);
-  }
-
-  .capture-row {
-    display: flex;
-    gap: 6px;
-    margin-top: 6px;
-  }
-
-  .src-select {
-    flex: 1;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 5px 8px;
-    border-radius: 4px;
-    font: inherit;
-    font-size: 0.78rem;
-  }
-
-  .src-select:focus {
-    outline: none;
-    border-color: var(--border-focus);
-  }
-
-  .capture-ok {
-    margin-top: 8px;
-    background: var(--accent-positive-bg);
-    border: 1px solid var(--accent-positive-border);
-    color: var(--accent-positive-text);
-    padding: 6px 8px;
-    border-radius: 4px;
-  }
-
-  .ok-hdr {
-    font-size: 0.72rem;
-    font-weight: 600;
-  }
-
-  .ok-signal {
-    font-size: 0.78rem;
-    margin-top: 4px;
-    line-height: 1.4;
-  }
-
   .err-banner {
     background: var(--accent-danger-bg);
     color: var(--accent-danger-text);
@@ -728,14 +596,6 @@
     display: flex;
     justify-content: space-between;
     gap: 6px;
-  }
-
-  code {
-    background: var(--bg-active);
-    color: var(--text);
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-size: 0.72rem;
   }
 
   .preview-backdrop {

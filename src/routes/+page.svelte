@@ -12,6 +12,7 @@
   import CheatSheet from "$lib/components/CheatSheet.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import ContextPane from "$lib/components/ContextPane.svelte";
+  import MemoryCapturePopover from "$lib/components/MemoryCapturePopover.svelte";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { starterTemplates } from "$lib/starterTemplates";
@@ -65,6 +66,7 @@
   let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
   let contextWidth = $state(DEFAULT_COLUMN_WIDTHS.context);
   let contextOpen = $state(false);
+  let captureOpen = $state(false);
   let searchInput: HTMLInputElement | undefined = $state();
 
   function clearSearch(): void {
@@ -227,6 +229,12 @@
     if (cheatSheetOpen) {
       // CheatSheet.svelte has its own window listener for Escape — just
       // suppress global shortcuts so e.g. arrow keys don't move selection.
+      return;
+    }
+    if (captureOpen) {
+      // MemoryCapturePopover owns Escape via its own listener. Suppress
+      // global shortcuts so Ctrl+F / Ctrl+L / zoom don't steal focus while
+      // the modal popover is showing.
       return;
     }
     const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.altKey;
@@ -1342,6 +1350,8 @@
     onOpenSettings={() => (settingsOpen = true)}
     onToggleContext={() => (contextOpen = !contextOpen)}
     {contextOpen}
+    onToggleCapture={() => (captureOpen = !captureOpen)}
+    {captureOpen}
   />
   {#if !baseMode}
     <div class="search-row">
@@ -1527,6 +1537,14 @@
   <CheatSheet
     globalHotkey={settings.global_hotkey}
     onClose={() => (cheatSheetOpen = false)}
+  />
+{/if}
+
+{#if captureOpen && loaded}
+  <MemoryCapturePopover
+    sources={settings.context_sources}
+    backend={settings.paste_backend}
+    onClose={() => (captureOpen = false)}
   />
 {/if}
 
