@@ -4,6 +4,72 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-26
+
+### Added
+
+- **Per-template usage stats.** Each template now tracks lifetime
+  `copy_count`. The sort button cycles **manual → recent → most used**.
+- **Per-template signature override.** Optional field on each template
+  that wins over the global signature when set.
+- **Global snippets.** Define `key = value` pairs in Settings that
+  expand at copy time alongside `{{date}}` / `{{time}}`. Per-template
+  fills still override snippets.
+- **Per-template edit history.** Each save snapshots the prior
+  opening/body into a 10-entry ring. The main panel surfaces them with
+  a "Revert" button per version. Revert is itself undoable.
+- **Folder grouping.** Optional `folder` field on each template.
+  When any template has a folder, the sidebar renders collapsible
+  groups; flat layout otherwise.
+- **Bulk ops extended.** Multi-select right-click now offers
+  **Add tag**, **Remove tag**, **Export**, and **Delete**.
+- **Quick-capture hotkey.** A second optional global hotkey grabs the
+  current clipboard and opens the new-template form with the body
+  pre-filled. Set it under Settings → Hotkey.
+- **Latency p50/p95 panel.** Diagnostics now shows a per-op rollup
+  (count, p50, p95, errors) over the last 100 sidecar calls.
+- **Smarter context chunking.** Files larger than 8k chars now have
+  their head + section headers + tail sent to the summarizer instead of
+  just the head, so late-document signal isn't truncated.
+- **CI on push + PR.** New `.github/workflows/ci.yml` runs
+  `cargo check`, `svelte-check`, `vitest`, and a sidecar `tsc` build on
+  every push and PR to `main`.
+
+### Changed
+
+- **Lazy sidecar spawn.** Browse-and-copy sessions no longer spin up
+  the Node sidecar at launch. The sidecar starts on the first AI op
+  (rank / adapt / edit / context) or when a non-empty context source
+  list is persisted.
+- **Settings modal split.** The 1480-line `SettingsModal.svelte` was
+  decomposed into focused section components under
+  `src/lib/components/settings/` — pure refactor, identical UX.
+- **+page.svelte split.** App-state orchestration moved into
+  `src/lib/stores/templatesStore.svelte.ts` and `agentStore.svelte.ts`
+  — pure refactor, identical behavior.
+
+### Fixed
+
+- Ingest summaries on long files no longer drop everything past the
+  first 8k characters — see "Smarter context chunking" above.
+
+### Tests
+
+- New `sidecar/context.test.ts` covers `extractText` for
+  `.md` / `.txt` / `.csv` / `.xlsx` / `.pdf` and the `summaryInput`
+  head/tail/headers logic. Suite total: **61 tests**.
+
+### Known limitations
+
+- The Windows installer is still ~280 MB. The bulk is
+  `@anthropic-ai/claude-agent-sdk`'s required platform binary
+  (`claude.exe`, 224 MB); see
+  [issue #2](https://github.com/AbstractNucleus/templater/issues/2)
+  for the architectural options.
+- Aero Snap on the frameless Windows window is still missing; needs
+  WinAPI WNDPROC subclassing. See
+  [issue #5](https://github.com/AbstractNucleus/templater/issues/5).
+
 ## [0.3.4] — 2026-05-25
 
 ### Added
