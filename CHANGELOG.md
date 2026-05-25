@@ -4,6 +4,55 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — 2026-05-25
+
+### Added
+
+- **New shortcuts.** `Ctrl+Shift+M` toggles the capture popover,
+  `Ctrl+Enter` submits it, `?` toggles the cheat sheet (was open-only),
+  `Esc` clears the focused search input.
+- **`{{time}}` / `{{time:long}}` placeholders** alongside the existing
+  date variants.
+- **Tray menu Settings item** opens the window and goes straight to the
+  Settings modal.
+- **"Reset hotkey to default"** button and **"Open data folder"** button
+  in Settings; reset window position now actually centers and clears
+  saved geometry via Rust.
+- **Dismissible global error banner** stacks above the undo toast.
+- Capture popover gains an empty-state CTA that opens the context pane,
+  an "Open" button revealing the saved memory file, an inline
+  adapt-to-inbound error with Retry, and clickable example chips in the
+  agent sidebar empty state.
+
+### Fixed
+
+- **Data-loss guards.** Corrupt `settings.json` no longer destroys
+  templates on next save; failed template loads no longer fall back to
+  starters; placeholder values can't be resurrected after template
+  delete.
+- **Atomic global-hotkey rebind** (register new before unregistering
+  old) and the app keeps starting if hotkey registration fails.
+- `Ctrl+Z` inside the search box no longer hijacks the template undo
+  stack.
+- Title-bar pin reflects the actual window state on mount.
+- Sidecar respawn re-pushes the context source list via a new event.
+- Bulk-add tag normalizes input so `Email`/`email` don't duplicate;
+  Add button disabled on empty input and no longer silently closes.
+- Save-geometry skipped while the window is minimized.
+- Capture popover clears stale success/error on input.
+- `ContextPane` and Diagnostics pause polling when the document is
+  hidden.
+- Guarded `setContextSources` effect from re-firing on unrelated
+  changes; `contextOpen` persists across sessions.
+- Starter template `{{time}}` renamed to `{{meeting_time}}` to avoid
+  collision with the new built-in.
+- Stale delete-confirm copy fixed in both modals.
+
+### Docs
+
+- README + cheat sheet document the new shortcuts and context pane
+  capture flow; onboarding tour mentions context + capture.
+
 ## [0.3.3] — 2026-05-25
 
 ### Changed
