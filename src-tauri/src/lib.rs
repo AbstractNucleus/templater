@@ -17,6 +17,10 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 #[cfg(desktop)]
 struct CurrentHotkey(Mutex<Shortcut>);
 
+/// Second optional global hotkey for the quick-capture flow. None = disabled.
+#[cfg(desktop)]
+struct CaptureHotkey(Mutex<Option<Shortcut>>);
+
 #[tauri::command]
 async fn ping_sidecar(state: tauri::State<'_, Sidecar>) -> Result<serde_json::Value, String> {
     state
@@ -299,6 +303,31 @@ fn export_template(
 }
 
 #[tauri::command]
+fn export_templates_subset(
+    ids: Vec<String>,
+    path: String,
+    store: tauri::State<'_, Store>,
+) -> Result<usize, String> {
+    let data = store
+        .load()?
+        .ok_or_else(|| "no templates file on disk".to_string())?;
+    let want: HashSet<String> = ids.into_iter().collect();
+    let subset: Vec<Template> = data
+        .templates
+        .into_iter()
+        .filter(|t| want.contains(&t.id))
+        .collect();
+    let count = subset.len();
+    let file = ExportFile {
+        version: DATA_VERSION,
+        templates: subset,
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("write {path}: {e}"))?;
+    Ok(count)
+}
+
+#[tauri::command]
 fn import_templates(
     path: String,
     store: tauri::State<'_, Store>,
@@ -436,6 +465,42 @@ fn set_hotkey(_accelerator: String) -> Result<(), String> {
     Err("global shortcuts not available on this platform".to_string())
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn set_quick_capture_hotkey(
+    accelerator: Option<String>,
+    app: tauri::AppHandle,
+    current: tauri::State<'_, CaptureHotkey>,
+) -> Result<(), String> {
+    let mut guard = current.0.lock().map_err(|e| e.to_string())?;
+    let gs = app.global_shortcut();
+    let next: Option<Shortcut> = match accelerator.as_deref() {
+        None | Some("") => None,
+        Some(a) => Some(
+            Shortcut::from_str(a).map_err(|e| format!("invalid hotkey \"{a}\": {e}"))?,
+        ),
+    };
+    if next == *guard {
+        return Ok(());
+    }
+    // Register-before-unregister, same rationale as set_hotkey above.
+    if let Some(s) = next {
+        gs.register(s)
+            .map_err(|e| format!("failed to register quick-capture hotkey: {e}"))?;
+    }
+    if let Some(prev) = *guard {
+        let _ = gs.unregister(prev);
+    }
+    *guard = next;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn set_quick_capture_hotkey(_accelerator: Option<String>) -> Result<(), String> {
+    Err("global shortcuts not available on this platform".to_string())
+}
+
 /// Returns true if the saved top-left corner falls inside any connected monitor.
 /// Used to discard stale geometry when monitor configuration has changed.
 fn geometry_on_some_monitor(window: &tauri::WebviewWindow, geo: &WindowGeometry) -> bool {
@@ -505,15 +570,29 @@ pub fn run() {
     {
         use tauri_plugin_global_shortcut::ShortcutState;
 
-        // The handler fires only for registered shortcuts, and we only ever
-        // register one (the toggle). So no per-shortcut comparison needed —
-        // any press is the toggle.
+        // We register up to two shortcuts: the window toggle and an optional
+        // quick-capture. Compare the fired shortcut against the live state
+        // values to decide which flow to run.
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        toggle_main_window(app);
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
                     }
+                    let capture_match = app
+                        .try_state::<CaptureHotkey>()
+                        .and_then(|c| c.0.lock().ok().and_then(|g| *g))
+                        .map(|s| s == *shortcut)
+                        .unwrap_or(false);
+                    if capture_match {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit("quick-capture", ());
+                        return;
+                    }
+                    toggle_main_window(app);
                 })
                 .build(),
         );
@@ -562,26 +641,31 @@ pub fn run() {
 
             // Push the persisted source list to the sidecar so the watcher
             // and SQLite index come up before the user touches anything.
-            // Non-blocking: ingest summaries run in the background.
+            // Skipped when no sources are configured — keeps the sidecar
+            // lazy so a browse-and-copy session never spawns the Node
+            // process. Non-blocking when it does run: ingest summaries
+            // happen in the background.
             if let Some(settings) = &loaded_settings {
-                let sources = settings.context_sources.clone();
-                let backend = if settings.paste_backend.is_empty() {
-                    "agent".to_string()
-                } else {
-                    settings.paste_backend.clone()
-                };
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let sidecar = handle.state::<Sidecar>();
-                    let _ = sidecar
-                        .request(&serde_json::json!({
-                            "id": "context-init",
-                            "op": "context-set-sources",
-                            "sources": sources,
-                            "backend": backend,
-                        }))
-                        .await;
-                });
+                if !settings.context_sources.is_empty() {
+                    let sources = settings.context_sources.clone();
+                    let backend = if settings.paste_backend.is_empty() {
+                        "agent".to_string()
+                    } else {
+                        settings.paste_backend.clone()
+                    };
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let sidecar = handle.state::<Sidecar>();
+                        let _ = sidecar
+                            .request(&serde_json::json!({
+                                "id": "context-init",
+                                "op": "context-set-sources",
+                                "sources": sources,
+                                "backend": backend,
+                            }))
+                            .await;
+                    });
+                }
             }
 
             #[cfg(desktop)]
@@ -600,6 +684,18 @@ pub fn run() {
                     eprintln!("global hotkey {raw} unavailable: {e}");
                 }
                 app.manage(CurrentHotkey(Mutex::new(shortcut)));
+
+                let capture_shortcut: Option<Shortcut> = loaded_settings
+                    .as_ref()
+                    .and_then(|s| s.quick_capture_hotkey.as_deref())
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| Shortcut::from_str(s).ok());
+                if let Some(sc) = capture_shortcut {
+                    if let Err(e) = app.global_shortcut().register(sc) {
+                        eprintln!("quick-capture hotkey unavailable: {e}");
+                    }
+                }
+                app.manage(CaptureHotkey(Mutex::new(capture_shortcut)));
             }
 
             let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
@@ -673,11 +769,13 @@ pub fn run() {
             save_app_data,
             export_templates,
             export_template,
+            export_templates_subset,
             import_templates,
             list_template_backups,
             restore_template_backup,
             get_env_warnings,
             set_hotkey,
+            set_quick_capture_hotkey,
             open_data_dir,
             open_path,
             reset_window_position,

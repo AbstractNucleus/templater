@@ -16,41 +16,33 @@
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
-  import { starterTemplates } from "$lib/starterTemplates";
   import { searchTemplates } from "$lib/search";
   import {
-    loadAppData,
-    saveAppData,
     rankTemplates,
     getEnvWarnings,
     explainRankError,
-    editTemplate,
-    adaptTemplate,
     openDataDir,
-    exportTemplates,
-    exportTemplate,
-    importTemplates,
     checkForUpdate,
     getAppVersion,
     onSidecarProgress,
     listTemplateBackups,
-    restoreTemplateBackup,
     setContextSources,
     type Ranking,
-    type ChatTurn,
   } from "$lib/api";
-  import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     DEFAULT_COLUMN_WIDTHS,
-    DEFAULT_SETTINGS,
-    type AppData,
     type Settings,
     type Template,
   } from "$lib/types";
+  import {
+    templatesStore,
+    handleExportTemplates,
+    handleImportTemplates,
+  } from "$lib/stores/templatesStore.svelte";
+  import { agentStore } from "$lib/stores/agentStore.svelte";
 
   const PASTE_THRESHOLD = 30;
   const RANK_DEBOUNCE_MS = 600;
-  const DATA_VERSION = 1;
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2.0;
@@ -166,8 +158,8 @@
   function setZoom(next: number): void {
     // Round to one decimal to avoid 0.1-step float drift (0.7 + 0.1 = 0.7999…).
     const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(next * 10) / 10));
-    if (clamped === settings.zoom) return;
-    void persist(templates, { ...settings, zoom: clamped });
+    if (clamped === templatesStore.settings.zoom) return;
+    void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, zoom: clamped });
   }
 
   function isInputFocused(): boolean {
@@ -182,18 +174,19 @@
   function moveSelection(delta: number): void {
     const ids = visibleTemplateIds;
     if (ids.length === 0) return;
-    const idx = selectedTemplateId === null ? -1 : ids.indexOf(selectedTemplateId);
+    const cur = templatesStore.selectedTemplateId;
+    const idx = cur === null ? -1 : ids.indexOf(cur);
     let next: number;
     if (idx < 0) {
       next = delta > 0 ? 0 : ids.length - 1;
     } else {
       next = Math.max(0, Math.min(ids.length - 1, idx + delta));
     }
-    selectedTemplateId = ids[next];
+    templatesStore.selectedTemplateId = ids[next];
   }
 
   function copySelected(): void {
-    if (selectedTemplateId === null) return;
+    if (templatesStore.selectedTemplateId === null) return;
     copyTrigger++;
   }
 
@@ -223,6 +216,14 @@
       if (e.key === "Escape") {
         e.preventDefault();
         bulkTagPromptOpen = false;
+        bulkTagDraft = "";
+      }
+      return;
+    }
+    if (bulkRemoveTagPromptOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        bulkRemoveTagPromptOpen = false;
         bulkTagDraft = "";
       }
       return;
@@ -261,12 +262,12 @@
     const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.altKey;
     if (ctrlOnly && (e.key === "+" || e.key === "=")) {
       e.preventDefault();
-      setZoom((settings.zoom ?? 1) + ZOOM_STEP);
+      setZoom((templatesStore.settings.zoom ?? 1) + ZOOM_STEP);
       return;
     }
     if (ctrlOnly && (e.key === "-" || e.key === "_")) {
       e.preventDefault();
-      setZoom((settings.zoom ?? 1) - ZOOM_STEP);
+      setZoom((templatesStore.settings.zoom ?? 1) - ZOOM_STEP);
       return;
     }
     if (ctrlOnly && e.key === "0") {
@@ -296,7 +297,7 @@
       return;
     }
 
-    if (baseMode || editing) return;
+    if (agentStore.baseMode || editing) return;
     const inSearch = document.activeElement === searchInput;
     if (!inSearch && isInputFocused()) return;
 
@@ -306,7 +307,7 @@
     // happen anyway.
     if (ctrlOnly && !e.shiftKey && e.key.toLowerCase() === "z" && isEditorMode && !inSearch) {
       e.preventDefault();
-      void performUndo();
+      void templatesStore.performUndo();
       return;
     }
 
@@ -382,10 +383,10 @@
         handle.releasePointerCapture(e.pointerId);
         handle.classList.remove("dragging");
         const final = widthOf(target);
-        if (final !== settings.column_widths[target]) {
-          void persist(templates, {
-            ...settings,
-            column_widths: { ...settings.column_widths, [target]: final },
+        if (final !== templatesStore.settings.column_widths[target]) {
+          void templatesStore.persist(templatesStore.templates, {
+            ...templatesStore.settings,
+            column_widths: { ...templatesStore.settings.column_widths, [target]: final },
           });
         }
       }
@@ -396,29 +397,18 @@
     };
   }
 
-  let templates = $state<Template[]>([]);
-  let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   let envApiKeyOverride = $state(false);
-  let loaded = $state(false);
-  let loadError = $state<string | null>(null);
   let appVersion = $state("0.0.0");
 
   let searchQuery = $state("");
   let selectedTagIds = $state<Set<string>>(new Set());
   let excludedTagIds = $state<Set<string>>(new Set());
   let tagCombinator = $state<"and" | "or">("and");
-  let selectedTemplateId = $state<string | null>(null);
-  /** Multi-selection from Ctrl/Shift-click. Always includes selectedTemplateId
-   *  when non-empty. When .size <= 1 the bulk bar is hidden and behavior is
-   *  identical to single-select. */
-  let bulkSelectedIds = $state<Set<string>>(new Set());
   let includeOpening = $state(true);
   let includeSignature = $state(true);
   let editing = $state(false);
   let settingsOpen = $state(false);
   let cheatSheetOpen = $state(false);
-  let adaptBusy = $state(false);
-  let adaptError = $state<string | null>(null);
 
   let rankings = $state<Ranking[] | null>(null);
   let rankLoading = $state(false);
@@ -427,69 +417,24 @@
 
   let copyTrigger = $state(0);
 
-  // Undo: a bounded snapshot stack pushed BEFORE every template-list
-  // mutation (save, delete, duplicate, agent save, import, restore, pin).
-  // Ctrl+Z pops one entry and re-persists; settings (theme, zoom, columns)
-  // are NOT pushed so an undo doesn't surprise the user by reverting them.
-  type UndoSnapshot = {
-    templates: Template[];
-    placeholderValues: Record<string, Record<string, string>>;
-    label: string;
-  };
-  const MAX_UNDO = 20;
-  let undoStack = $state<UndoSnapshot[]>([]);
-  let undoToast = $state<string | null>(null);
-  let undoToastTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function pushUndo(label: string): void {
-    const snapshot: UndoSnapshot = {
-      templates: [...templates],
-      placeholderValues: { ...settings.placeholder_values },
-      label,
-    };
-    undoStack = [...undoStack.slice(-(MAX_UNDO - 1)), snapshot];
-  }
-
-  async function performUndo(): Promise<void> {
-    if (undoStack.length === 0) return;
-    const snap = undoStack[undoStack.length - 1];
-    undoStack = undoStack.slice(0, -1);
-    await persist(snap.templates, { ...settings, placeholder_values: snap.placeholderValues });
-    if (
-      selectedTemplateId === null ||
-      !snap.templates.some((t) => t.id === selectedTemplateId)
-    ) {
-      selectedTemplateId = snap.templates[0]?.id ?? null;
-    }
-    showUndoToast(`Undid ${snap.label}`);
-  }
-
-  function showUndoToast(msg: string): void {
-    undoToast = msg;
-    if (undoToastTimer) clearTimeout(undoToastTimer);
-    undoToastTimer = setTimeout(() => (undoToast = null), 2000);
-  }
-
-  let baseMode = $state(false);
-  let baseKind = $state<"new" | "base">("base");
-  let baseSourceName = $state("");
-  let baseDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
-  let agentMessages = $state<ChatTurn[]>([]);
-  let agentBusy = $state(false);
-  let agentError = $state<string | null>(null);
-  let agentProgress = $state<string>("");
-  let saveAsOpen = $state(false);
   let agentSidebarWidth = $state(DEFAULT_COLUMN_WIDTHS.agent);
   let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   let contextDeleteTarget = $state<Template | null>(null);
   const AGENT_MIN = 240;
   const AGENT_MAX = 600;
 
+  // Read-only aliases keep template + derivation code readable. Mutations go
+  // directly through templatesStore.X so reactivity propagates back.
+  const templates = $derived(templatesStore.templates);
+  const settings = $derived(templatesStore.settings);
+  const loaded = $derived(templatesStore.loaded);
+  const undoToast = $derived(templatesStore.undoToast);
+
   const selectedTemplate = $derived(
-    templates.find((t) => t.id === selectedTemplateId) ?? null,
+    templates.find((t) => t.id === templatesStore.selectedTemplateId) ?? null,
   );
 
-  const isEditorMode = $derived(settings.mode === "editor");
+  const isEditorMode = $derived(templatesStore.isEditorMode);
 
   const availableTags = $derived.by(() => {
     const set = new Set<string>();
@@ -497,19 +442,22 @@
     return [...set].sort();
   });
 
-  // Browse order: pinned first, then either by most-recently-copied or by
-  // raw array order (manual sort). Applied before tag/search so the empty-
-  // query view reflects user priority. In manual mode we skip the recency
-  // branch entirely — otherwise a copy after a drag-reorder would silently
-  // bubble the copied template back to the top.
+  // Browse order: pinned first, then by sort mode. "manual" preserves array
+  // order; "recent" by last_used_at desc; "most_used" by copy_count desc.
   const browseOrdered = $derived.by(() => {
-    const useRecency = settings.sort_mode === "recent";
+    const mode = settings.sort_mode;
     return [...templates].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      if (!useRecency) return 0;
-      const aT = a.last_used_at ?? "";
-      const bT = b.last_used_at ?? "";
-      if (aT !== bT) return aT > bT ? -1 : 1;
+      if (mode === "recent") {
+        const aT = a.last_used_at ?? "";
+        const bT = b.last_used_at ?? "";
+        if (aT !== bT) return aT > bT ? -1 : 1;
+        return 0;
+      }
+      if (mode === "most_used") {
+        if (a.copy_count !== b.copy_count) return b.copy_count - a.copy_count;
+        return 0;
+      }
       return 0;
     });
   });
@@ -598,80 +546,39 @@
   // of the result set (e.g. user typed and the previous selection no longer
   // matches). Skips during baseMode/editing where the selection is locked.
   $effect(() => {
-    if (baseMode || editing) return;
+    if (agentStore.baseMode || editing) return;
     const ids = visibleTemplateIds;
     if (ids.length === 0) return;
-    if (selectedTemplateId === null || !ids.includes(selectedTemplateId)) {
-      selectedTemplateId = ids[0];
+    const cur = templatesStore.selectedTemplateId;
+    if (cur === null || !ids.includes(cur)) {
+      templatesStore.selectedTemplateId = ids[0];
     }
   });
 
   $effect(() => {
     void (async () => {
       try {
-        const [data, env, version] = await Promise.all([
-          loadAppData(),
+        const [env, version] = await Promise.all([
           getEnvWarnings(),
           getAppVersion().catch(() => "0.0.0"),
         ]);
         envApiKeyOverride = env.api_key_override;
         appVersion = version;
-        if (data === null) {
-          templates = starterTemplates;
-          settings = { ...DEFAULT_SETTINGS };
-          await saveAppData({
-            version: DATA_VERSION,
-            templates: starterTemplates,
-            settings,
-          });
-        } else {
-          templates = data.templates;
-          settings = data.settings;
-          // Existing users who dismissed the legacy "minimises to tray" banner
-          // shouldn't be surprised by the new onboarding tour. Auto-graduate
-          // them so the tour only fires for genuinely fresh installs.
-          if (settings.close_hint_shown && !settings.onboarding_complete) {
-            settings = { ...settings, onboarding_complete: true };
-            await saveAppData({
-              version: DATA_VERSION,
-              templates,
-              settings,
-            });
-          }
-        }
-        tagsWidth = settings.column_widths.tags;
-        templatesWidth = settings.column_widths.templates;
-        agentSidebarWidth = settings.column_widths.agent;
-        contextWidth = settings.column_widths.context ?? DEFAULT_COLUMN_WIDTHS.context;
-        contextOpen = settings.context_open;
-        selectedTemplateId = templates[0]?.id ?? null;
+        await templatesStore.load();
+        const s = templatesStore.settings;
+        tagsWidth = s.column_widths.tags;
+        templatesWidth = s.column_widths.templates;
+        agentSidebarWidth = s.column_widths.agent;
+        contextWidth = s.column_widths.context ?? DEFAULT_COLUMN_WIDTHS.context;
+        contextOpen = s.context_open;
       } catch (e) {
         // Surface the error and leave templates empty — DON'T fall back to
         // starter templates here. Any subsequent persist would overwrite the
         // user's (presumably recoverable) on-disk file with the starter set.
-        loadError = String(e);
-      } finally {
-        loaded = true;
+        templatesStore.loadError = String(e);
       }
     })();
   });
-
-  async function persist(
-    nextTemplates: Template[],
-    nextSettings: Settings = settings,
-  ): Promise<void> {
-    templates = nextTemplates;
-    settings = nextSettings;
-    try {
-      await saveAppData({
-        version: DATA_VERSION,
-        templates: nextTemplates,
-        settings: nextSettings,
-      });
-    } catch (e) {
-      loadError = `save failed: ${e}`;
-    }
-  }
 
   function handleTagToggle(tag: string): void {
     const next = new Set(selectedTagIds);
@@ -714,33 +621,35 @@
 
   function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
     if (editing) editing = false;
+    const cur = templatesStore.selectedTemplateId;
+    const bulk = templatesStore.bulkSelectedIds;
     if (modifier === "ctrl") {
       // Toggle in the bulk set. Anchor (selectedTemplateId) moves to the
       // clicked item if it ends up still selected, otherwise stays put.
-      const next = new Set(bulkSelectedIds.size > 0 ? bulkSelectedIds : selectedTemplateId ? [selectedTemplateId] : []);
+      const next = new Set(bulk.size > 0 ? bulk : cur ? [cur] : []);
       if (next.has(id)) {
         next.delete(id);
       } else {
         next.add(id);
       }
-      bulkSelectedIds = next;
-      selectedTemplateId = next.has(id) ? id : (next.values().next().value ?? null);
+      templatesStore.bulkSelectedIds = next;
+      templatesStore.selectedTemplateId = next.has(id) ? id : (next.values().next().value ?? null);
       return;
     }
-    if (modifier === "shift" && selectedTemplateId !== null) {
+    if (modifier === "shift" && cur !== null) {
       const ids = visibleTemplateIds;
-      const a = ids.indexOf(selectedTemplateId);
+      const a = ids.indexOf(cur);
       const b = ids.indexOf(id);
       if (a >= 0 && b >= 0) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
-        bulkSelectedIds = new Set(ids.slice(lo, hi + 1));
-        selectedTemplateId = id;
+        templatesStore.bulkSelectedIds = new Set(ids.slice(lo, hi + 1));
+        templatesStore.selectedTemplateId = id;
         return;
       }
     }
     // Plain click — clears multi, picks the one.
-    bulkSelectedIds = new Set();
-    selectedTemplateId = selectedTemplateId === id ? null : id;
+    templatesStore.bulkSelectedIds = new Set();
+    templatesStore.selectedTemplateId = cur === id ? null : id;
   }
 
   function handleSearchChange(q: string): void {
@@ -793,379 +702,53 @@
     }
   }
 
-  function handleNew(): void {
-    if (!isEditorMode) return;
-    baseKind = "new";
-    baseSourceName = "";
-    baseDraft = { opening: "", body: "" };
-    agentMessages = [];
-    agentBusy = false;
-    agentError = null;
-    baseMode = true;
-  }
+  // The Rust handler emits this when the quick-capture hotkey is pressed.
+  // Read the clipboard and open the new-template form with the body
+  // pre-filled. Skipped in User mode (no template creation allowed).
+  $effect(() => {
+    const unlisten = listen("quick-capture", async () => {
+      if (!isEditorMode) return;
+      let text = "";
+      try {
+        text = (await readText()) ?? "";
+      } catch {
+        text = "";
+      }
+      agentStore.handleNew(text);
+    });
+    return () => {
+      void unlisten.then((u) => u());
+    };
+  });
 
   async function handleSave(updated: Template): Promise<void> {
-    if (!isEditorMode) return;
-    pushUndo("edit");
-    const next = templates.map((t) => (t.id === updated.id ? updated : t));
-    await persist(next);
+    await templatesStore.handleSave(updated);
     editing = false;
   }
 
-  async function handleDuplicate(): Promise<void> {
-    if (!isEditorMode) return;
-    if (!selectedTemplate) return;
-    pushUndo("duplicate");
-    const now = new Date().toISOString();
-    const copy: Template = {
-      ...selectedTemplate,
-      id: crypto.randomUUID(),
-      name: `${selectedTemplate.name} (copy)`,
-      created_at: now,
-      updated_at: now,
-    };
-    const idx = templates.findIndex((t) => t.id === selectedTemplate.id);
-    const next = [...templates];
-    next.splice(idx + 1, 0, copy);
-    await persist(next);
-    selectedTemplateId = copy.id;
-  }
-
-  async function handleDelete(): Promise<void> {
-    if (!isEditorMode) return;
-    if (!selectedTemplate) return;
-    pushUndo("delete");
-    const id = selectedTemplate.id;
-    const idx = templates.findIndex((t) => t.id === id);
-    const next = templates.filter((t) => t.id !== id);
-    const nextSettings = settings.placeholder_values[id] !== undefined
-      ? { ...settings, placeholder_values: omitKey(settings.placeholder_values, id) }
-      : settings;
-    await persist(next, nextSettings);
-    selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
-    pruneBulkSelection(new Set([id]));
-  }
-
-  function omitKey<T extends object>(obj: T, key: string): T {
-    const copy = { ...obj } as Record<string, unknown>;
-    delete copy[key];
-    return copy as T;
-  }
-
   async function handleSettingsUpdate(next: Settings): Promise<void> {
-    await persist(templates, next);
-  }
-
-  async function handleRestoreBackup(name: string): Promise<void> {
-    pushUndo("restore");
-    const data = await restoreTemplateBackup(name);
-    // Rust already wrote the restored data to disk; sync local state.
-    templates = data.templates;
-    settings = data.settings;
-    selectedTemplateId = templates[0]?.id ?? null;
-    bulkSelectedIds = new Set();
-  }
-
-  type PortResult =
-    | { kind: "ok"; message: string }
-    | { kind: "cancelled" }
-    | { kind: "err"; error: string };
-
-  function pluralise(n: number, word: string): string {
-    return `${n} ${word}${n === 1 ? "" : "s"}`;
-  }
-
-  async function handleExportTemplates(): Promise<PortResult> {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const path = await saveDialog({
-        defaultPath: `templates-export-${today}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!path) return { kind: "cancelled" };
-      const count = await exportTemplates(path);
-      return { kind: "ok", message: `Exported ${pluralise(count, "template")}.` };
-    } catch (e) {
-      return { kind: "err", error: String(e) };
-    }
-  }
-
-  async function handleImportTemplates(): Promise<PortResult> {
-    if (!isEditorMode) return { kind: "err", error: "import disabled in User mode" };
-    try {
-      const path = await openDialog({
-        multiple: false,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (path === null || Array.isArray(path)) return { kind: "cancelled" };
-      pushUndo("import");
-      const result = await importTemplates(path);
-      // Rust has already persisted the merged list; just sync local state.
-      templates = result.templates;
-      bulkSelectedIds = new Set();
-      const dupNote =
-        result.skipped > 0 ? ` (${pluralise(result.skipped, "duplicate")} skipped)` : "";
-      return {
-        kind: "ok",
-        message: `Imported ${pluralise(result.added, "template")}${dupNote}.`,
-      };
-    } catch (e) {
-      return { kind: "err", error: String(e) };
-    }
-  }
-
-  async function duplicateTemplateById(id: string): Promise<void> {
-    if (!isEditorMode) return;
-    const src = templates.find((t) => t.id === id);
-    if (!src) return;
-    pushUndo("duplicate");
-    const now = new Date().toISOString();
-    const copy: Template = {
-      ...src,
-      id: crypto.randomUUID(),
-      name: `${src.name} (copy)`,
-      created_at: now,
-      updated_at: now,
-    };
-    const idx = templates.findIndex((t) => t.id === id);
-    const next = [...templates];
-    next.splice(idx + 1, 0, copy);
-    await persist(next);
-    selectedTemplateId = copy.id;
-  }
-
-  async function deleteTemplateById(id: string): Promise<void> {
-    if (!isEditorMode) return;
-    const idx = templates.findIndex((t) => t.id === id);
-    if (idx < 0) return;
-    pushUndo("delete");
-    const next = templates.filter((t) => t.id !== id);
-    const nextSettings = settings.placeholder_values[id] !== undefined
-      ? { ...settings, placeholder_values: omitKey(settings.placeholder_values, id) }
-      : settings;
-    await persist(next, nextSettings);
-    if (selectedTemplateId === id) {
-      selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
-    }
-    pruneBulkSelection(new Set([id]));
-  }
-
-  function pruneBulkSelection(removedIds: Set<string>): void {
-    if (bulkSelectedIds.size === 0) return;
-    const next = new Set<string>();
-    for (const id of bulkSelectedIds) if (!removedIds.has(id)) next.add(id);
-    bulkSelectedIds = next;
-  }
-
-  async function togglePin(id: string): Promise<void> {
-    if (!isEditorMode) return;
-    pushUndo("pin");
-    const next = templates.map((t) => (t.id === id ? { ...t, pinned: !t.pinned } : t));
-    await persist(next);
-  }
-
-  // Drag-reorder writes through the templates array directly. Sort mode is
-  // forced to "manual" here — if a user explicitly drags, they expect that
-  // order to stick over the recency sort.
-  async function handleTemplatesReorder(newOrderIds: string[]): Promise<void> {
-    if (!isEditorMode) return;
-    pushUndo("reorder");
-    const byId = new Map(templates.map((t) => [t.id, t]));
-    const next: Template[] = [];
-    for (const id of newOrderIds) {
-      const t = byId.get(id);
-      if (t) next.push(t);
-    }
-    // Defensive: any id that fell out of the new order keeps its trailing
-    // position so we never lose a template.
-    for (const t of templates) if (!newOrderIds.includes(t.id)) next.push(t);
-    await persist(next, { ...settings, sort_mode: "manual" });
-  }
-
-  async function handleTagsReorder(newOrder: string[]): Promise<void> {
-    await persist(templates, { ...settings, tag_order: newOrder });
-  }
-
-  function handleSortModeToggle(): void {
-    const next = settings.sort_mode === "manual" ? "recent" : "manual";
-    void persist(templates, { ...settings, sort_mode: next });
+    await templatesStore.persist(templatesStore.templates, next);
   }
 
   async function handleRenameTag(from: string, to: string): Promise<void> {
-    if (!isEditorMode) return;
-    if (from === to || to.length === 0) return;
-    pushUndo("rename tag");
-    const next = templates.map((t) =>
-      t.tags.includes(from)
-        ? { ...t, tags: dedupe(t.tags.map((tag) => (tag === from ? to : tag))) }
-        : t,
+    const { selected, excluded } = await templatesStore.handleRenameTag(
+      from,
+      to,
+      selectedTagIds,
+      excludedTagIds,
     );
-    // Update tag_order so the renamed tag keeps its position.
-    const newOrder = settings.tag_order.map((t) => (t === from ? to : t));
-    // Mirror into the active filter sets — without this, a tag selected as a
-    // filter keeps its old name in the set and silently matches zero rows.
-    if (selectedTagIds.has(from)) {
-      const s = new Set(selectedTagIds);
-      s.delete(from);
-      s.add(to);
-      selectedTagIds = s;
-    }
-    if (excludedTagIds.has(from)) {
-      const s = new Set(excludedTagIds);
-      s.delete(from);
-      s.add(to);
-      excludedTagIds = s;
-    }
-    await persist(next, { ...settings, tag_order: dedupe(newOrder) });
+    selectedTagIds = selected;
+    excludedTagIds = excluded;
   }
 
   async function handleDeleteTag(tag: string): Promise<void> {
-    if (!isEditorMode) return;
-    pushUndo("remove tag");
-    const next = templates.map((t) =>
-      t.tags.includes(tag) ? { ...t, tags: t.tags.filter((x) => x !== tag) } : t,
+    const { selected, excluded } = await templatesStore.handleDeleteTag(
+      tag,
+      selectedTagIds,
+      excludedTagIds,
     );
-    const newOrder = settings.tag_order.filter((t) => t !== tag);
-    const nextSelected = new Set(selectedTagIds);
-    nextSelected.delete(tag);
-    selectedTagIds = nextSelected;
-    const nextExcluded = new Set(excludedTagIds);
-    nextExcluded.delete(tag);
-    excludedTagIds = nextExcluded;
-    await persist(next, { ...settings, tag_order: newOrder });
-  }
-
-  function dedupe(items: string[]): string[] {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of items) {
-      if (seen.has(item)) continue;
-      seen.add(item);
-      out.push(item);
-    }
-    return out;
-  }
-
-  async function bulkDelete(ids: Set<string>): Promise<void> {
-    if (!isEditorMode || ids.size === 0) return;
-    pushUndo(`delete ${ids.size}`);
-    const next = templates.filter((t) => !ids.has(t.id));
-    const nextPlaceholders = { ...settings.placeholder_values };
-    for (const id of ids) delete nextPlaceholders[id];
-    bulkSelectedIds = new Set();
-    if (selectedTemplateId !== null && ids.has(selectedTemplateId)) {
-      selectedTemplateId = next[0]?.id ?? null;
-    }
-    await persist(next, { ...settings, placeholder_values: nextPlaceholders });
-  }
-
-  async function bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
-    if (!isEditorMode || ids.size === 0) return;
-    // Mirror TagPicker's normalization so bulk-add doesn't create case-variant
-    // duplicates (e.g. "Email" alongside an existing "email").
-    const trimmed = tag.trim().toLowerCase();
-    if (trimmed.length === 0) return;
-    pushUndo(`tag ${ids.size}`);
-    const next = templates.map((t) =>
-      ids.has(t.id) && !t.tags.some((existing) => existing.toLowerCase() === trimmed)
-        ? { ...t, tags: [...t.tags, trimmed] }
-        : t,
-    );
-    await persist(next);
-  }
-
-  async function adaptToInbound(): Promise<void> {
-    // Snapshot the source up front — selectedTemplate is reactive, so reading
-    // it after the await would race with a mid-flight selection change and
-    // mislabel the resulting baseSourceName.
-    const src = selectedTemplate;
-    if (!src || adaptBusy) return;
-    const inbound = searchQuery.trim();
-    if (inbound.length < PASTE_THRESHOLD) return;
-    adaptBusy = true;
-    adaptError = null;
-    try {
-      const { reasoning, updated, contextUsed } = await adaptTemplate(
-        { opening: src.opening, body: src.body },
-        inbound,
-        settings.paste_backend,
-      );
-      // Enter base mode with the adapted draft pre-filled. Seed the chat with
-      // the implicit "adapt this" turn so further refinement has context.
-      baseKind = "base";
-      baseSourceName = src.name;
-      baseDraft = updated;
-      const reasoningText = reasoning || "(no reasoning provided)";
-      const contextLine =
-        contextUsed.length > 0
-          ? `\n\nConsulted context: ${contextUsed.map((c) => c.path.split(/[\\/]/).pop()).join(", ")}`
-          : "";
-      agentMessages = [
-        { role: "user", content: `Adapt this template to the inbound message:\n\n${inbound}` },
-        { role: "assistant", content: reasoningText + contextLine },
-      ];
-      agentError = null;
-      agentBusy = false;
-      baseMode = true;
-    } catch (e) {
-      adaptError = explainRankError(String(e));
-    } finally {
-      adaptBusy = false;
-    }
-  }
-
-  // Bumped from MainPanel after a successful copy. Updates last_used_at so
-  // the browse-order sort surfaces recently-used templates near the top.
-  async function recordCopy(id: string): Promise<void> {
-    const now = new Date().toISOString();
-    const next = templates.map((t) => (t.id === id ? { ...t, last_used_at: now } : t));
-    await persist(next);
-  }
-
-  async function recordPlaceholderValues(
-    templateId: string,
-    values: Record<string, string>,
-  ): Promise<void> {
-    // The debounced flush from MainPanel can fire AFTER the template is
-    // deleted (handleDelete races the persistTimer). Skip to avoid
-    // resurrecting a placeholder entry for a template that no longer exists.
-    if (!templates.some((t) => t.id === templateId)) return;
-    // Strip empty entries to keep the persisted map lean.
-    const cleaned: Record<string, string> = {};
-    for (const [k, v] of Object.entries(values)) {
-      if (v.length > 0) cleaned[k] = v;
-    }
-    const nextMap = { ...settings.placeholder_values };
-    if (Object.keys(cleaned).length === 0) {
-      delete nextMap[templateId];
-    } else {
-      nextMap[templateId] = cleaned;
-    }
-    await persist(templates, { ...settings, placeholder_values: nextMap });
-  }
-
-  function slugify(s: string): string {
-    const slug = s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 64);
-    return slug.length > 0 ? slug : "template";
-  }
-
-  async function exportSingleTemplate(id: string): Promise<void> {
-    const tpl = templates.find((t) => t.id === id);
-    if (!tpl) return;
-    try {
-      const path = await saveDialog({
-        defaultPath: `template-${slugify(tpl.name)}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!path) return;
-      await exportTemplate(id, path);
-    } catch (e) {
-      loadError = `export failed: ${e}`;
-    }
+    selectedTagIds = selected;
+    excludedTagIds = excluded;
   }
 
   function openContextForTemplate(id: string, x: number, y: number): void {
@@ -1175,24 +758,29 @@
     // Bulk menu: when the right-clicked row is part of a >1 selection, show
     // bulk actions instead of per-template ones. Otherwise fall through to
     // the single-template menu.
-    const bulk = bulkSelectedIds;
-    if (bulk.size > 1 && bulk.has(id) && isEditorMode) {
+    const bulk = templatesStore.bulkSelectedIds;
+    if (bulk.size > 1 && bulk.has(id)) {
       const count = bulk.size;
-      contextMenu = {
-        x,
-        y,
-        items: [
-          {
-            label: `Add tag to ${count}…`,
-            onClick: () => (bulkTagPromptOpen = true),
-          },
-          {
-            label: `Delete ${count}`,
-            danger: true,
-            onClick: () => (bulkDeleteConfirmOpen = true),
-          },
-        ],
-      };
+      const items: ContextMenuItem[] = [];
+      if (isEditorMode) {
+        items.push({
+          label: `Add tag to ${count}…`,
+          onClick: () => (bulkTagPromptOpen = true),
+        });
+        items.push({
+          label: `Remove tag from ${count}…`,
+          onClick: () => (bulkRemoveTagPromptOpen = true),
+        });
+      }
+      items.push({ label: `Export ${count}…`, onClick: () => void templatesStore.bulkExport(bulk) });
+      if (isEditorMode) {
+        items.push({
+          label: `Delete ${count}`,
+          danger: true,
+          onClick: () => (bulkDeleteConfirmOpen = true),
+        });
+      }
+      contextMenu = { x, y, items };
       return;
     }
 
@@ -1200,11 +788,11 @@
     if (isEditorMode) {
       items.push({
         label: tpl.pinned ? "Unpin" : "Pin",
-        onClick: () => void togglePin(id),
+        onClick: () => void templatesStore.togglePin(id),
       });
-      items.push({ label: "Duplicate", onClick: () => void duplicateTemplateById(id) });
+      items.push({ label: "Duplicate", onClick: () => void templatesStore.duplicateTemplateById(id) });
     }
-    items.push({ label: "Export…", onClick: () => void exportSingleTemplate(id) });
+    items.push({ label: "Export…", onClick: () => void templatesStore.exportSingleTemplate(id) });
     if (isEditorMode) {
       items.push({
         label: "Delete",
@@ -1217,11 +805,12 @@
 
   let bulkDeleteConfirmOpen = $state(false);
   let bulkTagPromptOpen = $state(false);
+  let bulkRemoveTagPromptOpen = $state(false);
   let bulkTagDraft = $state("");
 
   async function confirmBulkDelete(): Promise<void> {
     bulkDeleteConfirmOpen = false;
-    await bulkDelete(bulkSelectedIds);
+    await templatesStore.bulkDelete(templatesStore.bulkSelectedIds);
   }
 
   async function confirmBulkTag(): Promise<void> {
@@ -1229,7 +818,15 @@
     if (tag.length === 0) return;
     bulkTagPromptOpen = false;
     bulkTagDraft = "";
-    await bulkAddTag(bulkSelectedIds, tag);
+    await templatesStore.bulkAddTag(templatesStore.bulkSelectedIds, tag);
+  }
+
+  async function confirmBulkRemoveTag(): Promise<void> {
+    const tag = bulkTagDraft.trim();
+    if (tag.length === 0) return;
+    bulkRemoveTagPromptOpen = false;
+    bulkTagDraft = "";
+    await templatesStore.bulkRemoveTag(templatesStore.bulkSelectedIds, tag);
   }
 
   function openContextForEmpty(x: number, y: number): void {
@@ -1240,7 +837,7 @@
         {
           label: "Open data folder",
           onClick: () => {
-            openDataDir().catch((e) => (loadError = `open folder failed: ${e}`));
+            openDataDir().catch((e) => (templatesStore.loadError = `open folder failed: ${e}`));
           },
         },
       ],
@@ -1255,61 +852,11 @@
     if (!contextDeleteTarget) return;
     const id = contextDeleteTarget.id;
     contextDeleteTarget = null;
-    await deleteTemplateById(id);
+    await templatesStore.deleteTemplateById(id);
   }
 
   function cancelContextDelete(): void {
     contextDeleteTarget = null;
-  }
-
-
-  function enterBaseMode(): void {
-    if (!selectedTemplate) return;
-    baseKind = "base";
-    baseSourceName = selectedTemplate.name;
-    baseDraft = { opening: selectedTemplate.opening, body: selectedTemplate.body };
-    agentMessages = [];
-    agentBusy = false;
-    agentError = null;
-    baseMode = true;
-  }
-
-  function exitBaseMode(): void {
-    baseMode = false;
-    baseKind = "base";
-    baseSourceName = "";
-    baseDraft = { opening: "", body: "" };
-    agentMessages = [];
-    agentBusy = false;
-    agentError = null;
-    saveAsOpen = false;
-  }
-
-  async function handleAgentPrompt(prompt: string): Promise<void> {
-    if (agentBusy) return;
-    agentError = null;
-    agentProgress = "";
-    const history = [...agentMessages];
-    agentMessages = [...history, { role: "user", content: prompt }];
-    agentBusy = true;
-    try {
-      const { reasoning, updated } = await editTemplate(
-        baseDraft,
-        history,
-        prompt,
-        settings.paste_backend,
-      );
-      baseDraft = updated;
-      agentMessages = [
-        ...agentMessages,
-        { role: "assistant", content: reasoning || "(no reasoning provided)" },
-      ];
-    } catch (e) {
-      agentError = explainRankError(String(e));
-    } finally {
-      agentBusy = false;
-      agentProgress = "";
-    }
   }
 
   // Subscribe to streaming partials from the sidecar. The event fires for
@@ -1317,38 +864,12 @@
   // (agentBusy gate) we don't need to correlate by id.
   $effect(() => {
     const unlistenPromise = onSidecarProgress((text) => {
-      if (agentBusy) agentProgress = text;
+      if (agentStore.agentBusy) agentStore.agentProgress = text;
     });
     return () => {
       void unlistenPromise.then((u) => u());
     };
   });
-
-  function openSaveAs(): void {
-    saveAsOpen = true;
-  }
-
-  async function handleSaveAs(name: string, tags: string[]): Promise<void> {
-    if (!isEditorMode) return;
-    pushUndo("agent save");
-    const now = new Date().toISOString();
-    const newTemplate: Template = {
-      id: crypto.randomUUID(),
-      name,
-      tags,
-      opening: baseDraft.opening,
-      body: baseDraft.body,
-      created_at: now,
-      updated_at: now,
-      pinned: false,
-      last_used_at: null,
-    };
-    const next = [newTemplate, ...templates];
-    await persist(next);
-    selectedTemplateId = newTemplate.id;
-    saveAsOpen = false;
-    exitBaseMode();
-  }
 
   $effect(() => {
     if (typeof document !== "undefined") {
@@ -1360,6 +881,11 @@
   // re-fires on any settings reassignment, so we dedupe against the last
   // forwarded value — otherwise unrelated changes (context_open toggle, theme,
   // column widths) would trigger a redundant chokidar restart on the sidecar.
+  //
+  // Lazy-sidecar interplay: when both the prior and current source lists are
+  // empty we skip the call entirely, so a browse-and-copy session never wakes
+  // the Node process. Once the user adds or removes a source we sync as
+  // before (including pushing `[]` to clear).
   let lastForwardedSourcesJson = "";
   let lastForwardedBackend: typeof settings.paste_backend | null = null;
   $effect(() => {
@@ -1368,8 +894,11 @@
     const backend = settings.paste_backend;
     const sourcesJson = JSON.stringify(sources);
     if (sourcesJson === lastForwardedSourcesJson && backend === lastForwardedBackend) return;
+    const skip =
+      lastForwardedSourcesJson === "" && lastForwardedBackend === null && sources.length === 0;
     lastForwardedSourcesJson = sourcesJson;
     lastForwardedBackend = backend;
+    if (skip) return;
     void setContextSources(sources, backend).catch(() => {
       /* sidecar may be down; pane will surface the error */
     });
@@ -1409,7 +938,7 @@
   // gone (search cleared or shortened below the threshold) the Retry button
   // would silently no-op — drop the stale error instead.
   $effect(() => {
-    if (!inPasteMode && adaptError !== null) adaptError = null;
+    if (!inPasteMode && agentStore.adaptError !== null) agentStore.adaptError = null;
   });
 </script>
 
@@ -1420,13 +949,13 @@
     onOpenSettings={() => (settingsOpen = true)}
     onToggleContext={() => {
       contextOpen = !contextOpen;
-      void persist(templates, { ...settings, context_open: contextOpen });
+      void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_open: contextOpen });
     }}
     {contextOpen}
     onToggleCapture={() => (captureOpen = !captureOpen)}
     {captureOpen}
   />
-  {#if !baseMode}
+  {#if !agentStore.baseMode}
     <div class="search-row">
       <div class="search-wrap">
         <input
@@ -1451,16 +980,16 @@
   <div class="shell">
     {#if !loaded}
       <div class="loading">Loading…</div>
-    {:else if baseMode}
+    {:else if agentStore.baseMode}
       <AgentSidebar
-        kind={baseKind}
-        messages={agentMessages}
-        busy={agentBusy}
-        error={agentError}
-        progress={agentProgress}
-        sourceName={baseSourceName}
+        kind={agentStore.baseKind}
+        messages={agentStore.agentMessages}
+        busy={agentStore.agentBusy}
+        error={agentStore.agentError}
+        progress={agentStore.agentProgress}
+        sourceName={agentStore.baseSourceName}
         width={agentSidebarWidth}
-        onSubmit={handleAgentPrompt}
+        onSubmit={(p) => agentStore.handleAgentPrompt(p)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1469,18 +998,18 @@
         onpointerdown={startResize("agent")}
       ></div>
       <EditorPane
-        kind={baseKind}
-        opening={baseDraft.opening}
-        body={baseDraft.body}
+        kind={agentStore.baseKind}
+        opening={agentStore.baseDraft.opening}
+        body={agentStore.baseDraft.body}
         globalSignature={settings.global_signature}
         {includeOpening}
         {includeSignature}
         canSave={isEditorMode}
-        onUpdate={(next) => (baseDraft = next)}
+        onUpdate={(next) => (agentStore.baseDraft = next)}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
-        onSave={openSaveAs}
-        onCancel={exitBaseMode}
+        onSave={() => agentStore.openSaveAs()}
+        onCancel={() => agentStore.exitBaseMode()}
       />
     {:else}
       <TagsSidebar
@@ -1495,7 +1024,7 @@
         onTagsClear={handleTagsClear}
         onCombinatorToggle={handleCombinatorToggle}
         onContextEmpty={openContextForEmpty}
-        onTagReorder={(next) => void handleTagsReorder(next)}
+        onTagReorder={(next) => void templatesStore.handleTagsReorder(next)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1506,8 +1035,8 @@
       <TemplatesSidebar
         {searchResults}
         {templates}
-        {selectedTemplateId}
-        {bulkSelectedIds}
+        selectedTemplateId={templatesStore.selectedTemplateId}
+        bulkSelectedIds={templatesStore.bulkSelectedIds}
         {searchQuery}
         {rankings}
         {rankLoading}
@@ -1518,12 +1047,12 @@
         canReorder={canReorderTemplates}
         sortMode={settings.sort_mode}
         onTemplateSelect={handleTemplateSelect}
-        onNew={handleNew}
+        onNew={() => agentStore.handleNew()}
         onRetryRank={retryRank}
         onContextTemplate={openContextForTemplate}
         onContextEmpty={openContextForEmpty}
-        onReorder={(ids) => void handleTemplatesReorder(ids)}
-        onSortModeToggle={handleSortModeToggle}
+        onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
+        onSortModeToggle={() => templatesStore.handleSortModeToggle()}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1537,25 +1066,27 @@
         {includeSignature}
         {editing}
         globalSignature={settings.global_signature}
+        snippets={settings.snippets}
         canEdit={isEditorMode}
         {availableTags}
         {copyTrigger}
         savedPlaceholderValues={settings.placeholder_values}
         inboundText={inPasteMode ? searchQuery : null}
-        {adaptBusy}
-        {adaptError}
-        onClearAdaptError={() => (adaptError = null)}
+        adaptBusy={agentStore.adaptBusy}
+        adaptError={agentStore.adaptError}
+        onClearAdaptError={() => (agentStore.adaptError = null)}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => (editing = true)}
         onCancelEdit={() => (editing = false)}
         onSave={handleSave}
-        onDuplicate={handleDuplicate}
-        onDelete={handleDelete}
-        onBaseOnTemplate={enterBaseMode}
-        onAdaptToInbound={() => void adaptToInbound()}
-        onCopySuccess={(id) => void recordCopy(id)}
-        onPlaceholderValuesChange={(id, vals) => void recordPlaceholderValues(id, vals)}
+        onDuplicate={() => void templatesStore.handleDuplicate()}
+        onDelete={() => void templatesStore.handleDelete()}
+        onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
+        onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
+        onCopySuccess={(id) => void templatesStore.recordCopy(id)}
+        onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
+        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
       />
     {/if}
     {#if contextOpen && loaded}
@@ -1571,18 +1102,18 @@
         backend={settings.paste_backend}
         onClose={() => (contextOpen = false)}
         onSourcesChange={async (next) => {
-          await persist(templates, { ...settings, context_sources: next });
+          await templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_sources: next });
         }}
       />
     {/if}
-    {#if loadError}
+    {#if templatesStore.loadError}
       <div class="error-banner">
-        <span class="error-text">{loadError}</span>
-        <button class="error-close" aria-label="Dismiss error" onclick={() => (loadError = null)}>×</button>
+        <span class="error-text">{templatesStore.loadError}</span>
+        <button class="error-close" aria-label="Dismiss error" onclick={() => (templatesStore.loadError = null)}>×</button>
       </div>
     {/if}
     {#if undoToast}
-      <div class="undo-toast" style="bottom: {loadError ? 48 : 12}px">{undoToast}</div>
+      <div class="undo-toast" style="bottom: {templatesStore.loadError ? 48 : 12}px">{undoToast}</div>
     {/if}
   </div>
 </div>
@@ -1601,7 +1132,7 @@
     onImportTemplates={handleImportTemplates}
     onCheckUpdate={checkForUpdate}
     onListBackups={listTemplateBackups}
-    onRestoreBackup={handleRestoreBackup}
+    onRestoreBackup={(name) => templatesStore.handleRestoreBackup(name)}
     onRenameTag={handleRenameTag}
     onDeleteTag={handleDeleteTag}
     onOpenCheatSheet={() => {
@@ -1626,7 +1157,7 @@
     onAddSource={() => {
       captureOpen = false;
       contextOpen = true;
-      void persist(templates, { ...settings, context_open: true });
+      void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_open: true });
     }}
   />
 {/if}
@@ -1634,8 +1165,8 @@
 {#if loaded && !settings.onboarding_complete}
   <OnboardingTour
     onDismiss={() => {
-      void persist(templates, {
-        ...settings,
+      void templatesStore.persist(templatesStore.templates, {
+        ...templatesStore.settings,
         onboarding_complete: true,
         close_hint_shown: true,
       });
@@ -1657,13 +1188,13 @@
     }}
   >
     <div class="confirm-modal">
-      <h3>Delete {bulkSelectedIds.size} templates?</h3>
+      <h3>Delete {templatesStore.bulkSelectedIds.size} templates?</h3>
       <p class="confirm-warn">Ctrl+Z will restore them.</p>
       <div class="confirm-actions">
         <button class="confirm-btn" onclick={() => (bulkDeleteConfirmOpen = false)}>Cancel</button>
         <!-- svelte-ignore a11y_autofocus -->
         <button class="confirm-btn danger" onclick={() => void confirmBulkDelete()} autofocus>
-          Delete {bulkSelectedIds.size}
+          Delete {templatesStore.bulkSelectedIds.size}
         </button>
       </div>
     </div>
@@ -1689,7 +1220,7 @@
     }}
   >
     <div class="confirm-modal">
-      <h3>Add tag to {bulkSelectedIds.size} templates</h3>
+      <h3>Add tag to {templatesStore.bulkSelectedIds.size} templates</h3>
       <!-- svelte-ignore a11y_autofocus -->
       <input
         class="bulk-tag-input"
@@ -1716,12 +1247,58 @@
   </div>
 {/if}
 
-{#if saveAsOpen}
+{#if bulkRemoveTagPromptOpen}
+  <div
+    class="confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Bulk remove tag"
+    tabindex="-1"
+    onclick={(e) =>
+      e.target === e.currentTarget && (bulkRemoveTagPromptOpen = false)}
+    onkeydown={(e) => {
+      if (e.key === "Escape") {
+        bulkRemoveTagPromptOpen = false;
+        bulkTagDraft = "";
+      } else if (e.key === "Enter") {
+        void confirmBulkRemoveTag();
+      }
+    }}
+  >
+    <div class="confirm-modal">
+      <h3>Remove tag from {templatesStore.bulkSelectedIds.size} templates</h3>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        class="bulk-tag-input"
+        type="text"
+        placeholder="tag name"
+        bind:value={bulkTagDraft}
+        autofocus
+      />
+      <div class="confirm-actions">
+        <button
+          class="confirm-btn"
+          onclick={() => {
+            bulkRemoveTagPromptOpen = false;
+            bulkTagDraft = "";
+          }}>Cancel</button
+        >
+        <button
+          class="confirm-btn danger"
+          disabled={bulkTagDraft.trim().length === 0}
+          onclick={() => void confirmBulkRemoveTag()}
+        >Remove</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if agentStore.saveAsOpen}
   <SaveAsModal
-    defaultName={baseKind === "new" ? "" : `${baseSourceName} (edited)`}
+    defaultName={agentStore.baseKind === "new" ? "" : `${agentStore.baseSourceName} (edited)`}
     {availableTags}
-    onSave={handleSaveAs}
-    onCancel={() => (saveAsOpen = false)}
+    onSave={(n, t) => agentStore.handleSaveAs(n, t)}
+    onCancel={() => agentStore.closeSaveAs()}
   />
 {/if}
 

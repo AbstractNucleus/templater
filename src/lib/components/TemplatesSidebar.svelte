@@ -78,6 +78,38 @@
 
   const inPasteMode = $derived(searchQuery.trim().length >= pasteThreshold);
 
+  // True when at least one template carries a folder. Groups render only when
+  // the catalog uses folders — otherwise it's a flat list, just like before.
+  const hasFolders = $derived(templates.some((t) => t.folder !== null));
+
+  // Per-folder collapse state. The null key is the "ungrouped" bucket. Empty
+  // set = everything expanded; touched names persist within the session.
+  let collapsedFolders = $state<Set<string>>(new Set());
+
+  function toggleFolder(name: string): void {
+    const next = new Set(collapsedFolders);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    collapsedFolders = next;
+  }
+
+  // Ordered (folder | null, hits) groups, preserving the first-seen order of
+  // each folder within `searchResults`. Pinned-sort logic is upstream — by the
+  // time hits land here they're already in the order the user wanted.
+  const groupedSearchResults = $derived.by(() => {
+    const groups = new Map<string | null, SearchHit[]>();
+    const order: (string | null)[] = [];
+    for (const hit of searchResults) {
+      const key = hit.template.folder;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+        order.push(key);
+      }
+      groups.get(key)!.push(hit);
+    }
+    return order.map((k) => ({ folder: k, hits: groups.get(k)! }));
+  });
+
   let sidebarEl: HTMLElement | undefined = $state();
 
   // Keep the active row visible when arrow-key navigation moves selection
@@ -154,10 +186,12 @@
         <button
           class="sort-btn"
           title={sortMode === "manual"
-            ? "Manual order. Drag templates to reorder. Click to switch to recent."
-            : "Sorted by most recently copied. Click to switch to manual."}
+            ? "Manual order. Drag templates to reorder. Click → recent."
+            : sortMode === "recent"
+              ? "Sorted by most recently copied. Click → most used."
+              : "Sorted by lifetime copy count. Click → manual."}
           onclick={onSortModeToggle}
-        >{sortMode === "manual" ? "⇅" : "↻"}</button>
+        >{sortMode === "manual" ? "⇅" : sortMode === "recent" ? "↻" : "★"}</button>
       {/if}
       {#if canCreate}
         <button class="new-btn" title="New template" onclick={onNew}>+</button>
@@ -209,47 +243,49 @@
       {/if}
     </ul>
   {:else}
-    <ul class="template-list">
-      {#each searchResults as hit (hit.template.id)}
-        <li>
-          <button
-            class="template-item"
-            class:active={selectedTemplateId === hit.template.id}
-            class:bulk={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
-            class:pinned={hit.template.pinned}
-            class:dragging={draggingId === hit.template.id}
-            class:drag-over-top={dragOverId === hit.template.id && dragOverHalf === "top"}
-            class:drag-over-bottom={dragOverId === hit.template.id && dragOverHalf === "bottom"}
-            data-id={hit.template.id}
-            draggable={canReorder}
-            ondragstart={(e) => handleDragStart(e, hit.template.id)}
-            ondragover={(e) => handleDragOver(e, hit.template.id)}
-            ondragleave={() => handleDragLeave(hit.template.id)}
-            ondrop={(e) => handleDrop(e, hit.template.id)}
-            ondragend={handleDragEnd}
-            onclick={(e) => onTemplateSelect(hit.template.id, modifierOf(e))}
-            oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
-          >
-            <span class="name">
-              {#if hit.template.pinned}
-                <span class="pin-mark" aria-label="pinned" title="Pinned">▸</span>
-              {/if}
-              {#each highlightName(hit.template.name, hit.nameHits) as seg}
-                {#if seg.hit}
-                  <span class="hit">{seg.text}</span>
-                {:else}
-                  {seg.text}
-                {/if}
-              {/each}
-            </span>
-            {#if hit.nameHits.length === 0 && hit.bodyHit}
-              <span class="excerpt">
-                {#each hit.bodyHit.segments as seg}{#if seg.hit}<span class="hit">{seg.text}</span>{:else}{seg.text}{/if}{/each}
-              </span>
+    {#snippet templateRow(hit: SearchHit)}
+      <li>
+        <button
+          class="template-item"
+          class:active={selectedTemplateId === hit.template.id}
+          class:bulk={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
+          class:pinned={hit.template.pinned}
+          class:dragging={draggingId === hit.template.id}
+          class:drag-over-top={dragOverId === hit.template.id && dragOverHalf === "top"}
+          class:drag-over-bottom={dragOverId === hit.template.id && dragOverHalf === "bottom"}
+          data-id={hit.template.id}
+          draggable={canReorder}
+          ondragstart={(e) => handleDragStart(e, hit.template.id)}
+          ondragover={(e) => handleDragOver(e, hit.template.id)}
+          ondragleave={() => handleDragLeave(hit.template.id)}
+          ondrop={(e) => handleDrop(e, hit.template.id)}
+          ondragend={handleDragEnd}
+          onclick={(e) => onTemplateSelect(hit.template.id, modifierOf(e))}
+          oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
+        >
+          <span class="name">
+            {#if hit.template.pinned}
+              <span class="pin-mark" aria-label="pinned" title="Pinned">▸</span>
             {/if}
-          </button>
-        </li>
-      {:else}
+            {#each highlightName(hit.template.name, hit.nameHits) as seg}
+              {#if seg.hit}
+                <span class="hit">{seg.text}</span>
+              {:else}
+                {seg.text}
+              {/if}
+            {/each}
+          </span>
+          {#if hit.nameHits.length === 0 && hit.bodyHit}
+            <span class="excerpt">
+              {#each hit.bodyHit.segments as seg}{#if seg.hit}<span class="hit">{seg.text}</span>{:else}{seg.text}{/if}{/each}
+            </span>
+          {/if}
+        </button>
+      </li>
+    {/snippet}
+
+    {#if searchResults.length === 0}
+      <ul class="template-list">
         {#if templates.length === 0}
           <li class="empty first-run">
             No templates yet{canCreate ? " — hit + to create one" : ""}.
@@ -257,8 +293,37 @@
         {:else}
           <li class="empty">No matches</li>
         {/if}
-      {/each}
-    </ul>
+      </ul>
+    {:else if hasFolders}
+      <ul class="template-list">
+        {#each groupedSearchResults as group (group.folder ?? "__ungrouped__")}
+          {@const label = group.folder ?? "Ungrouped"}
+          {@const collapsed = collapsedFolders.has(label)}
+          <li class="folder-header">
+            <button
+              class="folder-toggle"
+              onclick={() => toggleFolder(label)}
+              title={collapsed ? "Expand" : "Collapse"}
+            >
+              <span class="folder-chevron">{collapsed ? "▸" : "▾"}</span>
+              <span class="folder-name">{label}</span>
+              <span class="folder-count">{group.hits.length}</span>
+            </button>
+          </li>
+          {#if !collapsed}
+            {#each group.hits as hit (hit.template.id)}
+              {@render templateRow(hit)}
+            {/each}
+          {/if}
+        {/each}
+      </ul>
+    {:else}
+      <ul class="template-list">
+        {#each searchResults as hit (hit.template.id)}
+          {@render templateRow(hit)}
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </aside>
 
@@ -349,6 +414,51 @@
 
   .template-list li {
     margin: 0;
+  }
+
+  .folder-header {
+    margin-top: 4px;
+  }
+
+  .folder-header:first-child {
+    margin-top: 0;
+  }
+
+  .folder-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text-deemphasis);
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .folder-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .folder-chevron {
+    width: 10px;
+    color: var(--text-subtle);
+  }
+
+  .folder-name {
+    flex: 1;
+  }
+
+  .folder-count {
+    color: var(--text-subtle);
+    font-size: 0.65rem;
   }
 
   .template-item {

@@ -7,6 +7,13 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
+  // Vitest picks up tests in src/ via SvelteKit's plugin defaults; sidecar/ is
+  // a separate Node-only tree, so add it explicitly here. node_modules is still
+  // excluded by vitest's default exclude list.
+  test: {
+    include: ["src/**/*.{test,spec}.{js,ts}", "sidecar/**/*.{test,spec}.{js,ts}"],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

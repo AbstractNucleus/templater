@@ -11,6 +11,10 @@ function mk(partial: Partial<Template> & { id: string; name: string }): Template
     updated_at: "2026-01-01T00:00:00Z",
     pinned: false,
     last_used_at: null,
+    copy_count: 0,
+    folder: null,
+    signature_override: null,
+    history: [],
     ...partial,
   };
 }

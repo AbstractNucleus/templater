@@ -18,6 +18,10 @@ const baseTemplate: Template = {
   updated_at: "2026-01-01T00:00:00Z",
   pinned: false,
   last_used_at: null,
+  copy_count: 0,
+  folder: null,
+  signature_override: null,
+  history: [],
 };
 
 // Fixed clock for reproducible date tests (local time).

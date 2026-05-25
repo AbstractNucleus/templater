@@ -1,3 +1,15 @@
+/** Snapshot of a template body/opening saved before an edit. Capped to
+ *  TEMPLATE_HISTORY_CAP entries in app code so storage stays bounded. */
+export interface TemplateVersion {
+  /** ISO-8601 timestamp of when this revision was REPLACED (i.e. the save
+   *  that created this snapshot). */
+  saved_at: string;
+  opening: string;
+  body: string;
+}
+
+export const TEMPLATE_HISTORY_CAP = 10;
+
 export interface Template {
   id: string;
   name: string;
@@ -9,6 +21,18 @@ export interface Template {
   pinned: boolean;
   /** ISO-8601 timestamp of the last copy-to-clipboard, or null if never. */
   last_used_at: string | null;
+  /** Lifetime copy count. Surfaced in the sidebar sort menu. */
+  copy_count: number;
+  /** Optional grouping name. Templates with the same non-null value render
+   *  inside a collapsible folder header in the sidebar. */
+  folder: string | null;
+  /** Per-template signature override. When non-null this wins over
+   *  settings.global_signature on copy, even if the template owns no
+   *  signature otherwise. */
+  signature_override: string | null;
+  /** Newest-last ring of prior versions. Each entry was the template's
+   *  opening+body at the time of the save that replaced it. */
+  history: TemplateVersion[];
 }
 
 export interface WindowGeometry {
@@ -31,7 +55,7 @@ export type Mode = "editor" | "user";
 
 export type PasteBackend = "agent" | "api";
 
-export type SortMode = "manual" | "recent";
+export type SortMode = "manual" | "recent" | "most_used";
 
 export interface Settings {
   always_on_top_default: boolean;
@@ -56,6 +80,13 @@ export interface Settings {
   context_sources: string[];
   /** Whether the context pane was open in the previous session. */
   context_open: boolean;
+  /** Global snippet variables expanded at copy time alongside {{date}}/{{time}}.
+   *  Key = placeholder name (e.g. "me_name"), value = literal expansion. */
+  snippets: Record<string, string>;
+  /** Optional second global hotkey. When set, fires a "quick capture" flow:
+   *  reads the clipboard and opens the new-template form with body
+   *  pre-filled. Null disables the feature. */
+  quick_capture_hotkey: string | null;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -89,4 +120,6 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarding_complete: false,
   context_sources: [],
   context_open: false,
+  snippets: {},
+  quick_capture_hotkey: null,
 };

@@ -59,8 +59,9 @@ type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Valu
 
 /// Newest-last ring of recent sidecar calls. Drives the Diagnostics panel in
 /// Settings so the user can see what the sidecar has been doing without
-/// digging through stderr.
-const DIAG_CAPACITY: usize = 50;
+/// digging through stderr. Sized so p50/p95-per-op stays meaningful even
+/// when one op dominates the recent traffic.
+const DIAG_CAPACITY: usize = 100;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DiagEntry {
@@ -123,20 +124,17 @@ enum SidecarCommand {
 }
 
 impl Sidecar {
-    /// Infallible constructor — tries to spawn the sidecar, falling back to an
-    /// `Unavailable` state if Node/npx isn't on PATH or the script is missing.
+    /// Lazy constructor. Parks state in `Unavailable("not yet started")` and
+    /// defers `try_spawn` until the first `request()`. Browse-and-copy
+    /// sessions that never touch rank/edit/adapt/context skip the Node
+    /// process entirely — no ~1-2s SDK handshake, no ~120 MB resident.
+    /// `request()` already auto-respawns from `Unavailable`, so first-use
+    /// transparently materialises the process.
     pub fn start(app: &AppHandle, app_data_dir: PathBuf) -> Self {
         let script = resolve_script(app);
         let state = Arc::new(Mutex::new(SidecarState::Unavailable(
             "not yet started".to_string(),
         )));
-        match Self::try_spawn(&script, &state, app, &app_data_dir) {
-            Ok(active) => *state.lock().unwrap() = SidecarState::Active(active),
-            Err(e) => {
-                eprintln!("sidecar unavailable at startup: {e}");
-                *state.lock().unwrap() = SidecarState::Unavailable(e);
-            }
-        }
         Self {
             state,
             script,

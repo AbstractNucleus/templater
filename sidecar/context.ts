@@ -489,7 +489,7 @@ async function ingestFile(filePath: string, sourceRoot: string): Promise<void> {
   let tags: string[] = [];
   if (summarizer) {
     try {
-      const result = await summarizer(extracted.slice(0, MAX_SUMMARY_INPUT_CHARS), path.basename(filePath));
+      const result = await summarizer(summaryInput(extracted), path.basename(filePath));
       summary = result.summary;
       tags = result.tags;
     } catch (err) {
@@ -510,7 +510,41 @@ async function ingestFile(filePath: string, sourceRoot: string): Promise<void> {
   ).run(extracted, summary, JSON.stringify(tags), Date.now(), filePath);
 }
 
-async function extractText(filePath: string, ext: string): Promise<string> {
+/**
+ * Pick the slice of extracted text we send to the summarizer. For files
+ * within budget, send everything. For longer files, send head + markdown
+ * section headers + tail, separated by a marker so the summarizer knows
+ * gaps were skipped. Late-document conclusions and section names often
+ * carry the real signal — sending only the first 8k chars truncates them.
+ */
+export function summaryInput(text: string): string {
+  if (text.length <= MAX_SUMMARY_INPUT_CHARS) return text;
+  // Headroom for separators ("...\n\n[...later...]\n\n...").
+  const SEPARATOR = "\n\n[...later in the document...]\n\n";
+  const HEADERS_BUDGET = 1_000;
+  const remaining = MAX_SUMMARY_INPUT_CHARS - SEPARATOR.length - HEADERS_BUDGET;
+  const sliceSize = Math.max(0, Math.floor(remaining / 2));
+  const head = text.slice(0, sliceSize);
+  const tail = text.slice(text.length - sliceSize);
+  // Catches markdown headers (#, ##, ###) and bare ALL-CAPS lines that
+  // commonly mark sections in plain-text exports. Cap so we never blow past
+  // the budget on a file that's nothing but headings.
+  const headerLines: string[] = [];
+  let headerChars = 0;
+  for (const line of text.split("\n")) {
+    if (/^#{1,3}\s+\S/.test(line) || /^[A-Z][A-Z0-9 \-_]{6,}$/.test(line.trim())) {
+      if (headerChars + line.length + 1 > HEADERS_BUDGET) break;
+      headerLines.push(line.trim());
+      headerChars += line.length + 1;
+    }
+  }
+  const headersBlock = headerLines.length > 0
+    ? `\n\n[section headers in this file]\n${headerLines.join("\n")}`
+    : "";
+  return `${head}${headersBlock}${SEPARATOR}${tail}`;
+}
+
+export async function extractText(filePath: string, ext: string): Promise<string> {
   if (ext === ".md" || ext === ".markdown" || ext === ".txt" || ext === ".csv") {
     return await fs.readFile(filePath, "utf8");
   }

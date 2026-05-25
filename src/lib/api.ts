@@ -18,6 +18,11 @@ export async function setHotkey(accelerator: string): Promise<void> {
   await invoke<void>("set_hotkey", { accelerator });
 }
 
+/** Pass null/empty to clear the quick-capture hotkey. */
+export async function setQuickCaptureHotkey(accelerator: string | null): Promise<void> {
+  await invoke<void>("set_quick_capture_hotkey", { accelerator });
+}
+
 export async function openDataDir(): Promise<void> {
   await invoke<void>("open_data_dir");
 }
@@ -36,6 +41,10 @@ export async function exportTemplates(path: string): Promise<number> {
 
 export async function exportTemplate(id: string, path: string): Promise<void> {
   await invoke<void>("export_template", { id, path });
+}
+
+export async function exportTemplatesSubset(ids: string[], path: string): Promise<number> {
+  return await invoke<number>("export_templates_subset", { ids, path });
 }
 
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";

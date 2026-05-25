@@ -1,5 +1,12 @@
 import type { Template } from "./types";
 
+/** Pick the signature for a template — per-template override wins over global. */
+export function resolveSignature(template: Template, globalSignature: string): string {
+  const override = template.signature_override;
+  if (override !== null && override.length > 0) return override;
+  return globalSignature;
+}
+
 // Source of truth for the text put on the clipboard. Shared by the Copy
 // button in MainPanel and the Enter-from-search shortcut in +page.svelte so
 // both paths produce identical output.
@@ -12,7 +19,8 @@ export function composeText(
   const parts: string[] = [];
   if (includeOpening && template.opening.trim().length > 0) parts.push(template.opening);
   parts.push(template.body);
-  if (includeSignature && globalSignature.trim().length > 0) parts.push(globalSignature);
+  const sig = resolveSignature(template, globalSignature);
+  if (includeSignature && sig.trim().length > 0) parts.push(sig);
   return parts.join("\n\n");
 }
 
@@ -126,16 +134,21 @@ function formatTime(now: Date, format: TimeFormat): string {
  * Resolve a parsed placeholder to its rendered string. Returns null when the
  * placeholder should fall through to the raw `{{...}}` token (text with no
  * fill value, or choice without a current selection).
+ *
+ * Precedence: per-template `values` > global `snippets` > fall-through.
  */
 function resolveValue(
   p: ParsedPlaceholder,
   values: Record<string, string>,
+  snippets: Record<string, string>,
   now: Date,
 ): string | null {
   if (p.kind.type === "date") return formatDate(now, p.kind.format);
   if (p.kind.type === "time") return formatTime(now, p.kind.format);
   const v = values[p.key];
   if (v && v.length > 0) return v;
+  const s = snippets[p.key];
+  if (s && s.length > 0) return s;
   return null;
 }
 
@@ -143,6 +156,7 @@ export function splitPlaceholders(
   text: string,
   values: Record<string, string> = {},
   now: Date = new Date(),
+  snippets: Record<string, string> = {},
 ): ComposedSegment[] {
   const segments: ComposedSegment[] = [];
   let cursor = 0;
@@ -150,7 +164,7 @@ export function splitPlaceholders(
     const start = m.index ?? 0;
     if (start > cursor) segments.push({ text: text.slice(cursor, start), placeholder: false });
     const p = parsePlaceholder(m[1]);
-    const resolved = resolveValue(p, values, now);
+    const resolved = resolveValue(p, values, snippets, now);
     segments.push({ text: resolved ?? m[0], placeholder: true });
     cursor = start + m[0].length;
   }
@@ -164,25 +178,32 @@ export function applyValues(
   text: string,
   values: Record<string, string>,
   now: Date = new Date(),
+  snippets: Record<string, string> = {},
 ): string {
   return text.replace(PLACEHOLDER_RE, (raw, inner: string) => {
     const p = parsePlaceholder(inner);
-    const resolved = resolveValue(p, values, now);
+    const resolved = resolveValue(p, values, snippets, now);
     return resolved ?? raw;
   });
 }
 
 /**
- * Unique placeholders in first-seen order, deduped by `key`. Date placeholders
- * are excluded — they need no UI (auto-filled at compose time).
+ * Unique placeholders in first-seen order, deduped by `key`. Date and time
+ * placeholders are excluded — they need no UI (auto-filled at compose time).
+ * Snippet-matched placeholders are also excluded since they auto-fill from
+ * global settings.
  */
-export function extractPlaceholders(text: string): ParsedPlaceholder[] {
+export function extractPlaceholders(
+  text: string,
+  snippets: Record<string, string> = {},
+): ParsedPlaceholder[] {
   const seen = new Set<string>();
   const out: ParsedPlaceholder[] = [];
   for (const m of text.matchAll(PLACEHOLDER_RE)) {
     const p = parsePlaceholder(m[1]);
     if (p.kind.type === "date" || p.kind.type === "time") continue;
     if (p.key.length === 0 || seen.has(p.key)) continue;
+    if (p.kind.type === "text" && snippets[p.key] && snippets[p.key].length > 0) continue;
     seen.add(p.key);
     out.push(p);
   }

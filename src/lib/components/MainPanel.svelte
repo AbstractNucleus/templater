@@ -10,6 +10,7 @@
     includeSignature,
     editing,
     globalSignature,
+    snippets,
     canEdit,
     availableTags,
     copyTrigger,
@@ -29,12 +30,14 @@
     onClearAdaptError,
     onCopySuccess,
     onPlaceholderValuesChange,
+    onRevertHistory,
   }: {
     template: Template | null;
     includeOpening: boolean;
     includeSignature: boolean;
     editing: boolean;
     globalSignature: string;
+    snippets: Record<string, string>;
     canEdit: boolean;
     availableTags: string[];
     copyTrigger: number;
@@ -58,9 +61,15 @@
     onClearAdaptError: () => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
+    onRevertHistory: (templateId: string, versionIdx: number) => void;
   } = $props();
 
-  const signatureAvailable = $derived(globalSignature.trim().length > 0);
+  const effectiveSignature = $derived(
+    template?.signature_override !== null && template?.signature_override !== undefined
+      ? template.signature_override
+      : globalSignature,
+  );
+  const signatureAvailable = $derived(effectiveSignature.trim().length > 0);
 
   let copyState = $state<"idle" | "ok" | "error">("idle");
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -70,6 +79,8 @@
   let draftTags = $state<string[]>([]);
   let draftOpening = $state("");
   let draftBody = $state("");
+  let draftSignatureOverride = $state<string | null>(null);
+  let draftFolder = $state<string | null>(null);
 
   // Reset draft whenever we enter edit mode or switch templates while editing.
   $effect(() => {
@@ -78,7 +89,17 @@
       draftTags = [...template.tags];
       draftOpening = template.opening;
       draftBody = template.body;
+      draftSignatureOverride = template.signature_override;
+      draftFolder = template.folder;
     }
+  });
+
+  let historyOpen = $state(false);
+  // Close the history panel when the template changes so it never claims to
+  // show one template's history while another is selected.
+  $effect(() => {
+    void template?.id;
+    historyOpen = false;
   });
 
   // Per-template fill-in values. Loaded from the persisted map on template
@@ -117,10 +138,12 @@
   const composed = $derived(
     template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
   );
-  const composedFilled = $derived(applyValues(composed, placeholderValues));
+  const composedFilled = $derived(applyValues(composed, placeholderValues, new Date(), snippets));
 
-  const previewSegments = $derived(template ? splitPlaceholders(composed, placeholderValues) : []);
-  const placeholders = $derived(template ? extractPlaceholders(composed) : []);
+  const previewSegments = $derived(
+    template ? splitPlaceholders(composed, placeholderValues, new Date(), snippets) : [],
+  );
+  const placeholders = $derived(template ? extractPlaceholders(composed, snippets) : []);
   const canAdapt = $derived(inboundText != null && inboundText.trim().length > 0);
 
   const breadcrumb = $derived.by(() => {
@@ -166,12 +189,17 @@
 
   function handleSave(): void {
     if (!template) return;
+    const sigDraft = draftSignatureOverride;
+    const sig = sigDraft !== null && sigDraft.length > 0 ? sigDraft : null;
+    const folder = draftFolder !== null && draftFolder.trim().length > 0 ? draftFolder.trim() : null;
     onSave({
       ...template,
       name: draftName.trim() || "Untitled",
       tags: draftTags,
       opening: draftOpening,
       body: draftBody,
+      signature_override: sig,
+      folder,
       updated_at: new Date().toISOString(),
     });
   }
@@ -242,6 +270,24 @@
       <span>Body</span>
       <textarea bind:value={draftBody} rows="10"></textarea>
     </label>
+    <label class="field">
+      <span>Folder (optional)</span>
+      <input
+        type="text"
+        placeholder="ungrouped"
+        value={draftFolder ?? ""}
+        oninput={(e) => (draftFolder = e.currentTarget.value.length > 0 ? e.currentTarget.value : null)}
+      />
+    </label>
+    <label class="field">
+      <span>Signature override (optional)</span>
+      <textarea
+        rows="2"
+        placeholder="Leave blank to use the global signature"
+        value={draftSignatureOverride ?? ""}
+        oninput={(e) => (draftSignatureOverride = e.currentTarget.value.length > 0 ? e.currentTarget.value : null)}
+      ></textarea>
+    </label>
   {:else}
     <div class="header-row">
       <div>
@@ -306,6 +352,31 @@
             />
           {/if}
         {/each}
+      </div>
+    {/if}
+
+    {#if canEdit && template.history.length > 0}
+      <div class="history">
+        <button class="history-toggle" onclick={() => (historyOpen = !historyOpen)}>
+          {historyOpen ? "Hide" : "Show"} history ({template.history.length})
+        </button>
+        {#if historyOpen}
+          <ul class="history-list">
+            {#each [...template.history].reverse() as v, idx (v.saved_at + idx)}
+              {@const realIdx = template.history.length - 1 - idx}
+              <li class="history-row">
+                <div class="history-meta">
+                  <span class="history-time">{new Date(v.saved_at).toLocaleString()}</span>
+                  <button
+                    class="history-revert"
+                    onclick={() => onRevertHistory(template.id, realIdx)}
+                  >Revert</button>
+                </div>
+                <pre class="history-snippet">{(v.opening ? v.opening + "\n\n" : "") + v.body}</pre>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
     {/if}
 
@@ -544,6 +615,87 @@
     background-position: calc(100% - 11px) 50%, calc(100% - 7px) 50%;
     background-size: 4px 4px;
     background-repeat: no-repeat;
+  }
+
+  .history {
+    margin: 0 0 12px;
+  }
+
+  .history-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.72rem;
+  }
+
+  .history-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .history-list {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .history-row {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .history-row:last-child {
+    border-bottom: none;
+  }
+
+  .history-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+
+  .history-time {
+    font-size: 0.72rem;
+    color: var(--text-subtle);
+  }
+
+  .history-revert {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 1px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.7rem;
+  }
+
+  .history-revert:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+
+  .history-snippet {
+    margin: 0;
+    padding: 6px 8px;
+    background: var(--bg-input);
+    border-radius: 3px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.74rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    max-height: 90px;
+    overflow-y: auto;
   }
 
   .footer {

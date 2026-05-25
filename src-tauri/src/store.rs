@@ -36,6 +36,15 @@ pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Backslash";
 const MAX_BACKUPS: usize = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateVersion {
+    pub saved_at: String,
+    #[serde(default)]
+    pub opening: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
     pub id: String,
     pub name: String,
@@ -48,6 +57,14 @@ pub struct Template {
     pub pinned: bool,
     #[serde(default)]
     pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub copy_count: u64,
+    #[serde(default)]
+    pub folder: Option<String>,
+    #[serde(default)]
+    pub signature_override: Option<String>,
+    #[serde(default)]
+    pub history: Vec<TemplateVersion>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -119,6 +136,10 @@ pub struct Settings {
     pub context_sources: Vec<String>,
     #[serde(default)]
     pub context_open: bool,
+    #[serde(default)]
+    pub snippets: HashMap<String, String>,
+    #[serde(default)]
+    pub quick_capture_hotkey: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -161,6 +182,8 @@ impl Default for Settings {
             onboarding_complete: false,
             context_sources: Vec::new(),
             context_open: false,
+            snippets: HashMap::new(),
+            quick_capture_hotkey: None,
         }
     }
 }

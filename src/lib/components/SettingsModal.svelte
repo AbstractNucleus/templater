@@ -1,14 +1,13 @@
 <script lang="ts">
-  import { DEFAULT_SETTINGS, type Mode, type PasteBackend, type Settings, type Theme } from "$lib/types";
-  import {
-    setHotkey,
-    getSidecarDiagnostics,
-    openClaudeLogin,
-    openDataDir,
-    resetWindowPosition,
-    type BackupEntry,
-    type SidecarDiagnostics,
-  } from "$lib/api";
+  import { type Mode, type PasteBackend, type Settings, type Theme } from "$lib/types";
+  import { setHotkey, setQuickCaptureHotkey, type BackupEntry } from "$lib/api";
+  import BackendSection from "./settings/BackendSection.svelte";
+  import TagsSection from "./settings/TagsSection.svelte";
+  import BackupsSection from "./settings/BackupsSection.svelte";
+  import WindowSection from "./settings/WindowSection.svelte";
+  import HotkeySection from "./settings/HotkeySection.svelte";
+  import DiagnosticsSection from "./settings/DiagnosticsSection.svelte";
+  import UpdatesSection from "./settings/UpdatesSection.svelte";
 
   type PortResult =
     | { kind: "ok"; message: string }
@@ -21,15 +20,6 @@
     notes: string;
     install: (onProgress?: (received: number, total: number | null) => void) => Promise<void>;
   };
-
-  type UpdateState =
-    | { kind: "idle" }
-    | { kind: "checking" }
-    | { kind: "up-to-date" }
-    | { kind: "available"; info: UpdateInfo }
-    | { kind: "downloading"; received: number; total: number | null }
-    | { kind: "installing" }
-    | { kind: "error"; error: string };
 
   let {
     settings,
@@ -66,84 +56,6 @@
     onOpenCheatSheet: () => void;
   } = $props();
 
-  let backups = $state<BackupEntry[] | null>(null);
-  let backupsLoading = $state(false);
-  let backupsError = $state<string | null>(null);
-  let restoreTarget = $state<BackupEntry | null>(null);
-  let restoreBusy = $state(false);
-
-  async function loadBackups(): Promise<void> {
-    backupsLoading = true;
-    backupsError = null;
-    try {
-      backups = await onListBackups();
-    } catch (e) {
-      backupsError = String(e);
-    } finally {
-      backupsLoading = false;
-    }
-  }
-
-  // Auto-load when the modal opens (effect fires on mount; no deps to track).
-  $effect(() => {
-    void loadBackups();
-  });
-
-  function formatBackupTime(secs: number): string {
-    if (secs === 0) return "legacy (pre-rotation)";
-    return new Date(secs * 1000).toLocaleString();
-  }
-
-  async function confirmRestore(): Promise<void> {
-    if (!restoreTarget) return;
-    restoreBusy = true;
-    try {
-      await onRestoreBackup(restoreTarget.name);
-      restoreTarget = null;
-      await loadBackups();
-    } catch (e) {
-      backupsError = String(e);
-    } finally {
-      restoreBusy = false;
-    }
-  }
-
-  let updateState = $state<UpdateState>({ kind: "idle" });
-
-  async function handleCheckUpdate(): Promise<void> {
-    updateState = { kind: "checking" };
-    try {
-      const info = await onCheckUpdate();
-      updateState = info === null ? { kind: "up-to-date" } : { kind: "available", info };
-    } catch (e) {
-      updateState = { kind: "error", error: String(e) };
-    }
-  }
-
-  async function handleInstallUpdate(): Promise<void> {
-    if (updateState.kind !== "available") return;
-    const info = updateState.info;
-    updateState = { kind: "downloading", received: 0, total: null };
-    try {
-      await info.install((received, total) => {
-        updateState = { kind: "downloading", received, total };
-      });
-      updateState = { kind: "installing" };
-    } catch (e) {
-      updateState = { kind: "error", error: String(e) };
-    }
-  }
-
-  function dismissUpdate(): void {
-    updateState = { kind: "idle" };
-  }
-
-  function formatBytes(n: number): string {
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   let portMessage = $state<string | null>(null);
   let portError = $state<string | null>(null);
   let portBusy = $state(false);
@@ -176,31 +88,60 @@
     }
   }
 
+  // Hotkey capture state lives at the parent level: the window-level keydown
+  // handler below drains Escape across the modal (capture → rename → delete
+  // confirm → close), and it has to mutate this state directly.
   let capturing = $state(false);
   let captureError = $state<string | null>(null);
-
-  const isDefaultHotkey = $derived(settings.global_hotkey === DEFAULT_SETTINGS.global_hotkey);
-
-  async function resetHotkey(): Promise<void> {
-    captureError = null;
-    try {
-      await setHotkey(DEFAULT_SETTINGS.global_hotkey);
-      onUpdate({ ...settings, global_hotkey: DEFAULT_SETTINGS.global_hotkey });
-    } catch (err) {
-      captureError = String(err);
-    }
-  }
-
-  function toggleAlwaysOnTop(next: boolean): void {
-    onUpdate({ ...settings, always_on_top_default: next });
-  }
-
-  function toggleStartMinimised(next: boolean): void {
-    onUpdate({ ...settings, start_minimised_to_tray: next });
-  }
+  // Distinct from `capturing` so the two rebinders don't interfere with each
+  // other when both are exposed in the modal.
+  let captureCapturing = $state<"none" | "main" | "quick">("none");
 
   function updateSignature(next: string): void {
     onUpdate({ ...settings, global_signature: next });
+  }
+
+  // Snippet management. The persisted shape is Record<string, string>, but
+  // rendering needs a stable order — turn it into [key, value] tuples and
+  // commit a Record back on every edit. A blank trailing row appears so the
+  // user always has somewhere to type the next snippet.
+  let snippetRows = $state<Array<{ key: string; value: string }>>([]);
+
+  // Sync local draft to settings whenever the props change (open / load /
+  // remote update). Drops empties on the way in so the UI shows exactly what's
+  // persisted; a single blank row is appended below.
+  $effect(() => {
+    const persisted = settings.snippets ?? {};
+    snippetRows = Object.entries(persisted).map(([key, value]) => ({ key, value }));
+  });
+
+  function commitSnippets(rows: Array<{ key: string; value: string }>): void {
+    const next: Record<string, string> = {};
+    for (const r of rows) {
+      const k = r.key.trim();
+      if (k.length === 0) continue;
+      next[k] = r.value;
+    }
+    onUpdate({ ...settings, snippets: next });
+  }
+
+  function updateSnippetKey(idx: number, key: string): void {
+    snippetRows[idx] = { ...snippetRows[idx], key };
+    commitSnippets(snippetRows);
+  }
+
+  function updateSnippetValue(idx: number, value: string): void {
+    snippetRows[idx] = { ...snippetRows[idx], value };
+    commitSnippets(snippetRows);
+  }
+
+  function removeSnippet(idx: number): void {
+    snippetRows = snippetRows.filter((_, i) => i !== idx);
+    commitSnippets(snippetRows);
+  }
+
+  function addSnippetRow(): void {
+    snippetRows = [...snippetRows, { key: "", value: "" }];
   }
 
   function setTheme(next: Theme): void {
@@ -215,123 +156,13 @@
     onUpdate({ ...settings, paste_backend: next });
   }
 
-  // Diagnostics: polls every 2s while the modal is open. Cheap (a lock + clone)
-  // and lets the user watch in-flight requests land in real time.
-  let diagnostics = $state<SidecarDiagnostics | null>(null);
-  let diagError = $state<string | null>(null);
-
-  $effect(() => {
-    let cancelled = false;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-    async function load(): Promise<void> {
-      try {
-        const d = await getSidecarDiagnostics();
-        if (!cancelled) diagnostics = d;
-      } catch (e) {
-        if (!cancelled) diagError = String(e);
-      }
-    }
-    function startPoll(): void {
-      if (intervalId !== null) return;
-      intervalId = setInterval(load, 2000);
-    }
-    function stopPoll(): void {
-      if (intervalId !== null) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    }
-    void load();
-    if (document.visibilityState === "visible") startPoll();
-    function onVisibility(): void {
-      if (document.visibilityState === "visible") {
-        void load();
-        startPoll();
-      } else {
-        stopPoll();
-      }
-    }
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisibility);
-      stopPoll();
-    };
-  });
-
-  function formatTimeOfDay(ms: number): string {
-    return new Date(ms).toLocaleTimeString();
-  }
-
-  let claudeLoginBusy = $state(false);
-  let claudeLoginError = $state<string | null>(null);
-  async function handleClaudeLogin(): Promise<void> {
-    claudeLoginBusy = true;
-    claudeLoginError = null;
-    try {
-      await openClaudeLogin();
-    } catch (e) {
-      claudeLoginError = String(e);
-    } finally {
-      claudeLoginBusy = false;
-    }
-  }
-
-  // Tag management: rename moves every occurrence of `from` → `to`; delete
-  // strips the tag from every template. Both go through the parent so the
-  // undo stack covers them.
+  // Tag management state owned here so the Escape handler can drain it before
+  // closing the modal. The TagsSection child binds to these via $bindable.
   let renamingTag = $state<string | null>(null);
-  let renameDraft = $state("");
-  let tagBusy = $state(false);
-  let tagError = $state<string | null>(null);
   // Two-step delete: a tag delete strips it from every template that has it,
   // which can be 50+ rows. Undo covers it but isn't discoverable enough for a
   // silent destructive action — require an explicit second click.
   let confirmingDeleteTag = $state<string | null>(null);
-
-  function startRename(tag: string): void {
-    renamingTag = tag;
-    renameDraft = tag;
-    tagError = null;
-  }
-
-  function cancelRename(): void {
-    renamingTag = null;
-    renameDraft = "";
-  }
-
-  async function commitRename(): Promise<void> {
-    if (!renamingTag) return;
-    const from = renamingTag;
-    const to = renameDraft.trim();
-    if (to.length === 0 || to === from) {
-      cancelRename();
-      return;
-    }
-    tagBusy = true;
-    tagError = null;
-    try {
-      await onRenameTag(from, to);
-      cancelRename();
-    } catch (e) {
-      tagError = String(e);
-    } finally {
-      tagBusy = false;
-    }
-  }
-
-  async function commitDelete(tag: string): Promise<void> {
-    tagBusy = true;
-    tagError = null;
-    try {
-      await onDeleteTag(tag);
-      confirmingDeleteTag = null;
-    } catch (e) {
-      tagError = String(e);
-    } finally {
-      tagBusy = false;
-    }
-  }
 
   function handleBackdrop(e: MouseEvent): void {
     if (e.target === e.currentTarget) onClose();
@@ -343,8 +174,9 @@
     return MODIFIER_PREFIXES.some((p) => code.startsWith(p));
   }
 
-  function startCapture(): void {
-    capturing = true;
+  function startCapture(target: "main" | "quick" = "main"): void {
+    captureCapturing = target;
+    capturing = target === "main";
     captureError = null;
   }
 
@@ -353,7 +185,8 @@
     // into the modal first. Drains nested states (capture → rename → delete
     // confirm) before closing the modal itself.
     if (e.key === "Escape") {
-      if (capturing) {
+      if (captureCapturing !== "none") {
+        captureCapturing = "none";
         capturing = false;
         e.preventDefault();
         return;
@@ -369,7 +202,7 @@
       onClose();
       return;
     }
-    if (!capturing) return;
+    if (captureCapturing === "none") return;
     e.preventDefault();
     e.stopPropagation();
     if (isModifierKey(e.code)) return;
@@ -381,6 +214,7 @@
     if (e.metaKey) parts.push("Cmd");
     if (parts.length === 0) {
       captureError = "Hotkey must include at least one modifier (Ctrl, Shift, Alt, Cmd).";
+      captureCapturing = "none";
       capturing = false;
       return;
     }
@@ -388,12 +222,18 @@
     const accelerator = parts.join("+");
 
     try {
-      await setHotkey(accelerator);
-      onUpdate({ ...settings, global_hotkey: accelerator });
+      if (captureCapturing === "quick") {
+        await setQuickCaptureHotkey(accelerator);
+        onUpdate({ ...settings, quick_capture_hotkey: accelerator });
+      } else {
+        await setHotkey(accelerator);
+        onUpdate({ ...settings, global_hotkey: accelerator });
+      }
       captureError = null;
     } catch (err) {
       captureError = String(err);
     } finally {
+      captureCapturing = "none";
       capturing = false;
     }
   }
@@ -444,54 +284,11 @@
       </div>
     </section>
 
-    <section>
-      <div class="section-label">Paste-match backend</div>
-      <div class="theme-toggle">
-        <button
-          class="theme-btn"
-          class:active={settings.paste_backend === "agent"}
-          onclick={() => setPasteBackend("agent")}
-        >
-          Agent SDK
-        </button>
-        <button
-          class="theme-btn"
-          class:active={settings.paste_backend === "api"}
-          onclick={() => setPasteBackend("api")}
-        >
-          Anthropic API
-        </button>
-      </div>
-      {#if settings.paste_backend === "agent"}
-        <div class="hint">
-          Uses your Claude subscription via the Agent SDK — bills against the subscription
-          credit pool even when <code>ANTHROPIC_API_KEY</code> is set.
-        </div>
-        <div class="port-row">
-          <button class="port-btn" disabled={claudeLoginBusy} onclick={handleClaudeLogin}>
-            {claudeLoginBusy ? "Opening terminal…" : "Sign in to Claude"}
-          </button>
-        </div>
-        {#if claudeLoginError}
-          <div class="capture-error">{claudeLoginError}</div>
-        {:else}
-          <div class="hint">
-            Opens a terminal running <code>claude login</code>. Complete the auth flow there;
-            the app picks up the new session on the next paste-match call.
-          </div>
-        {/if}
-      {:else if envApiKeyOverride}
-        <div class="hint">
-          Calls Anthropic's Messages API directly with <code>ANTHROPIC_API_KEY</code>. Billed at
-          standard API rates.
-        </div>
-      {:else}
-        <div class="warning">
-          <strong>ANTHROPIC_API_KEY is not set.</strong>
-          Paste-match in API mode will fail until you set the env var and restart the app.
-        </div>
-      {/if}
-    </section>
+    <BackendSection
+      backend={settings.paste_backend}
+      {envApiKeyOverride}
+      onChange={setPasteBackend}
+    />
 
     <section>
       <div class="section-label">Appearance</div>
@@ -526,6 +323,47 @@
     </section>
 
     <section>
+      <div class="section-label">Global snippets</div>
+      {#if snippetRows.length > 0}
+        <ul class="snippet-list">
+          {#each snippetRows as row, idx (idx)}
+            <li class="snippet-row">
+              <input
+                class="snippet-input snippet-key"
+                type="text"
+                placeholder="key (e.g. me_name)"
+                value={row.key}
+                oninput={(e) => updateSnippetKey(idx, e.currentTarget.value)}
+              />
+              <input
+                class="snippet-input snippet-value"
+                type="text"
+                placeholder="expansion"
+                value={row.value}
+                oninput={(e) => updateSnippetValue(idx, e.currentTarget.value)}
+              />
+              <button
+                class="snippet-remove"
+                title="Remove snippet"
+                aria-label="Remove snippet"
+                onclick={() => removeSnippet(idx)}
+              >×</button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <div class="port-row">
+        <button class="port-btn" onclick={addSnippetRow}>+ Add snippet</button>
+      </div>
+      <div class="hint">
+        Snippets expand at copy time alongside <code>{"{{date}}"}</code> /
+        <code>{"{{time}}"}</code>. Use the key as the placeholder name —
+        <code>{"{{me_name}}"}</code> with key <code>me_name</code> expands to its value.
+        Per-template fills override snippets.
+      </div>
+    </section>
+
+    <section>
       <div class="section-label">Templates</div>
       <div class="port-row">
         <button class="port-btn" disabled={portBusy} onclick={handleExportClick}>
@@ -554,190 +392,30 @@
     </section>
 
     {#if settings.mode === "editor"}
-      <section>
-        <div class="section-label">Tags</div>
-        {#if tagCounts.length === 0}
-          <div class="hint">No tags yet.</div>
-        {:else}
-          <ul class="tag-manage-list">
-            {#each tagCounts as [tag, count] (tag)}
-              <li class="tag-manage-row">
-                {#if renamingTag === tag}
-                  <input
-                    class="tag-rename-input"
-                    type="text"
-                    bind:value={renameDraft}
-                    disabled={tagBusy}
-                    onkeydown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        void commitRename();
-                      } else if (e.key === "Escape") {
-                        // stopPropagation so the modal-level Escape handler
-                        // doesn't see renamingTag=null after this clears it
-                        // and close the whole modal.
-                        e.preventDefault();
-                        e.stopPropagation();
-                        cancelRename();
-                      }
-                    }}
-                  />
-                  <button class="tag-btn" disabled={tagBusy} onclick={() => void commitRename()}>
-                    Save
-                  </button>
-                  <button class="tag-btn" disabled={tagBusy} onclick={cancelRename}>Cancel</button>
-                {:else if confirmingDeleteTag === tag}
-                  <span class="tag-confirm-text">Remove "{tag}" from {count} template{count === 1 ? "" : "s"}?</span>
-                  <div class="tag-actions">
-                    <button class="tag-btn" disabled={tagBusy} onclick={() => (confirmingDeleteTag = null)}>
-                      Cancel
-                    </button>
-                    <!-- svelte-ignore a11y_autofocus -->
-                    <button
-                      class="tag-btn danger"
-                      disabled={tagBusy}
-                      onclick={() => void commitDelete(tag)}
-                      autofocus
-                    >
-                      {tagBusy ? "Removing…" : "Remove"}
-                    </button>
-                  </div>
-                {:else}
-                  <span class="tag-name">{tag}</span>
-                  <span class="tag-count-tag">{count}</span>
-                  <div class="tag-actions">
-                    <button class="tag-btn" disabled={tagBusy} onclick={() => startRename(tag)}>
-                      Rename
-                    </button>
-                    <button
-                      class="tag-btn danger"
-                      disabled={tagBusy}
-                      onclick={() => (confirmingDeleteTag = tag)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-        {#if tagError}
-          <div class="capture-error">{tagError}</div>
-        {/if}
-        <div class="hint">
-          Rename moves every occurrence; Remove strips the tag from every template that has it.
-          Both go through the undo stack — Ctrl+Z reverts.
-        </div>
-      </section>
+      <TagsSection
+        {tagCounts}
+        bind:renamingTag
+        bind:confirmingDeleteTag
+        {onRenameTag}
+        {onDeleteTag}
+      />
     {/if}
 
-    <section>
-      <div class="section-label">Backups</div>
-      {#if restoreTarget}
-        <div class="restore-confirm">
-          <div>
-            Restore templates from <strong>{formatBackupTime(restoreTarget.timestamp_secs)}</strong>?
-            The current templates will be saved as a new backup.
-          </div>
-          <div class="port-row">
-            <button class="port-btn danger" disabled={restoreBusy} onclick={confirmRestore}>
-              {restoreBusy ? "Restoring…" : "Restore"}
-            </button>
-            <button class="port-btn" disabled={restoreBusy} onclick={() => (restoreTarget = null)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      {/if}
-      {#if backupsLoading}
-        <div class="hint">Loading…</div>
-      {:else if backupsError}
-        <div class="capture-error">{backupsError}</div>
-      {:else if backups && backups.length > 0}
-        <ul class="backup-list">
-          {#each backups as b (b.name)}
-            <li class="backup-row">
-              <div class="backup-meta">
-                <span class="backup-time">{formatBackupTime(b.timestamp_secs)}</span>
-                <span class="backup-size">{formatBytes(b.size)}</span>
-              </div>
-              <button
-                class="port-btn"
-                disabled={settings.mode !== "editor" || restoreBusy}
-                onclick={() => (restoreTarget = b)}
-              >
-                Restore
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <div class="hint">No backups yet — they're created automatically on each save.</div>
-      {/if}
-      <div class="hint">
-        The newest 5 templates.json backups are kept. Restoring keeps your settings and
-        backs up the current templates first, so undoing a restore is one more restore away.
-      </div>
-      <div class="port-row">
-        <button class="port-btn" onclick={() => void openDataDir()}>Open data folder</button>
-      </div>
-    </section>
+    <BackupsSection
+      mode={settings.mode}
+      {onListBackups}
+      {onRestoreBackup}
+    />
 
-    <section>
-      <div class="section-label">Window</div>
-      <label class="row">
-        <input
-          type="checkbox"
-          checked={settings.always_on_top_default}
-          onchange={(e) => toggleAlwaysOnTop(e.currentTarget.checked)}
-        />
-        <span>Always on top by default (applies on launch)</span>
-      </label>
-      <label class="row">
-        <input
-          type="checkbox"
-          checked={settings.start_minimised_to_tray}
-          onchange={(e) => toggleStartMinimised(e.currentTarget.checked)}
-        />
-        <span>Start minimised to tray</span>
-      </label>
-      {#if settings.window_geometry}
-        <div class="hint">
-          Window position saved: {settings.window_geometry.x},{settings.window_geometry.y}
-          ({settings.window_geometry.width}×{settings.window_geometry.height})
-        </div>
-        <div class="port-row">
-          <button
-            class="port-btn"
-            onclick={async () => {
-              await resetWindowPosition().catch(() => {});
-              onUpdate({ ...settings, window_geometry: null });
-            }}
-          >Reset position</button>
-        </div>
-        <div class="hint">Centres the window and clears the saved coordinates.</div>
-      {/if}
-    </section>
+    <WindowSection {settings} {onUpdate} />
 
-    <section>
-      <div class="section-label">Hotkey</div>
-      <div class="row readonly">
-        {#if capturing}
-          <span class="key capturing">Press keys… (Esc to cancel)</span>
-        {:else}
-          <span class="key">{settings.global_hotkey}</span>
-          <button class="rebind" onclick={startCapture}>Rebind</button>
-          {#if !isDefaultHotkey}
-            <button class="rebind" onclick={() => void resetHotkey()}>Reset</button>
-          {/if}
-        {/if}
-      </div>
-      {#if captureError}
-        <div class="capture-error">{captureError}</div>
-      {/if}
-    </section>
+    <HotkeySection
+      {settings}
+      {captureCapturing}
+      bind:captureError
+      {onUpdate}
+      onStartCapture={startCapture}
+    />
 
     <section>
       <div class="section-label">Keyboard shortcuts</div>
@@ -747,93 +425,9 @@
       <div class="hint">Or press <code>?</code> any time the search isn't focused.</div>
     </section>
 
-    <section>
-      <div class="section-label">Diagnostics</div>
-      {#if diagError}
-        <div class="capture-error">{diagError}</div>
-      {:else if !diagnostics}
-        <div class="hint">Loading…</div>
-      {:else}
-        <div class="hint">
-          Sidecar state:
-          <span class:state-ok={diagnostics.state === "active"} class:state-bad={diagnostics.state === "unavailable"}>
-            <strong>{diagnostics.state}</strong>
-          </span>
-          {#if diagnostics.state_reason}
-            <span class="diag-reason"> — {diagnostics.state_reason}</span>
-          {/if}
-        </div>
-        {#if diagnostics.entries.length === 0}
-          <div class="hint">No requests yet this session.</div>
-        {:else}
-          <ul class="diag-list">
-            {#each diagnostics.entries.slice(-12).reverse() as e (e.started_at_ms)}
-              <li class="diag-row" class:bad={!e.ok}>
-                <span class="diag-time">{formatTimeOfDay(e.started_at_ms)}</span>
-                <span class="diag-op">{e.op}</span>
-                <span class="diag-duration">{e.duration_ms}ms</span>
-                <span class="diag-status">{e.ok ? "ok" : "err"}</span>
-                {#if e.error}
-                  <span class="diag-err" title={e.error}>{e.error}</span>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-          <div class="hint">
-            Most recent first. Polled every 2s while this panel is open. The full ring keeps the
-            last 50 calls.
-          </div>
-        {/if}
-      {/if}
-    </section>
+    <DiagnosticsSection />
 
-    <section>
-      <div class="section-label">Updates</div>
-      <div class="hint">Current version: <code>{currentVersion}</code></div>
-
-      {#if updateState.kind === "idle"}
-        <div class="port-row">
-          <button class="port-btn" onclick={handleCheckUpdate}>Check for updates</button>
-        </div>
-      {:else if updateState.kind === "checking"}
-        <div class="hint">Checking…</div>
-      {:else if updateState.kind === "up-to-date"}
-        <div class="port-message">You're on the latest version.</div>
-        <div class="port-row">
-          <button class="port-btn" onclick={handleCheckUpdate}>Check again</button>
-        </div>
-      {:else if updateState.kind === "available"}
-        <div class="hint">
-          <strong>v{updateState.info.version}</strong> is available
-          (you're on v{updateState.info.currentVersion}).
-        </div>
-        {#if updateState.info.notes}
-          <pre class="release-notes">{updateState.info.notes}</pre>
-        {/if}
-        <div class="port-row">
-          <button class="port-btn" onclick={handleInstallUpdate}>Install &amp; restart</button>
-          <button class="port-btn" onclick={dismissUpdate}>Skip</button>
-        </div>
-      {:else if updateState.kind === "downloading"}
-        <div class="hint">
-          Downloading…
-          {#if updateState.total}
-            {formatBytes(updateState.received)} / {formatBytes(updateState.total)}
-            ({Math.round((updateState.received / updateState.total) * 100)}%)
-          {:else}
-            {formatBytes(updateState.received)}
-          {/if}
-        </div>
-      {:else if updateState.kind === "installing"}
-        <div class="hint">Installing… the app will restart momentarily.</div>
-      {:else if updateState.kind === "error"}
-        <div class="capture-error">{updateState.error}</div>
-        <div class="port-row">
-          <button class="port-btn" onclick={handleCheckUpdate}>Try again</button>
-          <button class="port-btn" onclick={dismissUpdate}>Dismiss</button>
-        </div>
-      {/if}
-    </section>
+    <UpdatesSection {currentVersion} {onCheckUpdate} />
   </div>
 </div>
 
@@ -904,22 +498,6 @@
     margin-bottom: 8px;
   }
 
-  .warning {
-    background: var(--accent-warning-bg);
-    border: 1px solid var(--accent-warning-border);
-    border-radius: 4px;
-    padding: 8px 10px;
-    color: var(--accent-warning-text);
-    font-size: 0.82rem;
-    line-height: 1.4;
-  }
-
-  .warning strong {
-    color: var(--accent-warning-strong);
-    display: block;
-    margin-bottom: 2px;
-  }
-
   .hint {
     color: var(--text-muted);
     font-size: 0.82rem;
@@ -934,59 +512,6 @@
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     font-size: 0.78rem;
     color: var(--text);
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.85rem;
-    color: var(--text);
-    cursor: pointer;
-    margin-bottom: 6px;
-  }
-
-  .row:last-of-type {
-    margin-bottom: 0;
-  }
-
-  .row.readonly {
-    cursor: default;
-  }
-
-  .row input[type="checkbox"] {
-    accent-color: var(--text-muted);
-  }
-
-  .key {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 2px 8px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.8rem;
-    color: var(--text);
-  }
-
-  .key.capturing {
-    color: var(--accent-warning-text);
-    border-color: var(--accent-warning-border);
-  }
-
-  .rebind {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 2px 10px;
-    border-radius: 3px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.78rem;
-  }
-
-  .rebind:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
   }
 
   .capture-error {
@@ -1009,6 +534,67 @@
     line-height: 1.4;
     resize: vertical;
     min-height: 60px;
+  }
+
+  .snippet-list {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .snippet-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .snippet-input {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 0.8rem;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+
+  .snippet-input:focus {
+    outline: none;
+    border-color: var(--border-focus);
+  }
+
+  .snippet-key {
+    flex: 0 0 130px;
+  }
+
+  .snippet-value {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .snippet-remove {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .snippet-remove:hover {
+    background: var(--accent-danger-bg);
+    border-color: var(--accent-danger-border);
+    color: var(--accent-danger-text);
   }
 
   .field-textarea:focus {
@@ -1079,261 +665,5 @@
     padding: 6px 10px;
     font-size: 0.8rem;
     margin-bottom: 6px;
-  }
-
-  .release-notes {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 8px 10px;
-    margin: 8px 0;
-    font-size: 0.78rem;
-    line-height: 1.45;
-    color: var(--text);
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 180px;
-    overflow-y: auto;
-  }
-
-  .backup-list {
-    list-style: none;
-    margin: 0 0 8px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .backup-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.82rem;
-  }
-
-  .backup-row:last-child {
-    border-bottom: none;
-  }
-
-  .backup-meta {
-    display: flex;
-    gap: 10px;
-    align-items: baseline;
-    min-width: 0;
-  }
-
-  .backup-time {
-    color: var(--text);
-  }
-
-  .backup-size {
-    color: var(--text-subtle);
-    font-size: 0.75rem;
-  }
-
-  .restore-confirm {
-    background: var(--accent-warning-bg);
-    border: 1px solid var(--accent-warning-border);
-    color: var(--accent-warning-text);
-    border-radius: 4px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
-    font-size: 0.82rem;
-    line-height: 1.45;
-  }
-
-  .restore-confirm .port-row {
-    margin-top: 8px;
-    margin-bottom: 0;
-  }
-
-  .port-btn.danger {
-    background: var(--accent-danger-bg);
-    border-color: var(--accent-danger-border);
-    color: var(--accent-danger-text);
-  }
-
-  .port-btn.danger:hover:not(:disabled) {
-    background: var(--accent-danger-border);
-  }
-
-  .tag-manage-list {
-    list-style: none;
-    margin: 0 0 8px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-
-  .tag-manage-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 10px;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.82rem;
-  }
-
-  .tag-manage-row:last-child {
-    border-bottom: none;
-  }
-
-  .tag-manage-row .tag-name {
-    flex: 1;
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tag-confirm-text {
-    flex: 1;
-    color: var(--accent-warning-text);
-    font-size: 0.78rem;
-    line-height: 1.3;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .tag-manage-row .tag-count-tag {
-    color: var(--text-subtle);
-    font-size: 0.74rem;
-    min-width: 28px;
-    text-align: right;
-  }
-
-  .tag-actions {
-    display: flex;
-    gap: 4px;
-  }
-
-  .tag-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.72rem;
-  }
-
-  .tag-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .tag-btn:disabled {
-    opacity: 0.5;
-    cursor: wait;
-  }
-
-  .tag-btn.danger {
-    color: var(--accent-danger-text);
-    border-color: var(--accent-danger-border);
-  }
-
-  .tag-btn.danger:hover:not(:disabled) {
-    background: var(--accent-danger-bg);
-  }
-
-  .tag-rename-input {
-    flex: 1;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 2px 8px;
-    border-radius: 3px;
-    font: inherit;
-    font-size: 0.78rem;
-  }
-
-  .tag-rename-input:focus {
-    outline: none;
-    border-color: var(--border-focus);
-  }
-
-  .diag-list {
-    list-style: none;
-    margin: 4px 0 6px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.74rem;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-
-  .diag-row {
-    display: flex;
-    gap: 10px;
-    padding: 3px 8px;
-    border-bottom: 1px solid var(--border);
-    align-items: baseline;
-  }
-
-  .diag-row:last-child {
-    border-bottom: none;
-  }
-
-  .diag-row.bad {
-    background: var(--rank-error-bg);
-  }
-
-  .diag-time {
-    color: var(--text-subtle);
-    flex-shrink: 0;
-    width: 78px;
-  }
-
-  .diag-op {
-    color: var(--text);
-    flex-shrink: 0;
-    width: 110px;
-  }
-
-  .diag-duration {
-    color: var(--text-muted);
-    flex-shrink: 0;
-    width: 60px;
-    text-align: right;
-  }
-
-  .diag-status {
-    color: var(--accent-positive-text);
-    flex-shrink: 0;
-    width: 32px;
-  }
-
-  .diag-row.bad .diag-status {
-    color: var(--accent-danger-text);
-  }
-
-  .diag-err {
-    color: var(--accent-danger-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-  }
-
-  .state-ok strong {
-    color: var(--accent-positive-text);
-  }
-
-  .state-bad strong {
-    color: var(--accent-danger-text);
-  }
-
-  .diag-reason {
-    color: var(--text-muted);
   }
 </style>

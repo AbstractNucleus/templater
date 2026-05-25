@@ -1,0 +1,50 @@
+name: CI
+
+# Runs cargo check, svelte-check, vitest, and sidecar TS build on every push
+# and PR to main. Platform installer builds live in release.yml (tag-driven).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            sidecar/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: npm ci (root)
+        run: npm ci
+
+      - name: svelte-check
+        run: npm run check
+
+      - name: vitest
+        run: npm test
+
+      - name: npm ci (sidecar)
+        run: npm ci
+        working-directory: sidecar
+
+      - name: Build sidecar (tsc)
+        run: npm run build
+        working-directory: sidecar
