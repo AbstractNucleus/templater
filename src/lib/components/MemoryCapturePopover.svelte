@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { captureMemory } from "$lib/api";
+  import { captureMemory, openPath } from "$lib/api";
   import type { PasteBackend } from "$lib/types";
 
   let {
     sources,
     backend,
     onClose,
+    onAddSource,
   }: {
     sources: string[];
     backend: PasteBackend;
     onClose: () => void;
+    onAddSource: () => void;
   } = $props();
 
   let raw = $state("");
@@ -33,6 +35,11 @@
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === "Enter") {
+      e.preventDefault();
+      if (!busy && raw.trim().length > 0 && target.length > 0) void run();
     }
   }
 
@@ -72,43 +79,62 @@
     <button class="icon-btn" aria-label="Close" onclick={onClose}>×</button>
   </header>
   <div class="body">
-    <p class="hint">
-      Paste a Slack thread, email, or note. Haiku distills the durable signal and
-      appends it to <code>memories.md</code> in the chosen source.
-    </p>
-    <textarea
-      bind:this={textareaEl}
-      class="input"
-      rows="6"
-      placeholder="Paste a message thread or note…"
-      bind:value={raw}
-      disabled={busy || sources.length === 0}
-    ></textarea>
-    <div class="row">
-      <select class="select" bind:value={target} disabled={sources.length === 0 || busy}>
-        {#if sources.length === 0}
-          <option value="">No sources — add one in the Context pane</option>
-        {/if}
-        {#each sources as s}
-          <option value={s}>{basename(s)}</option>
-        {/each}
-      </select>
-      <button
-        class="primary"
-        onclick={() => void run()}
-        disabled={busy || raw.trim().length === 0 || target.length === 0}
-      >
-        {busy ? "Capturing…" : "Capture"}
-      </button>
-    </div>
-    {#if err}
-      <div class="err">{err}</div>
-    {/if}
-    {#if result}
-      <div class="ok">
-        <div class="ok-hdr">Saved to <code>{basename(result.path)}</code></div>
-        <div class="ok-signal">{result.signal}</div>
+    {#if sources.length === 0}
+      <p class="hint">
+        Captured memories are appended to <code>memories.md</code> inside a context
+        source. Add a folder to get started — the capture popover will be ready as
+        soon as you do.
+      </p>
+      <button class="primary" onclick={onAddSource}>Add a source folder</button>
+    {:else}
+      <p class="hint">
+        Paste a Slack thread, email, or note. Haiku distills the durable signal and
+        appends it to <code>memories.md</code> in the chosen source.
+      </p>
+      <textarea
+        bind:this={textareaEl}
+        class="input"
+        rows="6"
+        placeholder="Paste a message thread or note…"
+        bind:value={raw}
+        oninput={() => {
+          if (result) result = null;
+          if (err) err = null;
+        }}
+        disabled={busy}
+      ></textarea>
+      <div class="row">
+        <select class="select" bind:value={target} disabled={busy}>
+          {#each sources as s}
+            <option value={s}>{basename(s)}</option>
+          {/each}
+        </select>
+        <button
+          class="primary"
+          title="Capture (Ctrl+Enter)"
+          onclick={() => void run()}
+          disabled={busy || raw.trim().length === 0 || target.length === 0}
+        >
+          {busy ? "Capturing…" : "Capture"}
+          {#if !busy}<span class="chord">⌃⏎</span>{/if}
+        </button>
       </div>
+      {#if err}
+        <div class="err">{err}</div>
+      {/if}
+      {#if result}
+        <div class="ok">
+          <div class="ok-hdr">
+            <span>Saved to <code>{basename(result.path)}</code></span>
+            <button
+              class="ok-open"
+              onclick={() => void openPath(result!.path)}
+              title={result.path}
+            >Open</button>
+          </div>
+          <div class="ok-signal">{result.signal}</div>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>
@@ -249,6 +275,13 @@
     cursor: default;
   }
 
+  .chord {
+    margin-left: 6px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+
   .ok {
     background: var(--accent-positive-bg);
     border: 1px solid var(--accent-positive-border);
@@ -260,6 +293,25 @@
   .ok-hdr {
     font-size: 0.72rem;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .ok-open {
+    background: transparent;
+    border: 1px solid var(--accent-positive-border);
+    color: var(--accent-positive-text);
+    padding: 1px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.7rem;
+  }
+
+  .ok-open:hover {
+    background: var(--accent-positive-bg);
   }
 
   .ok-signal {

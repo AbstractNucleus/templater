@@ -23,6 +23,27 @@
 
   let draft = $state("");
   let scrollRoot: HTMLDivElement | undefined = $state();
+  let promptInput: HTMLTextAreaElement | undefined = $state();
+
+  const NEW_EXAMPLES = [
+    "polite decline for meeting invites",
+    "follow-up for unanswered emails",
+  ];
+  const BASE_EXAMPLES = [
+    "make it more polite",
+    "shorten it",
+    "rewrite for a frustrated user",
+  ];
+
+  function applyExample(text: string): void {
+    draft = text;
+    promptInput?.focus();
+    // bind:value updates the DOM on the next tick — wait, then drop the
+    // cursor at the end so the user can extend rather than prepend.
+    queueMicrotask(() => {
+      if (promptInput) promptInput.setSelectionRange(text.length, text.length);
+    });
+  }
 
   $effect(() => {
     // Scroll to bottom whenever messages or busy state changes.
@@ -60,12 +81,15 @@
     {#if messages.length === 0 && !busy}
       <div class="empty">
         {#if kind === "new"}
-          Ask the agent to draft a template.<br />
-          Try: "polite decline for meeting invites" or "follow-up for unanswered emails".
+          Ask the agent to draft a template.
         {:else}
-          Ask the agent to edit the draft.<br />
-          Try: "make it more polite", "shorten it", or "rewrite for a frustrated user".
+          Ask the agent to edit the draft.
         {/if}
+        <div class="examples">
+          {#each kind === "new" ? NEW_EXAMPLES : BASE_EXAMPLES as ex (ex)}
+            <button class="example" onclick={() => applyExample(ex)}>{ex}</button>
+          {/each}
+        </div>
       </div>
     {/if}
     {#each messages as msg, i (i)}
@@ -94,6 +118,7 @@
 
   <div class="prompt-row">
     <textarea
+      bind:this={promptInput}
       bind:value={draft}
       placeholder="Tell the agent what to change… (Enter to send, Shift+Enter for newline)"
       disabled={busy}
@@ -156,6 +181,31 @@
     text-align: center;
     margin: auto 0;
     font-style: italic;
+  }
+
+  .examples {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  .example {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    font: inherit;
+    font-style: normal;
+    font-size: 0.75rem;
+  }
+
+  .example:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
   }
 
   .msg {

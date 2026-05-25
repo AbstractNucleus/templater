@@ -21,7 +21,8 @@ const baseTemplate: Template = {
 };
 
 // Fixed clock for reproducible date tests (local time).
-const FIXED_NOW = new Date(2026, 4, 24, 10, 0, 0); // 2026-05-24 10:00 local
+const FIXED_NOW = new Date(2026, 4, 24, 10, 0, 0); // 2026-05-24 10:00:00 local
+const FIXED_NOW_WITH_SEC = new Date(2026, 4, 24, 14, 3, 7); // 2026-05-24 14:03:07 local
 
 describe("composeText", () => {
   it("joins opening, body, signature with double newlines", () => {
@@ -94,6 +95,16 @@ describe("splitPlaceholders", () => {
     // exact format depends on Intl locale but should contain year + 2026 + May
     expect(segs[1].text).toMatch(/2026/);
     expect(segs[1].text).toMatch(/May/);
+  });
+
+  it("auto-fills {{time}} as HH:MM", () => {
+    const segs = splitPlaceholders("At {{time}}.", {}, FIXED_NOW_WITH_SEC);
+    expect(segs[1]).toEqual({ text: "14:03", placeholder: true });
+  });
+
+  it("auto-fills {{time:long}} as HH:MM:SS", () => {
+    const segs = splitPlaceholders("At {{time:long}}.", {}, FIXED_NOW_WITH_SEC);
+    expect(segs[1]).toEqual({ text: "14:03:07", placeholder: true });
   });
 
   it("resolves {{choice:a|b}} by its full key", () => {
@@ -173,6 +184,12 @@ describe("extractPlaceholders", () => {
 
   it("excludes date placeholders (no UI needed)", () => {
     expect(extractPlaceholders("{{name}} on {{date}}").map((p) => p.key)).toEqual(["name"]);
+  });
+
+  it("excludes time placeholders (auto-filled, no UI needed)", () => {
+    expect(extractPlaceholders("{{name}} at {{time}} on {{time:long}}").map((p) => p.key)).toEqual([
+      "name",
+    ]);
   });
 
   it("includes choice placeholders", () => {

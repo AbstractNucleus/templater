@@ -28,6 +28,14 @@
         "select multiple for bulk actions.",
     },
     {
+      title: "Bring your own context",
+      body:
+        "Click the book icon in the title bar to add folders of markdown, PDF, or Excel — " +
+        "the AI consults them when adapting or editing templates. " +
+        "Ctrl+Shift+M opens a capture popover: paste a Slack thread or email and Haiku " +
+        "distills the durable signal into your memory file.",
+    },
+    {
       title: "Stay handy",
       body:
         "Closing the window minimises to tray — quit from the tray icon. " +

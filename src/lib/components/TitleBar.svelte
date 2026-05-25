@@ -17,6 +17,16 @@
 
   let pinned = $state(false);
 
+  // Rust applies settings.always_on_top_default to the live window before we
+  // render, so the button's initial value would otherwise lie. Query the real
+  // state once on mount.
+  $effect(() => {
+    void getCurrentWindow()
+      .isAlwaysOnTop()
+      .then((v) => (pinned = v))
+      .catch(() => {});
+  });
+
   async function togglePin(): Promise<void> {
     pinned = !pinned;
     try {
@@ -49,7 +59,7 @@
     <button
       class="btn"
       class:active={captureOpen}
-      title={captureOpen ? "Close memory capture" : "Capture memory"}
+      title={captureOpen ? "Close memory capture (Ctrl+Shift+M)" : "Capture memory (Ctrl+Shift+M)"}
       aria-pressed={captureOpen}
       aria-label="Capture memory"
       onclick={onToggleCapture}

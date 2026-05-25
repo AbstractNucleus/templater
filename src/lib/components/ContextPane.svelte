@@ -51,15 +51,37 @@
     }
   }
 
-  $effect(() => {
-    void refresh();
-    // Poll while open so ingest progress (pending → ingested) updates live.
+  // Poll while open AND visible — when the app is minimized to tray nobody
+  // can see the pane, so polling burns IPC + SQL on invisible state.
+  function startPoll(): void {
+    if (pollHandle !== null) return;
     pollHandle = setInterval(() => {
       void refresh();
     }, 2000);
-    return () => {
-      if (pollHandle) clearInterval(pollHandle);
+  }
+
+  function stopPoll(): void {
+    if (pollHandle !== null) {
+      clearInterval(pollHandle);
       pollHandle = null;
+    }
+  }
+
+  $effect(() => {
+    void refresh();
+    if (document.visibilityState === "visible") startPoll();
+    function onVisibility(): void {
+      if (document.visibilityState === "visible") {
+        void refresh();
+        startPoll();
+      } else {
+        stopPoll();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      stopPoll();
     };
   });
 

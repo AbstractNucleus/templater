@@ -33,7 +33,7 @@ export const starterTemplates: Template[] = [
     name: "Quick yes to a meeting",
     tags: ["email", "accept"],
     opening: "Hi {{name}},",
-    body: "Works for me. {{time}} is good — I'll send a calendar invite shortly.",
+    body: "Works for me. {{meeting_time}} is good — I'll send a calendar invite shortly.",
     created_at: ISO,
     updated_at: ISO,
     pinned: false,

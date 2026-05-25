@@ -1,9 +1,11 @@
 <script lang="ts">
-  import type { Mode, PasteBackend, Settings, Theme } from "$lib/types";
+  import { DEFAULT_SETTINGS, type Mode, type PasteBackend, type Settings, type Theme } from "$lib/types";
   import {
     setHotkey,
     getSidecarDiagnostics,
     openClaudeLogin,
+    openDataDir,
+    resetWindowPosition,
     type BackupEntry,
     type SidecarDiagnostics,
   } from "$lib/api";
@@ -177,6 +179,18 @@
   let capturing = $state(false);
   let captureError = $state<string | null>(null);
 
+  const isDefaultHotkey = $derived(settings.global_hotkey === DEFAULT_SETTINGS.global_hotkey);
+
+  async function resetHotkey(): Promise<void> {
+    captureError = null;
+    try {
+      await setHotkey(DEFAULT_SETTINGS.global_hotkey);
+      onUpdate({ ...settings, global_hotkey: DEFAULT_SETTINGS.global_hotkey });
+    } catch (err) {
+      captureError = String(err);
+    }
+  }
+
   function toggleAlwaysOnTop(next: boolean): void {
     onUpdate({ ...settings, always_on_top_default: next });
   }
@@ -208,6 +222,7 @@
 
   $effect(() => {
     let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
     async function load(): Promise<void> {
       try {
         const d = await getSidecarDiagnostics();
@@ -216,11 +231,31 @@
         if (!cancelled) diagError = String(e);
       }
     }
+    function startPoll(): void {
+      if (intervalId !== null) return;
+      intervalId = setInterval(load, 2000);
+    }
+    function stopPoll(): void {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    }
     void load();
-    const id = setInterval(load, 2000);
+    if (document.visibilityState === "visible") startPoll();
+    function onVisibility(): void {
+      if (document.visibilityState === "visible") {
+        void load();
+        startPoll();
+      } else {
+        stopPoll();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+      stopPoll();
     };
   });
 
@@ -645,6 +680,9 @@
         The newest 5 templates.json backups are kept. Restoring keeps your settings and
         backs up the current templates first, so undoing a restore is one more restore away.
       </div>
+      <div class="port-row">
+        <button class="port-btn" onclick={() => void openDataDir()}>Open data folder</button>
+      </div>
     </section>
 
     <section>
@@ -670,6 +708,16 @@
           Window position saved: {settings.window_geometry.x},{settings.window_geometry.y}
           ({settings.window_geometry.width}×{settings.window_geometry.height})
         </div>
+        <div class="port-row">
+          <button
+            class="port-btn"
+            onclick={async () => {
+              await resetWindowPosition().catch(() => {});
+              onUpdate({ ...settings, window_geometry: null });
+            }}
+          >Reset position</button>
+        </div>
+        <div class="hint">Centres the window and clears the saved coordinates.</div>
       {/if}
     </section>
 
@@ -681,6 +729,9 @@
         {:else}
           <span class="key">{settings.global_hotkey}</span>
           <button class="rebind" onclick={startCapture}>Rebind</button>
+          {#if !isDefaultHotkey}
+            <button class="rebind" onclick={() => void resetHotkey()}>Reset</button>
+          {/if}
         {/if}
       </div>
       {#if captureError}

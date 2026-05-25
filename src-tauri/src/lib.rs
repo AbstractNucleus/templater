@@ -9,7 +9,7 @@ use store::{AppData, BackupEntry, Store, Template, WindowGeometry, DATA_VERSION,
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition, PhysicalSize, WindowEvent,
+    Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent,
 };
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
@@ -377,6 +377,35 @@ fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("open: {e}"))
 }
 
+#[tauri::command]
+fn open_path(path: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| format!("open: {e}"))
+}
+
+#[tauri::command]
+fn reset_window_position(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Store>,
+) -> Result<(), String> {
+    // Center the live window so the close-time geometry save (which we can't
+    // suppress without piling on flags) captures the centered position rather
+    // than the user's pre-reset coordinates.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_size(PhysicalSize::new(800u32, 600u32));
+        let _ = window.center();
+    }
+    // Clear the persisted geometry too — both the in-memory webview and the
+    // settings file now agree the position is unset.
+    if let Ok(Some(mut data)) = store.load() {
+        data.settings.window_geometry = None;
+        store.save(&data)?;
+    }
+    Ok(())
+}
+
 #[cfg(desktop)]
 #[tauri::command]
 fn set_hotkey(
@@ -391,9 +420,12 @@ fn set_hotkey(
         return Ok(());
     }
     let gs = app.global_shortcut();
-    let _ = gs.unregister(*guard);
+    // Register the new chord BEFORE unregistering the old one: if the new
+    // chord is rejected (taken by another app, OS-reserved) the user keeps a
+    // working hotkey instead of being left with none until restart.
     gs.register(new_shortcut)
         .map_err(|e| format!("failed to register hotkey: {e}"))?;
+    let _ = gs.unregister(*guard);
     *guard = new_shortcut;
     Ok(())
 }
@@ -426,6 +458,11 @@ fn geometry_on_some_monitor(window: &tauri::WebviewWindow, geo: &WindowGeometry)
 fn save_window_geometry(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else { return };
     if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    // Minimized windows on Windows report outer_position around (-32000, -32000) —
+    // saving that loses the user's real geometry on next launch.
+    if window.is_minimized().unwrap_or(false) {
         return;
     }
     let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
@@ -556,13 +593,19 @@ pub fn run() {
                 let shortcut = Shortcut::from_str(&raw).unwrap_or_else(|_| {
                     Shortcut::from_str(DEFAULT_HOTKEY).expect("default hotkey parses")
                 });
-                app.global_shortcut().register(shortcut)?;
+                // Log + continue on register failure rather than aborting setup —
+                // an OS-level conflict on the persisted chord would otherwise lock
+                // the user out of their own app (can't open Settings to rebind).
+                if let Err(e) = app.global_shortcut().register(shortcut) {
+                    eprintln!("global hotkey {raw} unavailable: {e}");
+                }
                 app.manage(CurrentHotkey(Mutex::new(shortcut)));
             }
 
             let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&show_item, &settings_item, &quit_item])?;
 
             let icon = app
                 .default_window_icon()
@@ -575,7 +618,21 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => toggle_main_window(app),
+                    "show" => {
+                        // Menu items do what the label says — only the
+                        // left-click tray icon toggles visibility.
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "settings" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit("open-settings", ());
+                    }
                     "quit" => {
                         save_window_geometry(app);
                         app.exit(0);
@@ -622,6 +679,8 @@ pub fn run() {
             get_env_warnings,
             set_hotkey,
             open_data_dir,
+            open_path,
+            reset_window_position,
             context_set_sources,
             context_status,
             context_list_files,

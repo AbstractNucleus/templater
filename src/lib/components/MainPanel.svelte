@@ -16,6 +16,7 @@
     savedPlaceholderValues,
     inboundText,
     adaptBusy,
+    adaptError,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
@@ -25,6 +26,7 @@
     onDelete,
     onBaseOnTemplate,
     onAdaptToInbound,
+    onClearAdaptError,
     onCopySuccess,
     onPlaceholderValuesChange,
   }: {
@@ -42,6 +44,8 @@
     inboundText: string | null;
     /** True while an adapt-to-inbound request is in flight. */
     adaptBusy: boolean;
+    /** Last adapt-to-inbound error message. Null when no error or after retry. */
+    adaptError: string | null;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
@@ -51,6 +55,7 @@
     onDelete: () => void;
     onBaseOnTemplate: () => void;
     onAdaptToInbound: () => void;
+    onClearAdaptError: () => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
   } = $props();
@@ -304,6 +309,14 @@
       </div>
     {/if}
 
+    {#if adaptError}
+      <div class="adapt-error">
+        <span class="adapt-error-text">{adaptError}</span>
+        <button class="adapt-retry" onclick={onAdaptToInbound} disabled={adaptBusy}>Retry</button>
+        <button class="adapt-dismiss" aria-label="Dismiss" onclick={onClearAdaptError}>×</button>
+      </div>
+    {/if}
+
     <div class="footer">
       {#if canAdapt}
         <button
@@ -344,7 +357,7 @@
     <div class="confirm-modal">
       <h3 id="confirm-title">Delete template?</h3>
       <p class="confirm-name">"{template.name}"</p>
-      <p class="confirm-warn">This can't be undone.</p>
+      <p class="confirm-warn">Ctrl+Z will restore it.</p>
       <div class="confirm-actions">
         <button class="confirm-btn" onclick={cancelDelete}>Cancel</button>
         <!-- svelte-ignore a11y_autofocus -->
@@ -537,6 +550,54 @@
     display: flex;
     justify-content: flex-end;
     gap: 8px;
+  }
+
+  .adapt-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--accent-danger-bg);
+    border: 1px solid var(--accent-danger-border);
+    color: var(--accent-danger-text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    margin-bottom: 8px;
+  }
+
+  .adapt-error-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .adapt-retry,
+  .adapt-dismiss {
+    background: transparent;
+    border: 1px solid var(--accent-danger-border);
+    color: var(--accent-danger-text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 2px 10px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .adapt-retry:hover:not(:disabled),
+  .adapt-dismiss:hover {
+    background: var(--accent-danger-border);
+    color: var(--bg-base);
+  }
+
+  .adapt-retry:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .adapt-dismiss {
+    padding: 2px 8px;
+    font-size: 1rem;
+    line-height: 1;
   }
 
   .base-btn {

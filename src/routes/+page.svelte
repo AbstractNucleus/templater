@@ -15,6 +15,7 @@
   import MemoryCapturePopover from "$lib/components/MemoryCapturePopover.svelte";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { listen } from "@tauri-apps/api/event";
   import { starterTemplates } from "$lib/starterTemplates";
   import { searchTemplates } from "$lib/search";
   import {
@@ -226,9 +227,29 @@
       }
       return;
     }
+    // ? toggles the cheat sheet — runs before the cheatSheetOpen guard so the
+    // same key both opens AND closes. Skip when typing in an input so Shift+/
+    // still types literally.
+    if (e.key === "?" && !isInputFocused()) {
+      e.preventDefault();
+      cheatSheetOpen = !cheatSheetOpen;
+      return;
+    }
     if (cheatSheetOpen) {
       // CheatSheet.svelte has its own window listener for Escape — just
       // suppress global shortcuts so e.g. arrow keys don't move selection.
+      return;
+    }
+    // Capture toggle runs before the captureOpen early-return so the same
+    // chord both opens and closes the popover.
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "m"
+    ) {
+      e.preventDefault();
+      captureOpen = !captureOpen;
       return;
     }
     if (captureOpen) {
@@ -267,11 +288,11 @@
       }
       return;
     }
-
-    // "?" toggles the cheat sheet. Skip when in an input so Shift+/ still types.
-    if (e.key === "?" && !isInputFocused() && !cheatSheetOpen) {
+    // Esc in the search box clears it — matches the Gmail/Slack convention.
+    // Scoped to the search input so Esc in other fields keeps native behaviour.
+    if (e.key === "Escape" && document.activeElement === searchInput && searchQuery.length > 0) {
       e.preventDefault();
-      cheatSheetOpen = true;
+      clearSearch();
       return;
     }
 
@@ -280,9 +301,10 @@
     if (!inSearch && isInputFocused()) return;
 
     // Ctrl/Cmd+Z: undo the last template-list mutation. Native text undo wins
-    // inside inputs (we returned above) so this only fires from the body /
-    // search field. Disabled in User mode where mutations can't happen anyway.
-    if (ctrlOnly && !e.shiftKey && e.key.toLowerCase() === "z" && isEditorMode) {
+    // inside inputs — including the search box, which we let through the
+    // isInputFocused guard above. Disabled in User mode where mutations can't
+    // happen anyway.
+    if (ctrlOnly && !e.shiftKey && e.key.toLowerCase() === "z" && isEditorMode && !inSearch) {
       e.preventDefault();
       void performUndo();
       return;
@@ -396,6 +418,7 @@
   let settingsOpen = $state(false);
   let cheatSheetOpen = $state(false);
   let adaptBusy = $state(false);
+  let adaptError = $state<string | null>(null);
 
   let rankings = $state<Ranking[] | null>(null);
   let rankLoading = $state(false);
@@ -620,11 +643,13 @@
         templatesWidth = settings.column_widths.templates;
         agentSidebarWidth = settings.column_widths.agent;
         contextWidth = settings.column_widths.context ?? DEFAULT_COLUMN_WIDTHS.context;
+        contextOpen = settings.context_open;
         selectedTemplateId = templates[0]?.id ?? null;
       } catch (e) {
+        // Surface the error and leave templates empty — DON'T fall back to
+        // starter templates here. Any subsequent persist would overwrite the
+        // user's (presumably recoverable) on-disk file with the starter set.
         loadError = String(e);
-        templates = starterTemplates;
-        selectedTemplateId = templates[0]?.id ?? null;
       } finally {
         loaded = true;
       }
@@ -1036,11 +1061,15 @@
 
   async function bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
     if (!isEditorMode || ids.size === 0) return;
-    const trimmed = tag.trim();
+    // Mirror TagPicker's normalization so bulk-add doesn't create case-variant
+    // duplicates (e.g. "Email" alongside an existing "email").
+    const trimmed = tag.trim().toLowerCase();
     if (trimmed.length === 0) return;
     pushUndo(`tag ${ids.size}`);
     const next = templates.map((t) =>
-      ids.has(t.id) && !t.tags.includes(trimmed) ? { ...t, tags: [...t.tags, trimmed] } : t,
+      ids.has(t.id) && !t.tags.some((existing) => existing.toLowerCase() === trimmed)
+        ? { ...t, tags: [...t.tags, trimmed] }
+        : t,
     );
     await persist(next);
   }
@@ -1054,6 +1083,7 @@
     const inbound = searchQuery.trim();
     if (inbound.length < PASTE_THRESHOLD) return;
     adaptBusy = true;
+    adaptError = null;
     try {
       const { reasoning, updated, contextUsed } = await adaptTemplate(
         { opening: src.opening, body: src.body },
@@ -1078,9 +1108,7 @@
       agentBusy = false;
       baseMode = true;
     } catch (e) {
-      // AgentSidebar isn't rendered until baseMode flips, so agentError would
-      // be invisible. Surface via the global error banner instead.
-      loadError = `Adapt failed: ${explainRankError(String(e))}`;
+      adaptError = explainRankError(String(e));
     } finally {
       adaptBusy = false;
     }
@@ -1098,6 +1126,10 @@
     templateId: string,
     values: Record<string, string>,
   ): Promise<void> {
+    // The debounced flush from MainPanel can fire AFTER the template is
+    // deleted (handleDelete races the persistTimer). Skip to avoid
+    // resurrecting a placeholder entry for a template that no longer exists.
+    if (!templates.some((t) => t.id === templateId)) return;
     // Strip empty entries to keep the persisted map lean.
     const cleaned: Record<string, string> = {};
     for (const [k, v] of Object.entries(values)) {
@@ -1194,9 +1226,9 @@
 
   async function confirmBulkTag(): Promise<void> {
     const tag = bulkTagDraft.trim();
+    if (tag.length === 0) return;
     bulkTagPromptOpen = false;
     bulkTagDraft = "";
-    if (tag.length === 0) return;
     await bulkAddTag(bulkSelectedIds, tag);
   }
 
@@ -1324,12 +1356,20 @@
     }
   });
 
-  // Keep the sidecar's source list in sync with persisted settings. Idempotent
-  // on the sidecar side — repeat calls with the same args are cheap.
+  // Keep the sidecar's source list in sync with persisted settings. The effect
+  // re-fires on any settings reassignment, so we dedupe against the last
+  // forwarded value — otherwise unrelated changes (context_open toggle, theme,
+  // column widths) would trigger a redundant chokidar restart on the sidecar.
+  let lastForwardedSourcesJson = "";
+  let lastForwardedBackend: typeof settings.paste_backend | null = null;
   $effect(() => {
     if (!loaded) return;
     const sources = settings.context_sources;
     const backend = settings.paste_backend;
+    const sourcesJson = JSON.stringify(sources);
+    if (sourcesJson === lastForwardedSourcesJson && backend === lastForwardedBackend) return;
+    lastForwardedSourcesJson = sourcesJson;
+    lastForwardedBackend = backend;
     void setContextSources(sources, backend).catch(() => {
       /* sidecar may be down; pane will surface the error */
     });
@@ -1341,6 +1381,36 @@
     const z = settings.zoom ?? 1;
     void getCurrentWebview().setZoom(z).catch(() => {});
   });
+
+  // Tray menu → Settings emits this; Rust has already shown + focused the window.
+  $effect(() => {
+    const unlisten = listen("open-settings", () => {
+      settingsOpen = true;
+    });
+    return () => {
+      void unlisten.then((u) => u());
+    };
+  });
+
+  // The new sidecar process has empty in-memory state — re-push the source
+  // list so the Context pane and adapt/edit calls stay consistent.
+  $effect(() => {
+    const unlisten = listen("sidecar-respawned", () => {
+      lastForwardedSourcesJson = "";
+      lastForwardedBackend = null;
+      void setContextSources(settings.context_sources, settings.paste_backend).catch(() => {});
+    });
+    return () => {
+      void unlisten.then((u) => u());
+    };
+  });
+
+  // An adapt error refers to a specific inbound message. Once that message is
+  // gone (search cleared or shortened below the threshold) the Retry button
+  // would silently no-op — drop the stale error instead.
+  $effect(() => {
+    if (!inPasteMode && adaptError !== null) adaptError = null;
+  });
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
@@ -1348,7 +1418,10 @@
 <div class="frame">
   <TitleBar
     onOpenSettings={() => (settingsOpen = true)}
-    onToggleContext={() => (contextOpen = !contextOpen)}
+    onToggleContext={() => {
+      contextOpen = !contextOpen;
+      void persist(templates, { ...settings, context_open: contextOpen });
+    }}
     {contextOpen}
     onToggleCapture={() => (captureOpen = !captureOpen)}
     {captureOpen}
@@ -1470,6 +1543,8 @@
         savedPlaceholderValues={settings.placeholder_values}
         inboundText={inPasteMode ? searchQuery : null}
         {adaptBusy}
+        {adaptError}
+        onClearAdaptError={() => (adaptError = null)}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => (editing = true)}
@@ -1501,10 +1576,13 @@
       />
     {/if}
     {#if loadError}
-      <div class="error-banner">{loadError}</div>
+      <div class="error-banner">
+        <span class="error-text">{loadError}</span>
+        <button class="error-close" aria-label="Dismiss error" onclick={() => (loadError = null)}>×</button>
+      </div>
     {/if}
     {#if undoToast}
-      <div class="undo-toast">{undoToast}</div>
+      <div class="undo-toast" style="bottom: {loadError ? 48 : 12}px">{undoToast}</div>
     {/if}
   </div>
 </div>
@@ -1545,6 +1623,11 @@
     sources={settings.context_sources}
     backend={settings.paste_backend}
     onClose={() => (captureOpen = false)}
+    onAddSource={() => {
+      captureOpen = false;
+      contextOpen = true;
+      void persist(templates, { ...settings, context_open: true });
+    }}
   />
 {/if}
 
@@ -1623,7 +1706,11 @@
             bulkTagDraft = "";
           }}>Cancel</button
         >
-        <button class="confirm-btn" onclick={() => void confirmBulkTag()}>Add</button>
+        <button
+          class="confirm-btn"
+          disabled={bulkTagDraft.trim().length === 0}
+          onclick={() => void confirmBulkTag()}
+        >Add</button>
       </div>
     </div>
   </div>
@@ -1660,7 +1747,7 @@
     <div class="confirm-modal">
       <h3 id="ctx-confirm-title">Delete template?</h3>
       <p class="confirm-name">"{contextDeleteTarget.name}"</p>
-      <p class="confirm-warn">This can't be undone.</p>
+      <p class="confirm-warn">Ctrl+Z will restore it.</p>
       <div class="confirm-actions">
         <button class="confirm-btn" onclick={cancelContextDelete}>Cancel</button>
         <!-- svelte-ignore a11y_autofocus -->
@@ -1908,6 +1995,29 @@
     padding: 6px 12px;
     font-size: 0.8rem;
     border-top: 1px solid var(--accent-danger-border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .error-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .error-close {
+    background: transparent;
+    border: none;
+    color: var(--accent-danger-text);
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+
+  .error-close:hover {
+    opacity: 0.7;
   }
 
   .undo-toast {

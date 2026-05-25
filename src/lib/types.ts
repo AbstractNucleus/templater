@@ -54,6 +54,8 @@ export interface Settings {
   onboarding_complete: boolean;
   /** Absolute paths to folders the AI may consult during adapt + edit. */
   context_sources: string[];
+  /** Whether the context pane was open in the previous session. */
+  context_open: boolean;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -86,4 +88,5 @@ export const DEFAULT_SETTINGS: Settings = {
   tag_order: [],
   onboarding_complete: false,
   context_sources: [],
+  context_open: false,
 };

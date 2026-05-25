@@ -22,6 +22,14 @@ export async function openDataDir(): Promise<void> {
   await invoke<void>("open_data_dir");
 }
 
+export async function openPath(path: string): Promise<void> {
+  await invoke<void>("open_path", { path });
+}
+
+export async function resetWindowPosition(): Promise<void> {
+  await invoke<void>("reset_window_position");
+}
+
 export async function exportTemplates(path: string): Promise<number> {
   return await invoke<number>("export_templates", { path });
 }

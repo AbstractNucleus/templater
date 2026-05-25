@@ -145,7 +145,9 @@ Two JSON files in the OS app-data dir. Every save copies the current file to `<n
 - **Ctrl+F** — focus the search input
 - **Ctrl+L** — clear the search
 - **Ctrl+Z** — undo the last template-list mutation
+- **Ctrl+Shift+M** — toggle the memory-capture popover (`Ctrl+Enter` inside it submits)
 - **Ctrl+0 / Ctrl+= / Ctrl+-** — reset / zoom in / zoom out
+- **?** — open the in-app cheat sheet
 - **Global hotkey** (default `Ctrl+Shift+\`) — show/hide the window from anywhere
 
 ## License

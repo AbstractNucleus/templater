@@ -39,6 +39,10 @@ use tokio::sync::{mpsc, oneshot};
 /// partials.
 pub const SIDECAR_PROGRESS_EVENT: &str = "sidecar-progress";
 
+/// Emitted after a successful respawn so the frontend can re-push state the
+/// new sidecar process doesn't know about (context source list, etc.).
+pub const SIDECAR_RESPAWNED_EVENT: &str = "sidecar-respawned";
+
 /// Cap on a single sidecar round-trip. Picked so a slow first call (cold
 /// Claude API + cache miss ~3-5s) still has comfortable headroom, while a
 /// truly stuck process is reaped instead of blocking future requests.
@@ -260,18 +264,27 @@ impl Sidecar {
     ) -> Result<serde_json::Value, String> {
         // Snapshot the writer + pending Arc, respawning from Unavailable if
         // needed. Lock is released before any await.
-        let (writer_tx, pending) = {
+        let (writer_tx, pending, respawned) = {
             let mut guard = self.state.lock().unwrap();
+            let mut respawned = false;
             if let SidecarState::Unavailable(prior) = &*guard {
                 let prior = prior.clone();
                 match Self::try_spawn(&self.script, &self.state, &self.app, &self.app_data_dir) {
-                    Ok(active) => *guard = SidecarState::Active(active),
+                    Ok(active) => {
+                        *guard = SidecarState::Active(active);
+                        respawned = true;
+                    }
                     Err(e) => return Err(format!("sidecar unavailable: {e} (prior: {prior})")),
                 }
             }
             let SidecarState::Active(active) = &*guard else { unreachable!() };
-            (active.writer_tx.clone(), active.pending.clone())
+            (active.writer_tx.clone(), active.pending.clone(), respawned)
         };
+        // Tell the frontend so it can re-push any state the new sidecar
+        // process doesn't know about (context source list, etc.).
+        if respawned {
+            let _ = self.app.emit(SIDECAR_RESPAWNED_EVENT, ());
+        }
 
         // Override any caller-supplied id so concurrent requests don't collide.
         let id = next_request_id();

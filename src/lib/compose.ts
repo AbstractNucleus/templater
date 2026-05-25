@@ -21,10 +21,12 @@ export function composeText(
 const PLACEHOLDER_RE = /\{\{([^{}]+?)\}\}/g;
 
 export type DateFormat = "iso" | "long";
+export type TimeFormat = "short" | "long";
 
 export type PlaceholderKind =
   | { type: "text" }
   | { type: "date"; format: DateFormat }
+  | { type: "time"; format: TimeFormat }
   | { type: "choice"; options: string[] };
 
 export interface ParsedPlaceholder {
@@ -57,6 +59,19 @@ export function parsePlaceholder(inner: string): ParsedPlaceholder {
       key: trimmed,
       label: `date (${format})`,
       kind: { type: "date", format },
+    };
+  }
+  if (trimmed === "time") {
+    return { raw, key: trimmed, label: "time", kind: { type: "time", format: "short" } };
+  }
+  if (trimmed.startsWith("time:")) {
+    const fmt = trimmed.slice("time:".length).trim();
+    const format: TimeFormat = fmt === "long" ? "long" : "short";
+    return {
+      raw,
+      key: trimmed,
+      label: `time (${format})`,
+      kind: { type: "time", format },
     };
   }
   if (trimmed.startsWith("choice:")) {
@@ -96,6 +111,17 @@ function formatDate(now: Date, format: DateFormat): string {
   return `${y}-${m}-${d}`;
 }
 
+function formatTime(now: Date, format: TimeFormat): string {
+  // 24h local. Locale-independent so templates stay consistent across machines.
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  if (format === "long") {
+    const s = String(now.getSeconds()).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  }
+  return `${h}:${m}`;
+}
+
 /**
  * Resolve a parsed placeholder to its rendered string. Returns null when the
  * placeholder should fall through to the raw `{{...}}` token (text with no
@@ -107,6 +133,7 @@ function resolveValue(
   now: Date,
 ): string | null {
   if (p.kind.type === "date") return formatDate(now, p.kind.format);
+  if (p.kind.type === "time") return formatTime(now, p.kind.format);
   const v = values[p.key];
   if (v && v.length > 0) return v;
   return null;
@@ -154,7 +181,7 @@ export function extractPlaceholders(text: string): ParsedPlaceholder[] {
   const out: ParsedPlaceholder[] = [];
   for (const m of text.matchAll(PLACEHOLDER_RE)) {
     const p = parsePlaceholder(m[1]);
-    if (p.kind.type === "date") continue;
+    if (p.kind.type === "date" || p.kind.type === "time") continue;
     if (p.key.length === 0 || seen.has(p.key)) continue;
     seen.add(p.key);
     out.push(p);

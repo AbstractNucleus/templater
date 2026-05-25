@@ -117,6 +117,8 @@ pub struct Settings {
     /// `context-set-sources` on startup and whenever the list changes.
     #[serde(default)]
     pub context_sources: Vec<String>,
+    #[serde(default)]
+    pub context_open: bool,
 }
 
 fn default_theme() -> String {
@@ -158,6 +160,7 @@ impl Default for Settings {
             tag_order: Vec::new(),
             onboarding_complete: false,
             context_sources: Vec::new(),
+            context_open: false,
         }
     }
 }
@@ -245,8 +248,18 @@ impl Store {
         };
 
         let settings = if settings_exists {
-            let f = read_settings_file(&self.settings_path)?;
-            f.settings
+            // A corrupt settings.json must NOT take down the whole load —
+            // otherwise the frontend falls back to starter templates and the
+            // next auto-save (e.g. last_used_at on copy) overwrites the real
+            // templates.json. Settings can fall back to defaults; user data
+            // (templates) is what matters.
+            match read_settings_file(&self.settings_path) {
+                Ok(f) => f.settings,
+                Err(e) => {
+                    eprintln!("settings.json unreadable, falling back to defaults: {e}");
+                    Settings::default()
+                }
+            }
         } else {
             // No settings.json yet — fall back to legacy settings embedded in
             // templates.json if present, otherwise the defaults.

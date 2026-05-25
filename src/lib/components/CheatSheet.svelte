@@ -25,6 +25,7 @@
       rows: [
         { keys: "Ctrl+F", desc: "Focus search input" },
         { keys: "Ctrl+L", desc: "Clear search" },
+        { keys: "Esc", desc: "Clear search (when search input is focused)" },
         { keys: "↑ / ↓", desc: "Move selection up / down" },
         { keys: "Enter", desc: "Copy selected template" },
       ],
@@ -40,7 +41,16 @@
       rows: [
         { keys: "{{name}}", desc: "Free-text variable, filled in before copy" },
         { keys: "{{date}}", desc: "Today's date. Use {{date:long}} for long format" },
+        { keys: "{{time}}", desc: "Current local time HH:MM. Use {{time:long}} for HH:MM:SS" },
         { keys: "{{choice:a|b|c}}", desc: "Dropdown picker with the listed options" },
+      ],
+    },
+    {
+      label: "Capture popover",
+      rows: [
+        { keys: "Ctrl+Shift+M", desc: "Open or close the memory capture popover" },
+        { keys: "Ctrl+Enter", desc: "Submit the captured snippet" },
+        { keys: "Esc", desc: "Close the popover" },
       ],
     },
     {
