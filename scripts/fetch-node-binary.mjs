@@ -6,10 +6,11 @@
 //   - Windows x64  → win-x64/node.exe       → node-x86_64-pc-windows-msvc.exe
 //   - macOS arm64  → darwin-arm64 tarball   → node-aarch64-apple-darwin
 //   - macOS x64    → darwin-x64 tarball     → node-x86_64-apple-darwin
+//   - Linux x64    → linux-x64 .tar.xz      → node-x86_64-unknown-linux-gnu
 //
-// macOS tarballs are extracted via the host's `tar` (always present on macOS,
-// and also present on Windows 10+ as bsdtar). Only the inner `bin/node` is
-// kept; the rest of the tarball is discarded.
+// Tarballs are extracted via the host's `tar` (always present on macOS/Linux,
+// and on Windows 10+ as bsdtar). Only the inner `bin/node` is kept; the rest
+// of the tarball is discarded. Linux ships .tar.xz; macOS uses .tar.gz.
 //
 // Tauri picks the binary matching the build's rust target triple at bundle
 // time, so we only need to fetch the host's. CI runs this on each runner.
@@ -49,6 +50,7 @@ function resolveHost() {
       target: "aarch64-apple-darwin",
       filename: "node-aarch64-apple-darwin",
       kind: "tarball",
+      tarFlag: "-xzf",
       url: `https://nodejs.org/dist/v${NODE_VERSION}/${dir}.tar.gz`,
       innerPath: `${dir}/bin/node`,
     };
@@ -59,7 +61,19 @@ function resolveHost() {
       target: "x86_64-apple-darwin",
       filename: "node-x86_64-apple-darwin",
       kind: "tarball",
+      tarFlag: "-xzf",
       url: `https://nodejs.org/dist/v${NODE_VERSION}/${dir}.tar.gz`,
+      innerPath: `${dir}/bin/node`,
+    };
+  }
+  if (platform === "linux" && arch === "x64") {
+    const dir = `node-v${NODE_VERSION}-linux-x64`;
+    return {
+      target: "x86_64-unknown-linux-gnu",
+      filename: "node-x86_64-unknown-linux-gnu",
+      kind: "tarball",
+      tarFlag: "-xJf",
+      url: `https://nodejs.org/dist/v${NODE_VERSION}/${dir}.tar.xz`,
       innerPath: `${dir}/bin/node`,
     };
   }
@@ -94,10 +108,10 @@ if (host.kind === "exe") {
   // Extract <innerPath> from the tarball via the host's tar. Using a temp
   // dir keeps the rest of the tarball's contents from leaking into the repo.
   const work = mkdtempSync(join(tmpdir(), "node-fetch-"));
-  const tarball = join(work, "node.tar.gz");
+  const tarball = join(work, "node.tar");
   writeFileSync(tarball, buf);
   try {
-    execFileSync("tar", ["-xzf", tarball, "-C", work, host.innerPath], {
+    execFileSync("tar", [host.tarFlag, tarball, "-C", work, host.innerPath], {
       stdio: "inherit",
     });
     renameSync(join(work, host.innerPath), target);
