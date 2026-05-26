@@ -44,6 +44,11 @@ jobs:
             libssl-dev \
             build-essential
 
+      # Tauri's externalBin needs the per-target node binary to exist before
+      # the build script runs, even for a plain cargo check.
+      - name: Fetch sidecar node binary
+        run: node scripts/fetch-node-binary.mjs
+
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
