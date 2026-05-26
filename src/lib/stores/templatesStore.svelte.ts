@@ -109,13 +109,26 @@ class TemplatesStore {
     nextTemplates: Template[],
     nextSettings: Settings = this.settings,
   ): Promise<void> {
+    // Rust's ColumnWidths is u32. Pointer events emit fractional pixel deltas
+    // on high-DPI displays, so coerce here as the last line of defence before
+    // serde rejects the save with "expected u32".
+    const cw = nextSettings.column_widths;
+    const safeSettings: Settings = {
+      ...nextSettings,
+      column_widths: {
+        tags: Math.round(cw.tags),
+        templates: Math.round(cw.templates),
+        agent: Math.round(cw.agent),
+        context: Math.round(cw.context),
+      },
+    };
     this.templates = nextTemplates;
-    this.settings = nextSettings;
+    this.settings = safeSettings;
     try {
       await saveAppData({
         version: DATA_VERSION,
         templates: nextTemplates,
-        settings: nextSettings,
+        settings: safeSettings,
       });
     } catch (e) {
       this.loadError = `save failed: ${e}`;

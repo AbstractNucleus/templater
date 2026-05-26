@@ -369,7 +369,7 @@
       handle.classList.add("dragging");
 
       function onMove(ev: PointerEvent): void {
-        const next = Math.max(min, Math.min(max, startWidth + sign * (ev.clientX - startX)));
+        const next = Math.round(Math.max(min, Math.min(max, startWidth + sign * (ev.clientX - startX))));
         if (target === "tags") tagsWidth = next;
         else if (target === "templates") templatesWidth = next;
         else if (target === "agent") agentSidebarWidth = next;
