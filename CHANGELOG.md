@@ -4,6 +4,85 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-27
+
+### Added
+
+- **AI-assisted in-place editing.** Pressing Edit on an existing
+  template now opens the agent sidebar beside the form. Prompts to the
+  agent update the draft body live; Save overwrites the same template
+  instead of saving a new one.
+- **Aero Snap on Windows.** A WNDPROC subclass reports `HTCAPTION` for
+  the custom title bar, so Win+Arrow, drag-to-edge snapping, and the
+  Snap Layouts hover all work on the frameless window again
+  ([issue #5](https://github.com/AbstractNucleus/templater/issues/5)).
+- **History diff view.** Per-template version history now renders a
+  per-field before/after diff (Tags / Opening / Body) instead of a raw
+  snippet, with an explicit "No visible diff" state.
+- **Folder drag-and-drop.** Drop a template — or a multi-selection —
+  onto a folder header in the sidebar to move it; drop onto "Ungrouped"
+  to clear the folder.
+- **Tag combinator + exclusion.** The tag filter now supports an AND/OR
+  toggle and right-click exclusion via the new
+  `src/lib/stores/selectionStore.svelte.ts`.
+- **"Never used" sort mode.** Sort cycle is now manual → recent →
+  most used → never used → manual.
+
+### Changed
+
+- **Per-op sidecar timeouts.** A single timeout is replaced by four:
+  10s for status/ping, 60s for rank, 90s for edit/adapt/capture, 30s
+  default. A slow draft no longer marks the sidecar Unavailable and
+  drains unrelated in-flight requests.
+- **Sidecar protocol validation.** Incoming lines now go through
+  `parseRequestLine`, so a malformed JSON line returns a structured
+  `ok: false` error instead of throwing inside the worker.
+- **Honest diagnostics.** Sidecar responses with `ok: false` are now
+  recorded as failures in the latency panel; previously they counted as
+  successes.
+- **Bulk template ops in Rust.** `bulk_delete_templates`,
+  `bulk_add_template_tag`, and `bulk_remove_template_tag` replace
+  looped per-template calls, so a multi-select op roundtrips through
+  one disk write.
+- **Friendlier sidecar error copy.** Timeout, pipe-closed, and
+  Unavailable each get a distinct message that says what to do next.
+
+### Fixed
+
+- **Column-width persistence on high-DPI displays.** Divider drags
+  emitted fractional `clientX`, which wrote floats into
+  `settings.column_widths`. The Rust `ColumnWidths` is `u32`, so the
+  next save (any copy_count bump would trigger it) failed and surfaced
+  the red "save failed" banner. Widths are now rounded at the move
+  handler and again in `persist()`
+  ([PR #18](https://github.com/AbstractNucleus/templater/pull/18)).
+- **Edit-template pick timing.** Edit responses now include
+  `timings.pick_ms`, matching adapt, so the latency rollup attributes
+  the context-pick step to the right op.
+
+### Tests
+
+- New `sidecar/protocol.test.ts` covers `parseRequestLine` happy and
+  error paths; `src/lib/api.test.ts` covers the rewritten
+  `explainRankError` mapping.
+
+### CI
+
+- The push/PR workflow now installs Tauri's Linux system dependencies,
+  fetches a Linux `node` binary via `scripts/fetch-node-binary.mjs`,
+  and stages the sidecar `prod-bundle` before `cargo check`. Linux is
+  a CI-only target; Templater still ships Windows + macOS only.
+
+### Docs
+
+- `RELEASING.md` rewritten as the single source for the tag-driven
+  release workflow. `IDEA.md` removed.
+
+### Known limitations
+
+- Windows installer is still ~280 MB
+  ([issue #2](https://github.com/AbstractNucleus/templater/issues/2)).
+
 ## [0.4.0] — 2026-05-26
 
 ### Added
