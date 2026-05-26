@@ -47,6 +47,18 @@ export async function exportTemplatesSubset(ids: string[], path: string): Promis
   return await invoke<number>("export_templates_subset", { ids, path });
 }
 
+export async function bulkDeleteTemplates(ids: string[]): Promise<Template[]> {
+  return await invoke<Template[]>("bulk_delete_templates", { ids });
+}
+
+export async function bulkAddTemplateTag(ids: string[], tag: string): Promise<Template[]> {
+  return await invoke<Template[]>("bulk_add_template_tag", { ids, tag });
+}
+
+export async function bulkRemoveTemplateTag(ids: string[], tag: string): Promise<Template[]> {
+  return await invoke<Template[]>("bulk_remove_template_tag", { ids, tag });
+}
+
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -326,10 +338,19 @@ export interface DiagEntry {
   error: string | null;
 }
 
+export interface DiagStat {
+  op: string;
+  count: number;
+  p50: number;
+  p95: number;
+  fail: number;
+}
+
 export interface SidecarDiagnostics {
-  state: "active" | "unavailable";
+  state: "active" | "starting" | "unavailable";
   state_reason: string | null;
   entries: DiagEntry[];
+  stats: DiagStat[];
 }
 
 export async function getSidecarDiagnostics(): Promise<SidecarDiagnostics> {

@@ -8,6 +8,11 @@
   import HotkeySection from "./settings/HotkeySection.svelte";
   import DiagnosticsSection from "./settings/DiagnosticsSection.svelte";
   import UpdatesSection from "./settings/UpdatesSection.svelte";
+  import SettingsGeneral from "./settings/SettingsGeneral.svelte";
+  import SettingsContext from "./settings/SettingsContext.svelte";
+  import SettingsTemplates from "./settings/SettingsTemplates.svelte";
+  import SettingsUpdates from "./settings/SettingsUpdates.svelte";
+  import SettingsDiagnostics from "./settings/SettingsDiagnostics.svelte";
 
   type PortResult =
     | { kind: "ok"; message: string }
@@ -59,6 +64,7 @@
   let portMessage = $state<string | null>(null);
   let portError = $state<string | null>(null);
   let portBusy = $state(false);
+  let activeTab = $state<"general" | "context" | "templates" | "diagnostics" | "updates">("general");
 
   async function handleExportClick(): Promise<void> {
     if (portBusy) return;
@@ -256,6 +262,16 @@
       <button class="close" onclick={onClose} aria-label="Close">×</button>
     </header>
 
+    <nav class="settings-tabs" aria-label="Settings sections">
+      <button class:active={activeTab === "general"} onclick={() => (activeTab = "general")}>General</button>
+      <button class:active={activeTab === "context"} onclick={() => (activeTab = "context")}>Context</button>
+      <button class:active={activeTab === "templates"} onclick={() => (activeTab = "templates")}>Templates</button>
+      <button class:active={activeTab === "diagnostics"} onclick={() => (activeTab = "diagnostics")}>Diagnostics</button>
+      <button class:active={activeTab === "updates"} onclick={() => (activeTab = "updates")}>Updates</button>
+    </nav>
+
+    {#if activeTab === "general"}
+      <SettingsGeneral>
     <section>
       <div class="section-label">Mode</div>
       <div class="theme-toggle">
@@ -362,7 +378,11 @@
         Per-template fills override snippets.
       </div>
     </section>
+      </SettingsGeneral>
+    {/if}
 
+    {#if activeTab === "templates"}
+      <SettingsTemplates>
     <section>
       <div class="section-label">Templates</div>
       <div class="port-row">
@@ -406,7 +426,11 @@
       {onListBackups}
       {onRestoreBackup}
     />
+      </SettingsTemplates>
+    {/if}
 
+    {#if activeTab === "general"}
+      <SettingsGeneral>
     <WindowSection {settings} {onUpdate} />
 
     <HotkeySection
@@ -424,10 +448,40 @@
       </div>
       <div class="hint">Or press <code>?</code> any time the search isn't focused.</div>
     </section>
+      </SettingsGeneral>
+    {/if}
 
-    <DiagnosticsSection />
+    {#if activeTab === "context"}
+      <SettingsContext>
+        <section>
+          <div class="section-label">Context sources</div>
+          {#if settings.context_sources.length === 0}
+            <div class="hint">No context folders configured. Add folders from the Context pane.</div>
+          {:else}
+            <ul class="context-source-list">
+              {#each settings.context_sources as source (source)}
+                <li>{source}</li>
+              {/each}
+            </ul>
+          {/if}
+          <div class="hint">
+            These folders are indexed lazily by the sidecar and used during adapt/edit calls.
+          </div>
+        </section>
+      </SettingsContext>
+    {/if}
 
-    <UpdatesSection {currentVersion} {onCheckUpdate} />
+    {#if activeTab === "diagnostics"}
+      <SettingsDiagnostics>
+        <DiagnosticsSection />
+      </SettingsDiagnostics>
+    {/if}
+
+    {#if activeTab === "updates"}
+      <SettingsUpdates>
+        <UpdatesSection {currentVersion} {onCheckUpdate} />
+      </SettingsUpdates>
+    {/if}
   </div>
 </div>
 
@@ -465,6 +519,36 @@
     margin: 0;
     font-size: 0.95rem;
     font-weight: 600;
+  }
+
+  .settings-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+
+  .settings-tabs button {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.76rem;
+  }
+
+  .settings-tabs button:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .settings-tabs button.active {
+    background: var(--bg-active);
+    color: var(--text-strong);
+    border-color: var(--border);
   }
 
   .close {
@@ -595,6 +679,18 @@
     background: var(--accent-danger-bg);
     border-color: var(--accent-danger-border);
     color: var(--accent-danger-text);
+  }
+
+  .context-source-list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
   }
 
   .field-textarea:focus {

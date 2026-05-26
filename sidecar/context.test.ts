@@ -7,7 +7,6 @@
  * never reach for it.
  */
 
-import { createRequire } from "node:module";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,9 +14,6 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { extractText, summaryInput } from "./context.js";
-
-const require = createRequire(import.meta.url);
-const XLSX = require("xlsx") as typeof import("xlsx");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, "__fixtures__");
@@ -123,31 +119,7 @@ describe("extractText", () => {
   });
 
   it("extracts .xlsx with a '# Sheet: <name>' header per non-empty sheet", async () => {
-    // Build a tiny workbook with two non-empty sheets and one empty sheet.
-    // The empty sheet must be skipped per the extractor's contract.
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([
-        ["name", "age"],
-        ["Alice", 30],
-        ["Bob", 42],
-      ]),
-      "People",
-    );
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([
-        ["item", "qty"],
-        ["apples", 5],
-      ]),
-      "Inventory",
-    );
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([]), "Empty");
-
-    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
-    const fp = path.join(tmpDir, "book.xlsx");
-    await fs.writeFile(fp, buf);
+    const fp = path.join(FIXTURES, "hello.xlsx");
 
     const out = await extractText(fp, ".xlsx");
 

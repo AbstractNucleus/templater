@@ -5,6 +5,9 @@ import {
   exportTemplate,
   exportTemplates,
   exportTemplatesSubset,
+  bulkAddTemplateTag,
+  bulkDeleteTemplates,
+  bulkRemoveTemplateTag,
   importTemplates,
   restoreTemplateBackup,
 } from "$lib/api";
@@ -44,8 +47,8 @@ function dedupe(items: string[]): string[] {
 }
 
 function pushHistorySnapshot(cur: Template, savedAt: string): TemplateVersion[] {
-  if (cur.opening.length === 0 && cur.body.length === 0) return cur.history;
-  const snapshot = { saved_at: savedAt, opening: cur.opening, body: cur.body };
+  if (cur.opening.length === 0 && cur.body.length === 0 && cur.tags.length === 0) return cur.history;
+  const snapshot = { saved_at: savedAt, opening: cur.opening, body: cur.body, tags: [...cur.tags] };
   const next = [...cur.history, snapshot];
   return next.length > TEMPLATE_HISTORY_CAP ? next.slice(-TEMPLATE_HISTORY_CAP) : next;
 }
@@ -177,12 +180,17 @@ class TemplatesStore {
   async handleSave(updated: Template): Promise<void> {
     if (!this.isEditorMode) return;
     this.pushUndo("edit");
-    // Snapshot the pre-edit opening+body so per-template history can revert.
+    // Snapshot the pre-edit opening+body+tags so per-template history can revert.
     // Only when something actually changed — otherwise a no-op save would
     // shove an identical entry into the ring.
     const prior = this.templates.find((t) => t.id === updated.id);
     let withHistory = updated;
-    if (prior && (prior.opening !== updated.opening || prior.body !== updated.body)) {
+    if (
+      prior &&
+      (prior.opening !== updated.opening ||
+        prior.body !== updated.body ||
+        prior.tags.join("\0") !== updated.tags.join("\0"))
+    ) {
       withHistory = { ...updated, history: pushHistorySnapshot(prior, updated.updated_at) };
     }
     const next = this.templates.map((t) => (t.id === updated.id ? withHistory : t));
@@ -203,10 +211,10 @@ class TemplatesStore {
     await this.deleteTemplateById(id);
   }
 
-  async duplicateTemplateById(id: string): Promise<void> {
-    if (!this.isEditorMode) return;
+  async duplicateTemplateById(id: string): Promise<string | null> {
+    if (!this.isEditorMode) return null;
     const src = this.templates.find((t) => t.id === id);
-    if (!src) return;
+    if (!src) return null;
     this.pushUndo("duplicate");
     const now = new Date().toISOString();
     const copy: Template = {
@@ -221,6 +229,7 @@ class TemplatesStore {
     next.splice(idx + 1, 0, copy);
     await this.persist(next);
     this.selectedTemplateId = copy.id;
+    return copy.id;
   }
 
   async deleteTemplateById(id: string): Promise<void> {
@@ -287,7 +296,13 @@ class TemplatesStore {
     if (this.selectedTemplateId !== null && ids.has(this.selectedTemplateId)) {
       this.selectedTemplateId = next[0]?.id ?? null;
     }
-    await this.persist(next, { ...this.settings, placeholder_values: nextPlaceholders });
+    try {
+      const saved = await bulkDeleteTemplates([...ids]);
+      this.templates = saved;
+      this.settings = { ...this.settings, placeholder_values: nextPlaceholders };
+    } catch (e) {
+      this.loadError = `bulk delete failed: ${e}`;
+    }
   }
 
   async bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
@@ -297,12 +312,11 @@ class TemplatesStore {
     const trimmed = tag.trim().toLowerCase();
     if (trimmed.length === 0) return;
     this.pushUndo(`tag ${ids.size}`);
-    const next = this.templates.map((t) =>
-      ids.has(t.id) && !t.tags.some((existing) => existing.toLowerCase() === trimmed)
-        ? { ...t, tags: [...t.tags, trimmed] }
-        : t,
-    );
-    await this.persist(next);
+    try {
+      this.templates = await bulkAddTemplateTag([...ids], trimmed);
+    } catch (e) {
+      this.loadError = `bulk tag failed: ${e}`;
+    }
   }
 
   async bulkRemoveTag(ids: Set<string>, tag: string): Promise<void> {
@@ -310,10 +324,19 @@ class TemplatesStore {
     const trimmed = tag.trim().toLowerCase();
     if (trimmed.length === 0) return;
     this.pushUndo(`untag ${ids.size}`);
+    try {
+      this.templates = await bulkRemoveTemplateTag([...ids], trimmed);
+    } catch (e) {
+      this.loadError = `bulk untag failed: ${e}`;
+    }
+  }
+
+  async moveToFolder(ids: Set<string>, folder: string | null): Promise<void> {
+    if (!this.isEditorMode || ids.size === 0) return;
+    this.pushUndo("move folder");
+    const normalized = folder !== null && folder.trim().length > 0 ? folder.trim() : null;
     const next = this.templates.map((t) =>
-      ids.has(t.id) && t.tags.some((existing) => existing.toLowerCase() === trimmed)
-        ? { ...t, tags: t.tags.filter((existing) => existing.toLowerCase() !== trimmed) }
-        : t,
+      ids.has(t.id) ? { ...t, folder: normalized, updated_at: new Date().toISOString() } : t,
     );
     await this.persist(next);
   }
@@ -348,6 +371,7 @@ class TemplatesStore {
       ...cur,
       opening: v.opening,
       body: v.body,
+      tags: [...v.tags],
       updated_at: now,
       history: newHistory,
     };
@@ -382,12 +406,14 @@ class TemplatesStore {
   }
 
   handleSortModeToggle(): void {
-    // Cycle manual → recent → most_used → manual.
+    // Cycle manual → recent → most_used → never_used → manual.
     const next =
       this.settings.sort_mode === "manual"
         ? "recent"
         : this.settings.sort_mode === "recent"
           ? "most_used"
+          : this.settings.sort_mode === "most_used"
+            ? "never_used"
           : "manual";
     void this.persist(this.templates, { ...this.settings, sort_mode: next });
   }

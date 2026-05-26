@@ -1,4 +1,4 @@
-/** Snapshot of a template body/opening saved before an edit. Capped to
+/** Snapshot of a template body/opening/tags saved before an edit. Capped to
  *  TEMPLATE_HISTORY_CAP entries in app code so storage stays bounded. */
 export interface TemplateVersion {
   /** ISO-8601 timestamp of when this revision was REPLACED (i.e. the save
@@ -6,6 +6,7 @@ export interface TemplateVersion {
   saved_at: string;
   opening: string;
   body: string;
+  tags: string[];
 }
 
 export const TEMPLATE_HISTORY_CAP = 10;
@@ -31,7 +32,7 @@ export interface Template {
    *  signature otherwise. */
   signature_override: string | null;
   /** Newest-last ring of prior versions. Each entry was the template's
-   *  opening+body at the time of the save that replaced it. */
+   *  opening+body+tags at the time of the save that replaced it. */
   history: TemplateVersion[];
 }
 
@@ -55,7 +56,7 @@ export type Mode = "editor" | "user";
 
 export type PasteBackend = "agent" | "api";
 
-export type SortMode = "manual" | "recent" | "most_used";
+export type SortMode = "manual" | "recent" | "most_used" | "never_used";
 
 export interface Settings {
   always_on_top_default: boolean;

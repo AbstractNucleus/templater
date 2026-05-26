@@ -598,15 +598,28 @@ async function fetchContextForEdit(req: EditTemplateRequest): Promise<PickedFile
   return await pickRelevantFiles(query, (q, cs, k) => pickFiles(q, cs, k, req.backend));
 }
 
+async function timedPick(fetcher: () => Promise<PickedFile[]>): Promise<{ picks: PickedFile[]; pickMs: number }> {
+  const started = Date.now();
+  const picks = await fetcher();
+  return { picks, pickMs: Date.now() - started };
+}
+
+function withPickTiming(response: Response, pickMs: number): Response {
+  if (!response.ok) return response;
+  return { ...response, timings: { pick_ms: pickMs } };
+}
+
 function editSystemPrompt(contextBlock: string): string {
   return contextBlock.length > 0 ? `${EDIT_INSTRUCTIONS}\n\n${contextBlock}` : EDIT_INSTRUCTIONS;
 }
 
 async function handleEditTemplate(req: EditTemplateRequest): Promise<Response> {
-  const picks = await fetchContextForEdit(req);
+  const { picks, pickMs } = await timedPick(() => fetchContextForEdit(req));
   const contextBlock = renderContextBlock(picks);
-  if (req.backend === "api") return runEditApi(req, contextBlock);
-  return runEditAgent(req, contextBlock);
+  const response = req.backend === "api"
+    ? await runEditApi(req, contextBlock)
+    : await runEditAgent(req, contextBlock);
+  return withPickTiming(response, pickMs);
 }
 
 async function runEditAgent(req: EditTemplateRequest, contextBlock: string): Promise<Response> {
@@ -748,10 +761,12 @@ function adaptSystemPrompt(contextBlock: string): string {
 }
 
 async function handleAdaptTemplate(req: AdaptTemplateRequest): Promise<Response> {
-  const picks = await fetchContextForAdapt(req);
+  const { picks, pickMs } = await timedPick(() => fetchContextForAdapt(req));
   const contextBlock = renderContextBlock(picks);
-  if (req.backend === "api") return runAdaptApi(req, contextBlock, picks);
-  return runAdaptAgent(req, contextBlock, picks);
+  const response = req.backend === "api"
+    ? await runAdaptApi(req, contextBlock, picks)
+    : await runAdaptAgent(req, contextBlock, picks);
+  return withPickTiming(response, pickMs);
 }
 
 function pickedFilesPayload(picks: PickedFile[]): Array<{ path: string; summary: string; reason: string }> {

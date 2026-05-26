@@ -25,6 +25,7 @@
     onContextTemplate,
     onContextEmpty,
     onReorder,
+    onMoveToFolder,
     onSortModeToggle,
   }: {
     templates: Template[];
@@ -49,6 +50,7 @@
     onContextTemplate: (id: string, x: number, y: number) => void;
     onContextEmpty: (x: number, y: number) => void;
     onReorder: (newOrderIds: string[]) => void;
+    onMoveToFolder: (ids: Set<string>, folder: string | null) => void;
     onSortModeToggle: () => void;
   } = $props();
 
@@ -127,6 +129,7 @@
   let draggingId = $state<string | null>(null);
   let dragOverId = $state<string | null>(null);
   let dragOverHalf = $state<"top" | "bottom">("top");
+  let dragOverFolder = $state<string | null>(null);
 
   function handleDragStart(e: DragEvent, id: string): void {
     if (!canReorder) return;
@@ -170,9 +173,35 @@
     onReorder(ids);
   }
 
+  function draggedSelection(): Set<string> {
+    if (draggingId === null) return new Set();
+    if (bulkSelectedIds.size > 1 && bulkSelectedIds.has(draggingId)) {
+      return new Set(bulkSelectedIds);
+    }
+    return new Set([draggingId]);
+  }
+
+  function handleFolderDragOver(e: DragEvent, folder: string | null): void {
+    if (!canReorder || draggingId === null) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    dragOverFolder = folder ?? "__ungrouped__";
+  }
+
+  function handleFolderDrop(e: DragEvent, folder: string | null): void {
+    if (!canReorder || draggingId === null) return;
+    e.preventDefault();
+    const ids = draggedSelection();
+    draggingId = null;
+    dragOverId = null;
+    dragOverFolder = null;
+    onMoveToFolder(ids, folder);
+  }
+
   function handleDragEnd(): void {
     draggingId = null;
     dragOverId = null;
+    dragOverFolder = null;
   }
 </script>
 
@@ -189,9 +218,11 @@
             ? "Manual order. Drag templates to reorder. Click → recent."
             : sortMode === "recent"
               ? "Sorted by most recently copied. Click → most used."
-              : "Sorted by lifetime copy count. Click → manual."}
+              : sortMode === "most_used"
+                ? "Sorted by lifetime copy count. Click → never used."
+                : "Sorted by never used first. Click → manual."}
           onclick={onSortModeToggle}
-        >{sortMode === "manual" ? "⇅" : sortMode === "recent" ? "↻" : "★"}</button>
+        >{sortMode === "manual" ? "⇅" : sortMode === "recent" ? "↻" : sortMode === "most_used" ? "★" : "0"}</button>
       {/if}
       {#if canCreate}
         <button class="new-btn" title="New template" onclick={onNew}>+</button>
@@ -299,11 +330,17 @@
         {#each groupedSearchResults as group (group.folder ?? "__ungrouped__")}
           {@const label = group.folder ?? "Ungrouped"}
           {@const collapsed = collapsedFolders.has(label)}
-          <li class="folder-header">
+          <li
+            class="folder-header"
+            class:drag-over={dragOverFolder === (group.folder ?? "__ungrouped__")}
+            ondragover={(e) => handleFolderDragOver(e, group.folder)}
+            ondragleave={() => (dragOverFolder = null)}
+            ondrop={(e) => handleFolderDrop(e, group.folder)}
+          >
             <button
               class="folder-toggle"
               onclick={() => toggleFolder(label)}
-              title={collapsed ? "Expand" : "Collapse"}
+              title={collapsed ? "Expand, or drop templates here to move them" : "Collapse, or drop templates here to move them"}
             >
               <span class="folder-chevron">{collapsed ? "▸" : "▾"}</span>
               <span class="folder-name">{label}</span>
@@ -418,6 +455,12 @@
 
   .folder-header {
     margin-top: 4px;
+  }
+
+  .folder-header.drag-over .folder-toggle {
+    background: var(--accent-info-bg);
+    color: var(--accent-info-text);
+    outline: 1px solid var(--accent-info-border);
   }
 
   .folder-header:first-child {

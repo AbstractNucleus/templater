@@ -40,6 +40,7 @@
     handleImportTemplates,
   } from "$lib/stores/templatesStore.svelte";
   import { agentStore } from "$lib/stores/agentStore.svelte";
+  import { selectionStore } from "$lib/stores/selectionStore.svelte";
 
   const PASTE_THRESHOLD = 30;
   const RANK_DEBOUNCE_MS = 600;
@@ -172,21 +173,11 @@
   }
 
   function moveSelection(delta: number): void {
-    const ids = visibleTemplateIds;
-    if (ids.length === 0) return;
-    const cur = templatesStore.selectedTemplateId;
-    const idx = cur === null ? -1 : ids.indexOf(cur);
-    let next: number;
-    if (idx < 0) {
-      next = delta > 0 ? 0 : ids.length - 1;
-    } else {
-      next = Math.max(0, Math.min(ids.length - 1, idx + delta));
-    }
-    templatesStore.selectedTemplateId = ids[next];
+    selectionStore.moveSelection(visibleTemplateIds, delta);
   }
 
   function copySelected(): void {
-    if (templatesStore.selectedTemplateId === null) return;
+    if (selectionStore.selectedTemplateId === null) return;
     copyTrigger++;
   }
 
@@ -401,9 +392,6 @@
   let appVersion = $state("0.0.0");
 
   let searchQuery = $state("");
-  let selectedTagIds = $state<Set<string>>(new Set());
-  let excludedTagIds = $state<Set<string>>(new Set());
-  let tagCombinator = $state<"and" | "or">("and");
   let includeOpening = $state(true);
   let includeSignature = $state(true);
   let editing = $state(false);
@@ -424,14 +412,14 @@
   const AGENT_MAX = 600;
 
   // Read-only aliases keep template + derivation code readable. Mutations go
-  // directly through templatesStore.X so reactivity propagates back.
+  // directly through the stores so reactivity propagates back.
   const templates = $derived(templatesStore.templates);
   const settings = $derived(templatesStore.settings);
   const loaded = $derived(templatesStore.loaded);
   const undoToast = $derived(templatesStore.undoToast);
 
   const selectedTemplate = $derived(
-    templates.find((t) => t.id === templatesStore.selectedTemplateId) ?? null,
+    templates.find((t) => t.id === selectionStore.selectedTemplateId) ?? null,
   );
 
   const isEditorMode = $derived(templatesStore.isEditorMode);
@@ -458,24 +446,30 @@
         if (a.copy_count !== b.copy_count) return b.copy_count - a.copy_count;
         return 0;
       }
+      if (mode === "never_used") {
+        const aNever = a.copy_count === 0 && a.last_used_at === null;
+        const bNever = b.copy_count === 0 && b.last_used_at === null;
+        if (aNever !== bNever) return aNever ? -1 : 1;
+        return 0;
+      }
       return 0;
     });
   });
 
   const tagFiltered = $derived.by(() => {
-    if (selectedTagIds.size === 0 && excludedTagIds.size === 0) return browseOrdered;
+    if (selectionStore.selectedTagIds.size === 0 && selectionStore.excludedTagIds.size === 0) return browseOrdered;
     return browseOrdered.filter((t) => {
-      for (const tag of excludedTagIds) {
+      for (const tag of selectionStore.excludedTagIds) {
         if (t.tags.includes(tag)) return false;
       }
-      if (selectedTagIds.size === 0) return true;
-      if (tagCombinator === "or") {
-        for (const tag of selectedTagIds) {
+      if (selectionStore.selectedTagIds.size === 0) return true;
+      if (selectionStore.tagCombinator === "or") {
+        for (const tag of selectionStore.selectedTagIds) {
           if (t.tags.includes(tag)) return true;
         }
         return false;
       }
-      for (const tag of selectedTagIds) {
+      for (const tag of selectionStore.selectedTagIds) {
         if (!t.tags.includes(tag)) return false;
       }
       return true;
@@ -504,8 +498,8 @@
     isEditorMode &&
       !inPasteMode &&
       searchQuery.trim().length === 0 &&
-      selectedTagIds.size === 0 &&
-      excludedTagIds.size === 0 &&
+      selectionStore.selectedTagIds.size === 0 &&
+      selectionStore.excludedTagIds.size === 0 &&
       settings.sort_mode === "manual",
   );
 
@@ -547,12 +541,7 @@
   // matches). Skips during baseMode/editing where the selection is locked.
   $effect(() => {
     if (agentStore.baseMode || editing) return;
-    const ids = visibleTemplateIds;
-    if (ids.length === 0) return;
-    const cur = templatesStore.selectedTemplateId;
-    if (cur === null || !ids.includes(cur)) {
-      templatesStore.selectedTemplateId = ids[0];
-    }
+    selectionStore.ensureSelection(visibleTemplateIds);
   });
 
   $effect(() => {
@@ -565,6 +554,7 @@
         envApiKeyOverride = env.api_key_override;
         appVersion = version;
         await templatesStore.load();
+        selectionStore.selectInitial(templatesStore.templates);
         const s = templatesStore.settings;
         tagsWidth = s.column_widths.tags;
         templatesWidth = s.column_widths.templates;
@@ -581,75 +571,24 @@
   });
 
   function handleTagToggle(tag: string): void {
-    const next = new Set(selectedTagIds);
-    if (excludedTagIds.has(tag)) {
-      const ex = new Set(excludedTagIds);
-      ex.delete(tag);
-      excludedTagIds = ex;
-      next.add(tag);
-    } else if (next.has(tag)) {
-      next.delete(tag);
-    } else {
-      next.add(tag);
-    }
-    selectedTagIds = next;
+    selectionStore.toggleTag(tag);
   }
 
   function handleTagExclude(tag: string): void {
-    const next = new Set(excludedTagIds);
-    if (selectedTagIds.has(tag)) {
-      const sel = new Set(selectedTagIds);
-      sel.delete(tag);
-      selectedTagIds = sel;
-      next.add(tag);
-    } else if (next.has(tag)) {
-      next.delete(tag);
-    } else {
-      next.add(tag);
-    }
-    excludedTagIds = next;
+    selectionStore.excludeTag(tag);
   }
 
   function handleTagsClear(): void {
-    selectedTagIds = new Set();
-    excludedTagIds = new Set();
+    selectionStore.clearTags();
   }
 
   function handleCombinatorToggle(): void {
-    tagCombinator = tagCombinator === "and" ? "or" : "and";
+    selectionStore.toggleTagCombinator();
   }
 
   function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
     if (editing) editing = false;
-    const cur = templatesStore.selectedTemplateId;
-    const bulk = templatesStore.bulkSelectedIds;
-    if (modifier === "ctrl") {
-      // Toggle in the bulk set. Anchor (selectedTemplateId) moves to the
-      // clicked item if it ends up still selected, otherwise stays put.
-      const next = new Set(bulk.size > 0 ? bulk : cur ? [cur] : []);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      templatesStore.bulkSelectedIds = next;
-      templatesStore.selectedTemplateId = next.has(id) ? id : (next.values().next().value ?? null);
-      return;
-    }
-    if (modifier === "shift" && cur !== null) {
-      const ids = visibleTemplateIds;
-      const a = ids.indexOf(cur);
-      const b = ids.indexOf(id);
-      if (a >= 0 && b >= 0) {
-        const [lo, hi] = a < b ? [a, b] : [b, a];
-        templatesStore.bulkSelectedIds = new Set(ids.slice(lo, hi + 1));
-        templatesStore.selectedTemplateId = id;
-        return;
-      }
-    }
-    // Plain click — clears multi, picks the one.
-    templatesStore.bulkSelectedIds = new Set();
-    templatesStore.selectedTemplateId = cur === id ? null : id;
+    selectionStore.selectTemplate(id, visibleTemplateIds, modifier);
   }
 
   function handleSearchChange(q: string): void {
@@ -726,29 +665,41 @@
     editing = false;
   }
 
+  async function duplicateSelectedTemplate(): Promise<void> {
+    if (!selectedTemplate) return;
+    const id = await templatesStore.duplicateTemplateById(selectedTemplate.id);
+    if (id) selectionStore.selectedTemplateId = id;
+  }
+
+  async function deleteSelectedTemplate(): Promise<void> {
+    if (!selectedTemplate) return;
+    const id = selectedTemplate.id;
+    await templatesStore.deleteTemplateById(id);
+    selectionStore.pruneBulkSelection(new Set([id]));
+    selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
+  }
+
   async function handleSettingsUpdate(next: Settings): Promise<void> {
     await templatesStore.persist(templatesStore.templates, next);
   }
 
   async function handleRenameTag(from: string, to: string): Promise<void> {
-    const { selected, excluded } = await templatesStore.handleRenameTag(
+    await templatesStore.handleRenameTag(
       from,
       to,
-      selectedTagIds,
-      excludedTagIds,
+      selectionStore.selectedTagIds,
+      selectionStore.excludedTagIds,
     );
-    selectedTagIds = selected;
-    excludedTagIds = excluded;
+    selectionStore.remapTag(from, to);
   }
 
   async function handleDeleteTag(tag: string): Promise<void> {
-    const { selected, excluded } = await templatesStore.handleDeleteTag(
+    await templatesStore.handleDeleteTag(
       tag,
-      selectedTagIds,
-      excludedTagIds,
+      selectionStore.selectedTagIds,
+      selectionStore.excludedTagIds,
     );
-    selectedTagIds = selected;
-    excludedTagIds = excluded;
+    selectionStore.removeTag(tag);
   }
 
   function openContextForTemplate(id: string, x: number, y: number): void {
@@ -758,7 +709,7 @@
     // Bulk menu: when the right-clicked row is part of a >1 selection, show
     // bulk actions instead of per-template ones. Otherwise fall through to
     // the single-template menu.
-    const bulk = templatesStore.bulkSelectedIds;
+    const bulk = selectionStore.bulkSelectedIds;
     if (bulk.size > 1 && bulk.has(id)) {
       const count = bulk.size;
       const items: ContextMenuItem[] = [];
@@ -790,7 +741,13 @@
         label: tpl.pinned ? "Unpin" : "Pin",
         onClick: () => void templatesStore.togglePin(id),
       });
-      items.push({ label: "Duplicate", onClick: () => void templatesStore.duplicateTemplateById(id) });
+      items.push({
+        label: "Duplicate",
+        onClick: async () => {
+          const copyId = await templatesStore.duplicateTemplateById(id);
+          if (copyId) selectionStore.selectedTemplateId = copyId;
+        },
+      });
     }
     items.push({ label: "Export…", onClick: () => void templatesStore.exportSingleTemplate(id) });
     if (isEditorMode) {
@@ -809,8 +766,13 @@
   let bulkTagDraft = $state("");
 
   async function confirmBulkDelete(): Promise<void> {
+    const ids = new Set(selectionStore.bulkSelectedIds);
     bulkDeleteConfirmOpen = false;
-    await templatesStore.bulkDelete(templatesStore.bulkSelectedIds);
+    await templatesStore.bulkDelete(ids);
+    selectionStore.bulkSelectedIds = new Set();
+    if (selectionStore.selectedTemplateId !== null && ids.has(selectionStore.selectedTemplateId)) {
+      selectionStore.selectedTemplateId = templates[0]?.id ?? null;
+    }
   }
 
   async function confirmBulkTag(): Promise<void> {
@@ -818,7 +780,7 @@
     if (tag.length === 0) return;
     bulkTagPromptOpen = false;
     bulkTagDraft = "";
-    await templatesStore.bulkAddTag(templatesStore.bulkSelectedIds, tag);
+    await templatesStore.bulkAddTag(selectionStore.bulkSelectedIds, tag);
   }
 
   async function confirmBulkRemoveTag(): Promise<void> {
@@ -826,7 +788,7 @@
     if (tag.length === 0) return;
     bulkRemoveTagPromptOpen = false;
     bulkTagDraft = "";
-    await templatesStore.bulkRemoveTag(templatesStore.bulkSelectedIds, tag);
+    await templatesStore.bulkRemoveTag(selectionStore.bulkSelectedIds, tag);
   }
 
   function openContextForEmpty(x: number, y: number): void {
@@ -853,6 +815,10 @@
     const id = contextDeleteTarget.id;
     contextDeleteTarget = null;
     await templatesStore.deleteTemplateById(id);
+    selectionStore.pruneBulkSelection(new Set([id]));
+    if (selectionStore.selectedTemplateId === id) {
+      selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
+    }
   }
 
   function cancelContextDelete(): void {
@@ -1002,6 +968,7 @@
         opening={agentStore.baseDraft.opening}
         body={agentStore.baseDraft.body}
         globalSignature={settings.global_signature}
+        signatureOverride={agentStore.baseSignatureOverride}
         {includeOpening}
         {includeSignature}
         canSave={isEditorMode}
@@ -1014,9 +981,9 @@
     {:else}
       <TagsSidebar
         {templates}
-        {selectedTagIds}
-        {excludedTagIds}
-        {tagCombinator}
+        selectedTagIds={selectionStore.selectedTagIds}
+        excludedTagIds={selectionStore.excludedTagIds}
+        tagCombinator={selectionStore.tagCombinator}
         tagOrder={settings.tag_order}
         width={tagsWidth}
         onTagToggle={handleTagToggle}
@@ -1035,8 +1002,8 @@
       <TemplatesSidebar
         {searchResults}
         {templates}
-        selectedTemplateId={templatesStore.selectedTemplateId}
-        bulkSelectedIds={templatesStore.bulkSelectedIds}
+        selectedTemplateId={selectionStore.selectedTemplateId}
+        bulkSelectedIds={selectionStore.bulkSelectedIds}
         {searchQuery}
         {rankings}
         {rankLoading}
@@ -1052,6 +1019,7 @@
         onContextTemplate={openContextForTemplate}
         onContextEmpty={openContextForEmpty}
         onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
+        onMoveToFolder={(ids, folder) => void templatesStore.moveToFolder(ids, folder)}
         onSortModeToggle={() => templatesStore.handleSortModeToggle()}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1080,8 +1048,8 @@
         onEnterEdit={() => (editing = true)}
         onCancelEdit={() => (editing = false)}
         onSave={handleSave}
-        onDuplicate={() => void templatesStore.handleDuplicate()}
-        onDelete={() => void templatesStore.handleDelete()}
+        onDuplicate={() => void duplicateSelectedTemplate()}
+        onDelete={() => void deleteSelectedTemplate()}
         onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
         onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
         onCopySuccess={(id) => void templatesStore.recordCopy(id)}
@@ -1188,13 +1156,13 @@
     }}
   >
     <div class="confirm-modal">
-      <h3>Delete {templatesStore.bulkSelectedIds.size} templates?</h3>
+      <h3>Delete {selectionStore.bulkSelectedIds.size} templates?</h3>
       <p class="confirm-warn">Ctrl+Z will restore them.</p>
       <div class="confirm-actions">
         <button class="confirm-btn" onclick={() => (bulkDeleteConfirmOpen = false)}>Cancel</button>
         <!-- svelte-ignore a11y_autofocus -->
         <button class="confirm-btn danger" onclick={() => void confirmBulkDelete()} autofocus>
-          Delete {templatesStore.bulkSelectedIds.size}
+          Delete {selectionStore.bulkSelectedIds.size}
         </button>
       </div>
     </div>
@@ -1220,7 +1188,7 @@
     }}
   >
     <div class="confirm-modal">
-      <h3>Add tag to {templatesStore.bulkSelectedIds.size} templates</h3>
+      <h3>Add tag to {selectionStore.bulkSelectedIds.size} templates</h3>
       <!-- svelte-ignore a11y_autofocus -->
       <input
         class="bulk-tag-input"
@@ -1266,7 +1234,7 @@
     }}
   >
     <div class="confirm-modal">
-      <h3>Remove tag from {templatesStore.bulkSelectedIds.size} templates</h3>
+      <h3>Remove tag from {selectionStore.bulkSelectedIds.size} templates</h3>
       <!-- svelte-ignore a11y_autofocus -->
       <input
         class="bulk-tag-input"

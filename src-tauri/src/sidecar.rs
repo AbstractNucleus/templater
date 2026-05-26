@@ -1,5 +1,5 @@
-//! Node.js sidecar host. Spawns the sidecar process at startup and exposes a
-//! single async `request` method.
+//! Node.js sidecar host. Lazily spawns the sidecar process on first use and
+//! exposes a single async `request` method.
 //!
 //! Wire protocol: newline-delimited JSON, one request per line, one response
 //! per line. Each request carries a unique `id`; responses echo it back so
@@ -91,10 +91,20 @@ pub struct DiagEntry {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Diagnostics {
-    /// "active" or "unavailable".
+    /// "active", "starting", or "unavailable".
     pub state: &'static str,
     pub state_reason: Option<String>,
     pub entries: Vec<DiagEntry>,
+    pub stats: Vec<DiagStat>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagStat {
+    pub op: String,
+    pub count: usize,
+    pub p50: u64,
+    pub p95: u64,
+    pub fail: usize,
 }
 
 pub struct Sidecar {
@@ -109,6 +119,7 @@ pub struct Sidecar {
 
 enum SidecarState {
     Active(ActiveSidecar),
+    Starting(String),
     Unavailable(String),
 }
 
@@ -260,13 +271,31 @@ impl Sidecar {
         let duration_ms = started.elapsed().as_millis() as u64;
         let (ok, error) = diag_status(&outcome);
         let entry = DiagEntry {
-            op,
+            op: op.clone(),
             started_at_ms,
             duration_ms,
             ok,
             error,
         };
         push_diag(&self.diag, entry);
+        if let Ok(value) = &outcome {
+            if let Some(pick_ms) = value
+                .get("timings")
+                .and_then(|t| t.get("pick_ms"))
+                .and_then(|v| v.as_u64())
+            {
+                push_diag(
+                    &self.diag,
+                    DiagEntry {
+                        op: "pick".to_string(),
+                        started_at_ms,
+                        duration_ms: pick_ms,
+                        ok: true,
+                        error: None,
+                    },
+                );
+            }
+        }
         outcome
     }
 
@@ -282,13 +311,23 @@ impl Sidecar {
             let mut respawned = false;
             if let SidecarState::Unavailable(prior) = &*guard {
                 let prior = prior.clone();
+                *guard = SidecarState::Starting("starting sidecar".to_string());
+                drop(guard);
                 match Self::try_spawn(&self.script, &self.state, &self.app, &self.app_data_dir) {
                     Ok(active) => {
+                        guard = self.state.lock().unwrap();
                         *guard = SidecarState::Active(active);
                         respawned = true;
                     }
-                    Err(e) => return Err(format!("sidecar unavailable: {e} (prior: {prior})")),
+                    Err(e) => {
+                        guard = self.state.lock().unwrap();
+                        *guard = SidecarState::Unavailable(e.clone());
+                        return Err(format!("sidecar unavailable: {e} (prior: {prior})"));
+                    }
                 }
+            }
+            if let SidecarState::Starting(reason) = &*guard {
+                return Err(format!("sidecar unavailable: {reason}"));
             }
             let SidecarState::Active(active) = &*guard else { unreachable!() };
             (active.writer_tx.clone(), active.pending.clone(), respawned)
@@ -345,21 +384,24 @@ impl Sidecar {
             let guard = self.state.lock().unwrap();
             match &*guard {
                 SidecarState::Active(_) => ("active", None),
+                SidecarState::Starting(r) => ("starting", Some(r.clone())),
                 SidecarState::Unavailable(r) => ("unavailable", Some(r.clone())),
             }
         };
-        let entries = self.diag.lock().unwrap().iter().cloned().collect();
+        let entries: Vec<DiagEntry> = self.diag.lock().unwrap().iter().cloned().collect();
+        let stats = diag_stats(&entries);
         Diagnostics {
             state,
             state_reason,
             entries,
+            stats,
         }
     }
 
     fn mark_unavailable(&self, reason: &str) {
         let mut guard = self.state.lock().unwrap();
         // If another caller already swapped state, don't overwrite.
-        if matches!(*guard, SidecarState::Active(_)) {
+        if matches!(*guard, SidecarState::Active(_) | SidecarState::Starting(_)) {
             *guard = SidecarState::Unavailable(reason.to_string());
         }
     }
@@ -494,6 +536,42 @@ fn push_diag(diag: &Arc<Mutex<VecDeque<DiagEntry>>>, entry: DiagEntry) {
         buf.pop_front();
     }
     buf.push_back(entry);
+}
+
+fn diag_stats(entries: &[DiagEntry]) -> Vec<DiagStat> {
+    let mut by_op: HashMap<String, (Vec<u64>, usize)> = HashMap::new();
+    for entry in entries {
+        let (durations, fail) = by_op
+            .entry(entry.op.clone())
+            .or_insert_with(|| (Vec::new(), 0));
+        durations.push(entry.duration_ms);
+        if !entry.ok {
+            *fail += 1;
+        }
+    }
+    let mut stats: Vec<DiagStat> = by_op
+        .into_iter()
+        .map(|(op, (mut durations, fail))| {
+            durations.sort_unstable();
+            DiagStat {
+                op,
+                count: durations.len(),
+                p50: percentile(&durations, 50),
+                p95: percentile(&durations, 95),
+                fail,
+            }
+        })
+        .collect();
+    stats.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.op.cmp(&b.op)));
+    stats
+}
+
+fn percentile(sorted: &[u64], p: usize) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = ((p * sorted.len()).div_ceil(100)).saturating_sub(1);
+    sorted[rank.min(sorted.len() - 1)]
 }
 
 fn diag_status(outcome: &Result<serde_json::Value, String>) -> (bool, Option<String>) {

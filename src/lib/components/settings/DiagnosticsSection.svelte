@@ -49,39 +49,7 @@
     return new Date(ms).toLocaleTimeString();
   }
 
-  // Per-op latency rollup over the diagnostics ring. p50/p95 use nearest-rank
-  // — close enough at our buffer size (100), and avoids interpolation pulling
-  // an outlier to a place it doesn't belong.
-  type OpStat = { op: string; count: number; p50: number; p95: number; fail: number };
-
-  function percentile(sorted: number[], p: number): number {
-    if (sorted.length === 0) return 0;
-    const rank = Math.ceil((p / 100) * sorted.length) - 1;
-    return sorted[Math.max(0, Math.min(sorted.length - 1, rank))];
-  }
-
-  const opStats = $derived.by<OpStat[]>(() => {
-    const entries = diagnostics?.entries ?? [];
-    const byOp = new Map<string, number[]>();
-    const fails = new Map<string, number>();
-    for (const e of entries) {
-      if (!byOp.has(e.op)) byOp.set(e.op, []);
-      byOp.get(e.op)!.push(e.duration_ms);
-      if (!e.ok) fails.set(e.op, (fails.get(e.op) ?? 0) + 1);
-    }
-    const out: OpStat[] = [];
-    for (const [op, ds] of byOp) {
-      const sorted = [...ds].sort((a, b) => a - b);
-      out.push({
-        op,
-        count: sorted.length,
-        p50: percentile(sorted, 50),
-        p95: percentile(sorted, 95),
-        fail: fails.get(op) ?? 0,
-      });
-    }
-    return out.sort((a, b) => b.count - a.count);
-  });
+  const opStats = $derived(diagnostics?.stats ?? []);
 </script>
 
 <section>

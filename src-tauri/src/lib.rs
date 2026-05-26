@@ -1,5 +1,6 @@
 mod sidecar;
 mod store;
+mod windows_snap;
 
 use sidecar::{Diagnostics, Sidecar};
 use std::collections::HashSet;
@@ -328,6 +329,76 @@ fn export_templates_subset(
 }
 
 #[tauri::command]
+fn bulk_delete_templates(
+    ids: Vec<String>,
+    store: tauri::State<'_, Store>,
+) -> Result<Vec<Template>, String> {
+    let mut data = store
+        .load()?
+        .unwrap_or_else(|| AppData::new(Vec::new()));
+    let want: HashSet<String> = ids.into_iter().collect();
+    data.templates.retain(|t| !want.contains(&t.id));
+    for id in &want {
+        data.settings.placeholder_values.remove(id);
+    }
+    store.save(&data)?;
+    Ok(data.templates)
+}
+
+#[tauri::command]
+fn bulk_add_template_tag(
+    ids: Vec<String>,
+    tag: String,
+    store: tauri::State<'_, Store>,
+) -> Result<Vec<Template>, String> {
+    let trimmed = tag.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return Err("tag is empty".to_string());
+    }
+    let mut data = store
+        .load()?
+        .unwrap_or_else(|| AppData::new(Vec::new()));
+    let want: HashSet<String> = ids.into_iter().collect();
+    for template in &mut data.templates {
+        if want.contains(&template.id)
+            && !template
+                .tags
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&trimmed))
+        {
+            template.tags.push(trimmed.clone());
+        }
+    }
+    store.save(&data)?;
+    Ok(data.templates)
+}
+
+#[tauri::command]
+fn bulk_remove_template_tag(
+    ids: Vec<String>,
+    tag: String,
+    store: tauri::State<'_, Store>,
+) -> Result<Vec<Template>, String> {
+    let trimmed = tag.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return Err("tag is empty".to_string());
+    }
+    let mut data = store
+        .load()?
+        .unwrap_or_else(|| AppData::new(Vec::new()));
+    let want: HashSet<String> = ids.into_iter().collect();
+    for template in &mut data.templates {
+        if want.contains(&template.id) {
+            template
+                .tags
+                .retain(|existing| !existing.eq_ignore_ascii_case(&trimmed));
+        }
+    }
+    store.save(&data)?;
+    Ok(data.templates)
+}
+
+#[tauri::command]
 fn import_templates(
     path: String,
     store: tauri::State<'_, Store>,
@@ -636,6 +707,7 @@ pub fn run() {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                windows_snap::install(&window);
             }
             app.manage(store);
 
@@ -773,6 +845,9 @@ pub fn run() {
             export_templates,
             export_template,
             export_templates_subset,
+            bulk_delete_templates,
+            bulk_add_template_tag,
+            bulk_remove_template_tag,
             import_templates,
             list_template_backups,
             restore_template_backup,

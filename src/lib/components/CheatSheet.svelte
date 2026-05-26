@@ -43,6 +43,8 @@
         { keys: "{{date}}", desc: "Today's date. Use {{date:long}} for long format" },
         { keys: "{{time}}", desc: "Current local time HH:MM. Use {{time:long}} for HH:MM:SS" },
         { keys: "{{choice:a|b|c}}", desc: "Dropdown picker with the listed options" },
+        { keys: "{{me_name}}", desc: "Custom snippet from Settings → Global snippets" },
+        { keys: "{{meeting_time}}", desc: "Text placeholder unless you define a matching snippet" },
       ],
     },
     {

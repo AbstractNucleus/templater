@@ -53,6 +53,16 @@ describe("composeText", () => {
     const out = composeText(baseTemplate, true, false, "— Noel");
     expect(out).toBe("Hi {{name}},\n\nBody text with {{topic}}.");
   });
+
+  it("uses a per-template signature override before the global signature", () => {
+    const out = composeText(
+      { ...baseTemplate, signature_override: "— Support" },
+      true,
+      true,
+      "— Noel",
+    );
+    expect(out).toBe("Hi {{name}},\n\nBody text with {{topic}}.\n\n— Support");
+  });
 });
 
 describe("splitPlaceholders", () => {

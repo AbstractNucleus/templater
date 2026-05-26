@@ -42,6 +42,8 @@ pub struct TemplateVersion {
     pub opening: String,
     #[serde(default)]
     pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
