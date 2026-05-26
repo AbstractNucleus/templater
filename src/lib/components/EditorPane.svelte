@@ -16,7 +16,7 @@
     onSave,
     onCancel,
   }: {
-    kind: "new" | "base";
+    kind: "new" | "base" | "edit";
     opening: string;
     body: string;
     globalSignature: string;
@@ -62,12 +62,16 @@
 <section class="pane">
   <div class="header-row">
     <div class="breadcrumb">
-      {kind === "new" ? "new template — agent editor" : "base-on-template — agent editor"}
+      {kind === "new"
+        ? "new template — agent editor"
+        : kind === "edit"
+          ? "edit template — agent editor"
+          : "base-on-template — agent editor"}
     </div>
     <div class="actions">
       <button class="icon-btn" onclick={onCancel}>Cancel</button>
       {#if canSave}
-        <button class="icon-btn primary" onclick={onSave}>Save as new…</button>
+        <button class="icon-btn primary" onclick={onSave}>{kind === "edit" ? "Save" : "Save as new…"}</button>
       {/if}
     </div>
   </div>

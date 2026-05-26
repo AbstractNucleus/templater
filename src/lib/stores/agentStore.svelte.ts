@@ -8,11 +8,14 @@ import { type Template } from "$lib/types";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 
+type AgentKind = "new" | "base" | "edit";
+type AgentDraft = { opening: string; body: string };
+
 class AgentStore {
   baseMode = $state(false);
-  baseKind = $state<"new" | "base">("base");
+  baseKind = $state<AgentKind>("base");
   baseSourceName = $state("");
-  baseDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
+  baseDraft = $state<AgentDraft>({ opening: "", body: "" });
   baseSignatureOverride = $state<string | null>(null);
   agentMessages = $state<ChatTurn[]>([]);
   agentBusy = $state(false);
@@ -47,6 +50,30 @@ class AgentStore {
     this.baseMode = true;
   }
 
+  enterEditMode(source: Template | null): void {
+    if (!source || !templatesStore.isEditorMode) return;
+    this.baseKind = "edit";
+    this.baseSourceName = source.name;
+    this.baseDraft = { opening: source.opening, body: source.body };
+    this.baseSignatureOverride = source.signature_override;
+    this.agentMessages = [];
+    this.agentBusy = false;
+    this.agentError = null;
+    this.agentProgress = "";
+  }
+
+  exitEditMode(): void {
+    if (this.baseKind !== "edit") return;
+    this.baseKind = "base";
+    this.baseSourceName = "";
+    this.baseDraft = { opening: "", body: "" };
+    this.baseSignatureOverride = null;
+    this.agentMessages = [];
+    this.agentBusy = false;
+    this.agentError = null;
+    this.agentProgress = "";
+  }
+
   exitBaseMode(): void {
     this.baseMode = false;
     this.baseKind = "base";
@@ -68,6 +95,27 @@ class AgentStore {
   }
 
   async handleAgentPrompt(prompt: string): Promise<void> {
+    await this.runAgentPrompt(this.baseDraft, prompt, (updated) => {
+      this.baseDraft = updated;
+    });
+  }
+
+  async handleEditAgentPrompt(
+    draft: AgentDraft,
+    prompt: string,
+    onUpdate: (updated: AgentDraft) => void,
+  ): Promise<void> {
+    await this.runAgentPrompt(draft, prompt, (updated) => {
+      this.baseDraft = updated;
+      onUpdate(updated);
+    });
+  }
+
+  private async runAgentPrompt(
+    draft: AgentDraft,
+    prompt: string,
+    onUpdate: (updated: AgentDraft) => void,
+  ): Promise<void> {
     if (this.agentBusy) return;
     this.agentError = null;
     this.agentProgress = "";
@@ -76,12 +124,12 @@ class AgentStore {
     this.agentBusy = true;
     try {
       const { reasoning, updated } = await editTemplate(
-        this.baseDraft,
+        draft,
         history,
         prompt,
         templatesStore.settings.paste_backend,
       );
-      this.baseDraft = updated;
+      onUpdate(updated);
       this.agentMessages = [
         ...this.agentMessages,
         { role: "assistant", content: reasoning || "(no reasoning provided)" },

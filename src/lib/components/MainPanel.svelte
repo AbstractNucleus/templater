@@ -4,6 +4,9 @@
   import { composeText, splitPlaceholders, extractPlaceholders, applyValues } from "$lib/compose";
   import TagPicker from "./TagPicker.svelte";
 
+  type DraftContent = { opening: string; body: string };
+  type BodyUpdate = { templateId: string; body: string; seq: number };
+
   let {
     template,
     includeOpening,
@@ -31,6 +34,8 @@
     onCopySuccess,
     onPlaceholderValuesChange,
     onRevertHistory,
+    aiBodyUpdate = null,
+    onDraftChange = () => {},
   }: {
     template: Template | null;
     includeOpening: boolean;
@@ -62,6 +67,8 @@
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
     onRevertHistory: (templateId: string, versionIdx: number) => void;
+    aiBodyUpdate?: BodyUpdate | null;
+    onDraftChange?: (draft: DraftContent) => void;
   } = $props();
 
   const effectiveSignature = $derived(
@@ -81,6 +88,7 @@
   let draftBody = $state("");
   let draftSignatureOverride = $state<string | null>(null);
   let draftFolder = $state<string | null>(null);
+  let lastAiBodyUpdateSeq = $state(0);
 
   // Reset draft whenever we enter edit mode or switch templates while editing.
   $effect(() => {
@@ -92,6 +100,18 @@
       draftSignatureOverride = template.signature_override;
       draftFolder = template.folder;
     }
+  });
+
+  $effect(() => {
+    if (!editing || !template) return;
+    onDraftChange({ opening: draftOpening, body: draftBody });
+  });
+
+  $effect(() => {
+    if (!editing || !template || aiBodyUpdate === null) return;
+    if (aiBodyUpdate.templateId !== template.id || aiBodyUpdate.seq === lastAiBodyUpdateSeq) return;
+    lastAiBodyUpdateSeq = aiBodyUpdate.seq;
+    draftBody = aiBodyUpdate.body;
   });
 
   let historyOpen = $state(false);

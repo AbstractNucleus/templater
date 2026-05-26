@@ -11,7 +11,7 @@
     width,
     onSubmit,
   }: {
-    kind: "new" | "base";
+    kind: "new" | "base" | "edit";
     messages: ChatTurn[];
     busy: boolean;
     error: string | null;

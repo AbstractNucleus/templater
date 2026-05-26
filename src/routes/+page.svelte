@@ -395,6 +395,9 @@
   let includeOpening = $state(true);
   let includeSignature = $state(true);
   let editing = $state(false);
+  let editAgentDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
+  let editBodyUpdateSeq = $state(0);
+  let editBodyUpdate = $state<{ templateId: string; body: string; seq: number } | null>(null);
   let settingsOpen = $state(false);
   let cheatSheetOpen = $state(false);
 
@@ -587,7 +590,10 @@
   }
 
   function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
-    if (editing) editing = false;
+    if (editing) {
+      editing = false;
+      agentStore.exitEditMode();
+    }
     selectionStore.selectTemplate(id, visibleTemplateIds, modifier);
   }
 
@@ -663,7 +669,39 @@
   async function handleSave(updated: Template): Promise<void> {
     await templatesStore.handleSave(updated);
     editing = false;
+    agentStore.exitEditMode();
   }
+
+  function enterEditMode(): void {
+    if (!selectedTemplate) return;
+    editing = true;
+    editAgentDraft = { opening: selectedTemplate.opening, body: selectedTemplate.body };
+    editBodyUpdate = null;
+    agentStore.enterEditMode(selectedTemplate);
+  }
+
+  function cancelEditMode(): void {
+    editing = false;
+    editBodyUpdate = null;
+    agentStore.exitEditMode();
+  }
+
+  async function handleEditAgentPrompt(prompt: string): Promise<void> {
+    const target = selectedTemplate;
+    if (!target) return;
+    const draft = editAgentDraft;
+    await agentStore.handleEditAgentPrompt(draft, prompt, (updated) => {
+      editAgentDraft = { ...draft, body: updated.body };
+      editBodyUpdateSeq += 1;
+      editBodyUpdate = { templateId: target.id, body: updated.body, seq: editBodyUpdateSeq };
+    });
+  }
+
+  function handleEditDraftChange(draft: { opening: string; body: string }): void {
+    editAgentDraft = draft;
+  }
+
+  function ignoreDraftChange(): void {}
 
   async function duplicateSelectedTemplate(): Promise<void> {
     if (!selectedTemplate) return;
@@ -921,7 +959,7 @@
     onToggleCapture={() => (captureOpen = !captureOpen)}
     {captureOpen}
   />
-  {#if !agentStore.baseMode}
+  {#if !agentStore.baseMode && !editing}
     <div class="search-row">
       <div class="search-wrap">
         <input
@@ -977,6 +1015,53 @@
         onToggleSignature={(v) => (includeSignature = v)}
         onSave={() => agentStore.openSaveAs()}
         onCancel={() => agentStore.exitBaseMode()}
+      />
+    {:else if editing}
+      <AgentSidebar
+        kind="edit"
+        messages={agentStore.agentMessages}
+        busy={agentStore.agentBusy}
+        error={agentStore.agentError}
+        progress={agentStore.agentProgress}
+        sourceName={selectedTemplate?.name ?? agentStore.baseSourceName}
+        width={agentSidebarWidth}
+        onSubmit={(p) => void handleEditAgentPrompt(p)}
+      />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="col-resize"
+        title="Drag to resize"
+        onpointerdown={startResize("agent")}
+      ></div>
+      <MainPanel
+        template={selectedTemplate}
+        {includeOpening}
+        {includeSignature}
+        editing={true}
+        globalSignature={settings.global_signature}
+        snippets={settings.snippets}
+        canEdit={isEditorMode}
+        {availableTags}
+        {copyTrigger}
+        savedPlaceholderValues={settings.placeholder_values}
+        inboundText={null}
+        adaptBusy={agentStore.adaptBusy}
+        adaptError={agentStore.adaptError}
+        onClearAdaptError={() => (agentStore.adaptError = null)}
+        onToggleOpening={(v) => (includeOpening = v)}
+        onToggleSignature={(v) => (includeSignature = v)}
+        onEnterEdit={() => {}}
+        onCancelEdit={cancelEditMode}
+        onSave={handleSave}
+        onDuplicate={() => void duplicateSelectedTemplate()}
+        onDelete={() => void deleteSelectedTemplate()}
+        onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
+        onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
+        onCopySuccess={(id) => void templatesStore.recordCopy(id)}
+        onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
+        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
+        aiBodyUpdate={editBodyUpdate}
+        onDraftChange={handleEditDraftChange}
       />
     {:else}
       <TagsSidebar
@@ -1045,8 +1130,8 @@
         onClearAdaptError={() => (agentStore.adaptError = null)}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
-        onEnterEdit={() => (editing = true)}
-        onCancelEdit={() => (editing = false)}
+        onEnterEdit={enterEditMode}
+        onCancelEdit={cancelEditMode}
         onSave={handleSave}
         onDuplicate={() => void duplicateSelectedTemplate()}
         onDelete={() => void deleteSelectedTemplate()}
@@ -1055,6 +1140,8 @@
         onCopySuccess={(id) => void templatesStore.recordCopy(id)}
         onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
         onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
+        aiBodyUpdate={null}
+        onDraftChange={ignoreDraftChange}
       />
     {/if}
     {#if contextOpen && loaded}
