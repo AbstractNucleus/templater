@@ -45,6 +45,7 @@ import {
   type PickerCandidate,
   type PickResult,
 } from "./context.js";
+import { parseRequestLine } from "./protocol.js";
 
 const APP_DATA_DIR = process.argv[2] ?? process.cwd();
 const CONTEXT_DB_PATH = path.join(APP_DATA_DIR, "context.db");
@@ -1010,13 +1011,12 @@ rl.on("line", async (line) => {
   const trimmed = line.trim();
   if (trimmed === "") return;
 
-  let request: Request;
-  try {
-    request = JSON.parse(trimmed) as Request;
-  } catch (err) {
-    send({ id: "?", ok: false, error: `parse error: ${(err as Error).message}` });
+  const parsed = parseRequestLine(trimmed);
+  if (!parsed.ok) {
+    send(parsed.response);
     return;
   }
+  const request = parsed.request as Request;
 
   try {
     send(await handle(request));

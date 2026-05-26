@@ -656,14 +656,17 @@ pub fn run() {
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let sidecar = handle.state::<Sidecar>();
-                        let _ = sidecar
+                        if let Err(e) = sidecar
                             .request(&serde_json::json!({
                                 "id": "context-init",
                                 "op": "context-set-sources",
                                 "sources": sources,
                                 "backend": backend,
                             }))
-                            .await;
+                            .await
+                        {
+                            eprintln!("initial context source sync failed: {e}");
+                        }
                     });
                 }
             }

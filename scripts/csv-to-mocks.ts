@@ -155,6 +155,10 @@ function main(): void {
     updated_at: string;
     pinned: boolean;
     last_used_at: string | null;
+    copy_count: number;
+    folder: string | null;
+    signature_override: string | null;
+    history: [];
   };
 
   const out: Out[] = [];
@@ -184,6 +188,10 @@ function main(): void {
       updated_at: parseDate(updatedRaw),
       pinned: false,
       last_used_at: null,
+      copy_count: 0,
+      folder: null,
+      signature_override: null,
+      history: [],
     });
   });
 
@@ -206,6 +214,10 @@ export const mockTemplates: Template[] = [
     updated_at: ${tsString(t.updated_at)},
     pinned: false,
     last_used_at: null,
+    copy_count: 0,
+    folder: null,
+    signature_override: null,
+    history: [],
   },`,
     )
     .join("\n");

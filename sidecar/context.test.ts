@@ -164,27 +164,10 @@ describe("extractText", () => {
     expect(out).toMatch(/People[\s\S]+\n\n# Sheet: Inventory/);
   });
 
-  // TODO: re-enable once pdf-parse is bumped past the bundled pdf.js v1.10.100.
-  //
-  // The bundled pdf.js mis-decodes a Node `Buffer` on Node 24 + ESM (returns
-  // "Illegal character: 41" or "bad XRef entry"). The sidecar ships with
-  // Node 22 (see scripts/fetch-node-binary.mjs), where Buffer-as-input still
-  // works, so production is unaffected — but vitest runs on the host's Node,
-  // and the host is on Node 24 here. A robust fix is to convert the Buffer to
-  // a Uint8Array before calling pdf-parse (verified to work below), but that
-  // would change extractText's behavior beyond the scope of this test patch.
-  //
-  // We still cover the load path by asserting that pdf-parse + the fixture
-  // produce the expected text when given a Uint8Array. If pdf-parse or pdf.js
-  // ever silently regress on a small valid PDF, this assertion fires.
-  it("can parse a small .pdf fixture via pdf-parse with a Uint8Array", async () => {
+  it("extracts text from a small .pdf fixture", async () => {
     const fp = path.join(FIXTURES, "hello.pdf");
-    const raw = await fs.readFile(fp);
-    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
-      buf: Uint8Array,
-    ) => Promise<{ text: string }>;
-    const r = await pdfParse(new Uint8Array(raw));
-    expect(r.text).toContain("Hello PDF World");
+    const out = await extractText(fp, ".pdf");
+    expect(out).toContain("Hello PDF World");
   });
 
   it("returns '' for an empty content + unsupported case (sanity)", async () => {

@@ -359,14 +359,17 @@ export function explainRankError(raw: string): string {
   if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
     return "Agent SDK quota exhausted. Check your Claude subscription plan.";
   }
-  if (lower.includes("network") || lower.includes("econnref") || lower.includes("enotfound") || lower.includes("timeout")) {
-    return "Network error. Check your connection and retry.";
+  if (lower.includes("sidecar request timed out")) {
+    return "Paste-match took too long. Retry; the sidecar will keep handling other work.";
+  }
+  if (lower.includes("pipe closed") || lower.includes("writer closed") || lower.includes("sidecar closed") || lower.includes("sidecar write")) {
+    return "Sidecar connection dropped. Retry to let the app respawn it.";
   }
   if (lower.includes("sidecar unavailable")) {
-    return "Paste-match unavailable. Install Node 18+ and restart the app.";
+    return "Paste-match sidecar is unavailable. Retry, or restart the app if it keeps failing.";
   }
-  if (lower.includes("sidecar closed") || lower.includes("sidecar write")) {
-    return "Sidecar process is down. Restart the app.";
+  if (lower.includes("network") || lower.includes("econnref") || lower.includes("enotfound") || lower.includes("timeout")) {
+    return "Network error. Check your connection and retry.";
   }
   return raw;
 }

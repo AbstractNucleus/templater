@@ -19,7 +19,7 @@ const require = createRequire(import.meta.url);
 // pdf-parse's index does an end-to-end test on import that crashes outside its
 // own folder. Bypass it by loading the underlying module directly.
 const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
-  buf: Buffer,
+  buf: Uint8Array,
   opts?: Record<string, unknown>,
 ) => Promise<{ text: string; numpages: number }>;
 const XLSX = require("xlsx") as typeof import("xlsx");
@@ -550,7 +550,7 @@ export async function extractText(filePath: string, ext: string): Promise<string
   }
   if (ext === ".pdf") {
     const buf = await fs.readFile(filePath);
-    const result = await pdfParse(buf);
+    const result = await pdfParse(new Uint8Array(buf));
     return (result.text ?? "").trim();
   }
   if (ext === ".xlsx" || ext === ".xls") {

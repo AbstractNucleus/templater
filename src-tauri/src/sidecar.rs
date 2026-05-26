@@ -14,9 +14,10 @@
 //!   sidecar in `Unavailable`. The app still runs; each subsequent
 //!   `request()` tries to respawn first, so installing Node mid-session
 //!   recovers without restarting the app.
-//! - Mid-session death (reader EOF, writer broken pipe, or any caller's
-//!   request timing out) marks the sidecar `Unavailable` and drains pending
-//!   callers with an error. The next call respawns.
+//! - Mid-session death (reader EOF or writer broken pipe) marks the sidecar
+//!   `Unavailable` and drains pending callers with an error. A single slow
+//!   request times out independently so it does not kill unrelated in-flight
+//!   work.
 //!
 //! Build modes:
 //! - Debug builds (tauri dev): run `npx tsx sidecar/index.ts` from source.
@@ -43,16 +44,28 @@ pub const SIDECAR_PROGRESS_EVENT: &str = "sidecar-progress";
 /// new sidecar process doesn't know about (context source list, etc.).
 pub const SIDECAR_RESPAWNED_EVENT: &str = "sidecar-respawned";
 
-/// Cap on a single sidecar round-trip. Picked so a slow first call (cold
-/// Claude API + cache miss ~3-5s) still has comfortable headroom, while a
-/// truly stuck process is reaped instead of blocking future requests.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Caps on sidecar round-trips. Control ops should fail quickly, while AI ops
+/// need room for cold SDK startup, context picking, and streamed draft calls.
+const QUICK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const RANK_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const DRAFT_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn next_request_id() -> String {
     let n = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("r{n}")
+}
+
+fn request_timeout(op: &str) -> Duration {
+    match op {
+        "ping" | "context-status" | "context-list-files" | "context-read-file"
+        | "context-search" => QUICK_REQUEST_TIMEOUT,
+        "rank" => RANK_REQUEST_TIMEOUT,
+        "edit-template" | "adapt-template" | "context-capture-memory" => DRAFT_REQUEST_TIMEOUT,
+        _ => DEFAULT_REQUEST_TIMEOUT,
+    }
 }
 
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, String>>>>>;
@@ -243,14 +256,15 @@ impl Sidecar {
             .to_string();
         let started_at_ms = now_epoch_ms();
         let started = std::time::Instant::now();
-        let outcome = self.request_inner(payload).await;
+        let outcome = self.request_inner(payload, &op).await;
         let duration_ms = started.elapsed().as_millis() as u64;
+        let (ok, error) = diag_status(&outcome);
         let entry = DiagEntry {
             op,
             started_at_ms,
             duration_ms,
-            ok: outcome.is_ok(),
-            error: outcome.as_ref().err().map(|e| truncate(e, 200)),
+            ok,
+            error,
         };
         push_diag(&self.diag, entry);
         outcome
@@ -259,6 +273,7 @@ impl Sidecar {
     async fn request_inner(
         &self,
         payload: &serde_json::Value,
+        op: &str,
     ) -> Result<serde_json::Value, String> {
         // Snapshot the writer + pending Arc, respawning from Unavailable if
         // needed. Lock is released before any await.
@@ -304,7 +319,8 @@ impl Sidecar {
             return Err("sidecar unavailable: writer closed".to_string());
         }
 
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+        let timeout = request_timeout(op);
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 // Reader dropped the sender — either it exited (drain ran)
@@ -316,10 +332,9 @@ impl Sidecar {
             }
             Err(_) => {
                 pending.lock().unwrap().remove(&id);
-                self.mark_unavailable("sidecar request timed out");
                 Err(format!(
                     "sidecar request timed out after {}s",
-                    REQUEST_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ))
             }
         }
@@ -479,6 +494,20 @@ fn push_diag(diag: &Arc<Mutex<VecDeque<DiagEntry>>>, entry: DiagEntry) {
         buf.pop_front();
     }
     buf.push_back(entry);
+}
+
+fn diag_status(outcome: &Result<serde_json::Value, String>) -> (bool, Option<String>) {
+    match outcome {
+        Err(e) => (false, Some(truncate(e, 200))),
+        Ok(value) if value.get("ok").and_then(|v| v.as_bool()) == Some(false) => {
+            let error = value
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("sidecar returned ok=false");
+            (false, Some(truncate(error, 200)))
+        }
+        Ok(_) => (true, None),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
