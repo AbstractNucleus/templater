@@ -1,7 +1,7 @@
 // Generates the latest.json manifest the in-app updater fetches.
 //
 // Prereqs:
-//   1. Updater signing set up (see IDEA.md § Releasing).
+//   1. Updater signing set up (see RELEASING.md).
 //   2. `npm run tauri build` has been run with TAURI_SIGNING_PRIVATE_KEY set,
 //      so each bundle dir contains a .sig file alongside the installer.
 //

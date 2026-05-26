@@ -74,8 +74,6 @@ Adding a source folder is an explicit opt-in — the **Add source folder** dialo
 
 ## Developer notes
 
-Read [`IDEA.md`](./IDEA.md) for design decisions, file layout, and the current implementation map.
-
 ```powershell
 # One-time
 npm install
@@ -104,8 +102,6 @@ SvelteKit (webview)  ──invoke──>  Tauri Rust backend  ──stdin/stdout
 - Svelte frontend (`src/`) — UI. Talks to Rust via `invoke()` and listens to Tauri events.
 - Rust backend (`src-tauri/`) — Tauri shell, the on-disk store, and the sidecar host. The sidecar host runs a writer task + reader task and routes responses to callers by id, so multiple in-flight rank/edit calls share the pipe.
 - Node sidecar (`sidecar/`) — wraps `@anthropic-ai/claude-agent-sdk` and the Anthropic Messages API. Two ops today: `rank` (catalog match for paste-to-match) and `edit-template` (chat-driven structured edits). The edit op streams partial text back as it's generated.
-
-See `IDEA.md` § [Project structure](./IDEA.md#project-structure-planned) and § [Paste-to-match](./IDEA.md#paste-to-match) for the full picture.
 
 ### Sidecar wire protocol
 

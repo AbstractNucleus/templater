@@ -171,7 +171,7 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Privacy story** — README and IDEA updated. Adding a source folder
+- **Privacy story** — README docs updated. Adding a source folder
   is the opt-in; the dialog notes what leaves the machine. Per-file
   Haiku summary at ingest, picker + selected file contents at adapt /
   edit time, distilled signal at memory capture.
@@ -236,5 +236,4 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.1]
 
-Initial tracked release. See `IDEA.md` for the design that landed in
-0.1.x.
+Initial tracked release for the original 0.1.x design.
