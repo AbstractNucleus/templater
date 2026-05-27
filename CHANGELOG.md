@@ -4,6 +4,42 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-27
+
+### Added
+
+- **Created/updated timestamps in the template detail header.**
+  Surfaces the existing `created_at` / `updated_at` fields as a muted
+  metadata line under the title, using the same `toLocaleString()`
+  formatter as the history panel. Visible in both editor and user modes
+  ([PR #20](https://github.com/AbstractNucleus/templater/pull/20)).
+
+### Changed
+
+- **Unified new-template form.** New templates now open the same full
+  inline form as edit, so folder, opening, body, and tags are settable
+  at create time. Folder becomes an autocomplete picker over existing
+  folders; Name / Tags / Folder share one row
+  ([PR #19](https://github.com/AbstractNucleus/templater/pull/19)).
+- **First click opens the full new-template form.** The `+` button now
+  renders MainPanel's create form directly instead of opening the
+  body-only EditorPane first. Base-on-template and Adapt-to-inbound
+  flows still go through EditorPane
+  ([PR #21](https://github.com/AbstractNucleus/templater/pull/21)).
+- **Default opening is "Hello,".** The new-template and base-on-template
+  flows seed the opening field with "Hello,". Editing, duplicating, and
+  AI adapt continue to preserve the source's opening
+  ([PR #22](https://github.com/AbstractNucleus/templater/pull/22)).
+
+### Removed
+
+- **Per-template signature override.** The optional `signature_override`
+  field is gone — the global signature in Settings is enough, and
+  templates that need a different signature can bake it into the body.
+  Existing non-null values are silently dropped on the next save (serde
+  ignores the now-unknown field on load)
+  ([PR #22](https://github.com/AbstractNucleus/templater/pull/22)).
+
 ## [0.5.0] — 2026-05-27
 
 ### Added
