@@ -7,7 +7,6 @@
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
   import AgentSidebar from "$lib/components/AgentSidebar.svelte";
   import EditorPane from "$lib/components/EditorPane.svelte";
-  import SaveAsModal from "$lib/components/SaveAsModal.svelte";
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
   import CheatSheet from "$lib/components/CheatSheet.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
@@ -430,6 +429,12 @@
   const availableTags = $derived.by(() => {
     const set = new Set<string>();
     for (const t of templates) for (const tag of t.tags) set.add(tag);
+    return [...set].sort();
+  });
+
+  const availableFolders = $derived.by(() => {
+    const set = new Set<string>();
+    for (const t of templates) if (t.folder !== null) set.add(t.folder);
     return [...set].sort();
   });
 
@@ -1001,21 +1006,57 @@
         title="Drag to resize"
         onpointerdown={startResize("agent")}
       ></div>
-      <EditorPane
-        kind={agentStore.baseKind}
-        opening={agentStore.baseDraft.opening}
-        body={agentStore.baseDraft.body}
-        globalSignature={settings.global_signature}
-        signatureOverride={agentStore.baseSignatureOverride}
-        {includeOpening}
-        {includeSignature}
-        canSave={isEditorMode}
-        onUpdate={(next) => (agentStore.baseDraft = next)}
-        onToggleOpening={(v) => (includeOpening = v)}
-        onToggleSignature={(v) => (includeSignature = v)}
-        onSave={() => agentStore.openSaveAs()}
-        onCancel={() => agentStore.exitBaseMode()}
-      />
+      {#if agentStore.saveDraft !== null}
+        <MainPanel
+          template={null}
+          creatingDraft={agentStore.saveDraft}
+          {includeOpening}
+          {includeSignature}
+          editing={false}
+          globalSignature={settings.global_signature}
+          snippets={settings.snippets}
+          canEdit={isEditorMode}
+          {availableTags}
+          {availableFolders}
+          {copyTrigger}
+          savedPlaceholderValues={settings.placeholder_values}
+          inboundText={null}
+          adaptBusy={agentStore.adaptBusy}
+          adaptError={agentStore.adaptError}
+          onClearAdaptError={() => (agentStore.adaptError = null)}
+          onToggleOpening={(v) => (includeOpening = v)}
+          onToggleSignature={(v) => (includeSignature = v)}
+          onEnterEdit={() => {}}
+          onCancelEdit={() => agentStore.closeSaveAs()}
+          onSave={() => {}}
+          onCreate={(d) => void agentStore.commitNewTemplate(d)}
+          onDuplicate={() => {}}
+          onDelete={() => {}}
+          onBaseOnTemplate={() => {}}
+          onAdaptToInbound={() => {}}
+          onCopySuccess={(id) => void templatesStore.recordCopy(id)}
+          onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
+          onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
+          aiBodyUpdate={null}
+          onDraftChange={ignoreDraftChange}
+        />
+      {:else}
+        <EditorPane
+          kind={agentStore.baseKind}
+          opening={agentStore.baseDraft.opening}
+          body={agentStore.baseDraft.body}
+          globalSignature={settings.global_signature}
+          signatureOverride={agentStore.baseSignatureOverride}
+          {includeOpening}
+          {includeSignature}
+          canSave={isEditorMode}
+          onUpdate={(next) => (agentStore.baseDraft = next)}
+          onToggleOpening={(v) => (includeOpening = v)}
+          onToggleSignature={(v) => (includeSignature = v)}
+          onSave={() => agentStore.openSaveAs()}
+          onCancel={() => agentStore.exitBaseMode()}
+        />
+      {/if}
     {:else if editing}
       <AgentSidebar
         kind="edit"
@@ -1042,6 +1083,7 @@
         snippets={settings.snippets}
         canEdit={isEditorMode}
         {availableTags}
+        {availableFolders}
         {copyTrigger}
         savedPlaceholderValues={settings.placeholder_values}
         inboundText={null}
@@ -1122,6 +1164,7 @@
         snippets={settings.snippets}
         canEdit={isEditorMode}
         {availableTags}
+        {availableFolders}
         {copyTrigger}
         savedPlaceholderValues={settings.placeholder_values}
         inboundText={inPasteMode ? searchQuery : null}
@@ -1346,15 +1389,6 @@
       </div>
     </div>
   </div>
-{/if}
-
-{#if agentStore.saveAsOpen}
-  <SaveAsModal
-    defaultName={agentStore.baseKind === "new" ? "" : `${agentStore.baseSourceName} (edited)`}
-    {availableTags}
-    onSave={(n, t) => agentStore.handleSaveAs(n, t)}
-    onCancel={() => agentStore.closeSaveAs()}
-  />
 {/if}
 
 {#if contextMenu}

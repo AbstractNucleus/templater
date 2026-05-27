@@ -36,6 +36,18 @@ export interface Template {
   history: TemplateVersion[];
 }
 
+/** The editable subset of a template. Shared between the inline edit form
+ *  (`MainPanel`) and the new-template form (replaces the old `SaveAsModal`
+ *  popup). The hosting component owns id/timestamps/history/etc. */
+export interface TemplateDraft {
+  name: string;
+  tags: string[];
+  opening: string;
+  body: string;
+  folder: string | null;
+  signatureOverride: string | null;
+}
+
 export interface WindowGeometry {
   x: number;
   y: number;

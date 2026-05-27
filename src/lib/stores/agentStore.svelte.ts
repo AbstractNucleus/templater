@@ -4,7 +4,7 @@ import {
   explainRankError,
   type ChatTurn,
 } from "$lib/api";
-import { type Template } from "$lib/types";
+import { type Template, type TemplateDraft } from "$lib/types";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 
@@ -17,11 +17,18 @@ class AgentStore {
   baseSourceName = $state("");
   baseDraft = $state<AgentDraft>({ opening: "", body: "" });
   baseSignatureOverride = $state<string | null>(null);
+  /** Folder inherited from the source template when basing / adapting.
+   *  Seeded into the new-template form so users don't lose grouping. */
+  baseFolder = $state<string | null>(null);
   agentMessages = $state<ChatTurn[]>([]);
   agentBusy = $state(false);
   agentError = $state<string | null>(null);
   agentProgress = $state("");
   saveAsOpen = $state(false);
+  /** Stable snapshot the create form reads as its initial seed. Set on
+   *  `openSaveAs`, cleared on close / commit / exit. Held here (not derived)
+   *  so the form's `$effect` doesn't reseed every render and clobber edits. */
+  saveDraft = $state<TemplateDraft | null>(null);
 
   adaptBusy = $state(false);
   adaptError = $state<string | null>(null);
@@ -32,6 +39,7 @@ class AgentStore {
     this.baseSourceName = "";
     this.baseDraft = { opening: "", body: prefilledBody };
     this.baseSignatureOverride = null;
+    this.baseFolder = null;
     this.agentMessages = [];
     this.agentBusy = false;
     this.agentError = null;
@@ -44,6 +52,7 @@ class AgentStore {
     this.baseSourceName = source.name;
     this.baseDraft = { opening: source.opening, body: source.body };
     this.baseSignatureOverride = source.signature_override;
+    this.baseFolder = source.folder;
     this.agentMessages = [];
     this.agentBusy = false;
     this.agentError = null;
@@ -80,18 +89,22 @@ class AgentStore {
     this.baseSourceName = "";
     this.baseDraft = { opening: "", body: "" };
     this.baseSignatureOverride = null;
+    this.baseFolder = null;
     this.agentMessages = [];
     this.agentBusy = false;
     this.agentError = null;
     this.saveAsOpen = false;
+    this.saveDraft = null;
   }
 
   openSaveAs(): void {
+    this.saveDraft = this.buildSaveDraft();
     this.saveAsOpen = true;
   }
 
   closeSaveAs(): void {
     this.saveAsOpen = false;
+    this.saveDraft = null;
   }
 
   async handleAgentPrompt(prompt: string): Promise<void> {
@@ -142,23 +155,40 @@ class AgentStore {
     }
   }
 
-  async handleSaveAs(name: string, tags: string[]): Promise<void> {
+  /** Snapshot the editable subset that seeds the new-template form. The form
+   *  takes ownership of edits; the store only re-reads `baseFolder` etc. when
+   *  the form is opened. */
+  buildSaveDraft(): TemplateDraft {
+    return {
+      name: "",
+      tags: [],
+      opening: this.baseDraft.opening,
+      body: this.baseDraft.body,
+      folder: this.baseFolder,
+      signatureOverride: this.baseSignatureOverride,
+    };
+  }
+
+  async commitNewTemplate(draft: TemplateDraft): Promise<void> {
     if (!templatesStore.isEditorMode) return;
     templatesStore.pushUndo("agent save");
     const now = new Date().toISOString();
+    const folder = draft.folder !== null && draft.folder.trim().length > 0
+      ? draft.folder.trim()
+      : null;
     const newTemplate: Template = {
       id: crypto.randomUUID(),
-      name,
-      tags,
-      opening: this.baseDraft.opening,
-      body: this.baseDraft.body,
+      name: draft.name.trim() || "Untitled",
+      tags: draft.tags,
+      opening: draft.opening,
+      body: draft.body,
       created_at: now,
       updated_at: now,
       pinned: false,
       last_used_at: null,
       copy_count: 0,
-      folder: null,
-      signature_override: this.baseSignatureOverride,
+      folder,
+      signature_override: draft.signatureOverride,
       history: [],
     };
     const next = [newTemplate, ...templatesStore.templates];
@@ -194,6 +224,7 @@ class AgentStore {
       this.baseSourceName = source.name;
       this.baseDraft = updated;
       this.baseSignatureOverride = source.signature_override;
+      this.baseFolder = source.folder;
       const reasoningText = reasoning || "(no reasoning provided)";
       const contextLine =
         contextUsed.length > 0
