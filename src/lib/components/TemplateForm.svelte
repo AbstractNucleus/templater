@@ -78,16 +78,6 @@
       oninput={(e) => patch({ body: e.currentTarget.value })}
     ></textarea>
   </label>
-  <label class="field">
-    <span>Signature override (optional)</span>
-    <textarea
-      rows="2"
-      placeholder="Leave blank to use the global signature"
-      value={value.signatureOverride ?? ""}
-      oninput={(e) =>
-        patch({ signatureOverride: e.currentTarget.value.length > 0 ? e.currentTarget.value : null })}
-    ></textarea>
-  </label>
 </div>
 
 <style>

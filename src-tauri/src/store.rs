@@ -64,8 +64,6 @@ pub struct Template {
     #[serde(default)]
     pub folder: Option<String>,
     #[serde(default)]
-    pub signature_override: Option<String>,
-    #[serde(default)]
     pub history: Vec<TemplateVersion>,
 }
 

@@ -13,7 +13,6 @@ function mk(partial: Partial<Template> & { id: string; name: string }): Template
     last_used_at: null,
     copy_count: 0,
     folder: null,
-    signature_override: null,
     history: [],
     ...partial,
   };

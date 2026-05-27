@@ -1,12 +1,5 @@
 import type { Template } from "./types";
 
-/** Pick the signature for a template — per-template override wins over global. */
-export function resolveSignature(template: Template, globalSignature: string): string {
-  const override = template.signature_override;
-  if (override !== null && override.length > 0) return override;
-  return globalSignature;
-}
-
 // Source of truth for the text put on the clipboard. Shared by the Copy
 // button in MainPanel and the Enter-from-search shortcut in +page.svelte so
 // both paths produce identical output.
@@ -19,8 +12,7 @@ export function composeText(
   const parts: string[] = [];
   if (includeOpening && template.opening.trim().length > 0) parts.push(template.opening);
   parts.push(template.body);
-  const sig = resolveSignature(template, globalSignature);
-  if (includeSignature && sig.trim().length > 0) parts.push(sig);
+  if (includeSignature && globalSignature.trim().length > 0) parts.push(globalSignature);
   return parts.join("\n\n");
 }
 

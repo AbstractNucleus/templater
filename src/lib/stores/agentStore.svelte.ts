@@ -11,12 +11,13 @@ import { selectionStore } from "$lib/stores/selectionStore.svelte";
 type AgentKind = "new" | "base" | "edit";
 type AgentDraft = { opening: string; body: string };
 
+const DEFAULT_OPENING = "Hello,";
+
 class AgentStore {
   baseMode = $state(false);
   baseKind = $state<AgentKind>("base");
   baseSourceName = $state("");
   baseDraft = $state<AgentDraft>({ opening: "", body: "" });
-  baseSignatureOverride = $state<string | null>(null);
   /** Folder inherited from the source template when basing / adapting.
    *  Seeded into the new-template form so users don't lose grouping. */
   baseFolder = $state<string | null>(null);
@@ -37,8 +38,7 @@ class AgentStore {
     if (!templatesStore.isEditorMode) return;
     this.baseKind = "new";
     this.baseSourceName = "";
-    this.baseDraft = { opening: "", body: prefilledBody };
-    this.baseSignatureOverride = null;
+    this.baseDraft = { opening: DEFAULT_OPENING, body: prefilledBody };
     this.baseFolder = null;
     this.agentMessages = [];
     this.agentBusy = false;
@@ -50,8 +50,7 @@ class AgentStore {
     if (!source) return;
     this.baseKind = "base";
     this.baseSourceName = source.name;
-    this.baseDraft = { opening: source.opening, body: source.body };
-    this.baseSignatureOverride = source.signature_override;
+    this.baseDraft = { opening: DEFAULT_OPENING, body: source.body };
     this.baseFolder = source.folder;
     this.agentMessages = [];
     this.agentBusy = false;
@@ -64,7 +63,6 @@ class AgentStore {
     this.baseKind = "edit";
     this.baseSourceName = source.name;
     this.baseDraft = { opening: source.opening, body: source.body };
-    this.baseSignatureOverride = source.signature_override;
     this.agentMessages = [];
     this.agentBusy = false;
     this.agentError = null;
@@ -76,7 +74,6 @@ class AgentStore {
     this.baseKind = "base";
     this.baseSourceName = "";
     this.baseDraft = { opening: "", body: "" };
-    this.baseSignatureOverride = null;
     this.agentMessages = [];
     this.agentBusy = false;
     this.agentError = null;
@@ -88,7 +85,6 @@ class AgentStore {
     this.baseKind = "base";
     this.baseSourceName = "";
     this.baseDraft = { opening: "", body: "" };
-    this.baseSignatureOverride = null;
     this.baseFolder = null;
     this.agentMessages = [];
     this.agentBusy = false;
@@ -165,7 +161,6 @@ class AgentStore {
       opening: this.baseDraft.opening,
       body: this.baseDraft.body,
       folder: this.baseFolder,
-      signatureOverride: this.baseSignatureOverride,
     };
   }
 
@@ -188,7 +183,6 @@ class AgentStore {
       last_used_at: null,
       copy_count: 0,
       folder,
-      signature_override: draft.signatureOverride,
       history: [],
     };
     const next = [newTemplate, ...templatesStore.templates];
@@ -223,7 +217,6 @@ class AgentStore {
       this.baseKind = "base";
       this.baseSourceName = source.name;
       this.baseDraft = updated;
-      this.baseSignatureOverride = source.signature_override;
       this.baseFolder = source.folder;
       const reasoningText = reasoning || "(no reasoning provided)";
       const contextLine =

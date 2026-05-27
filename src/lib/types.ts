@@ -27,10 +27,6 @@ export interface Template {
   /** Optional grouping name. Templates with the same non-null value render
    *  inside a collapsible folder header in the sidebar. */
   folder: string | null;
-  /** Per-template signature override. When non-null this wins over
-   *  settings.global_signature on copy, even if the template owns no
-   *  signature otherwise. */
-  signature_override: string | null;
   /** Newest-last ring of prior versions. Each entry was the template's
    *  opening+body+tags at the time of the save that replaced it. */
   history: TemplateVersion[];
@@ -45,7 +41,6 @@ export interface TemplateDraft {
   opening: string;
   body: string;
   folder: string | null;
-  signatureOverride: string | null;
 }
 
 export interface WindowGeometry {

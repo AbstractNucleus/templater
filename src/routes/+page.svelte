@@ -1046,7 +1046,6 @@
           opening={agentStore.baseDraft.opening}
           body={agentStore.baseDraft.body}
           globalSignature={settings.global_signature}
-          signatureOverride={agentStore.baseSignatureOverride}
           {includeOpening}
           {includeSignature}
           canSave={isEditorMode}
