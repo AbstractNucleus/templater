@@ -4156,6 +4156,7 @@ dependencies = [
 name = "templater"
 version = "0.5.1"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tauri",
