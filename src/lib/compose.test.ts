@@ -20,7 +20,6 @@ const baseTemplate: Template = {
   last_used_at: null,
   copy_count: 0,
   folder: null,
-  signature_override: null,
   history: [],
 };
 
@@ -52,16 +51,6 @@ describe("composeText", () => {
   it("drops signature when flag is off", () => {
     const out = composeText(baseTemplate, true, false, "— Noel");
     expect(out).toBe("Hi {{name}},\n\nBody text with {{topic}}.");
-  });
-
-  it("uses a per-template signature override before the global signature", () => {
-    const out = composeText(
-      { ...baseTemplate, signature_override: "— Support" },
-      true,
-      true,
-      "— Noel",
-    );
-    expect(out).toBe("Hi {{name}},\n\nBody text with {{topic}}.\n\n— Support");
   });
 });
 

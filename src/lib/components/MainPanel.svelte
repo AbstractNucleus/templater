@@ -16,7 +16,6 @@
     opening: "",
     body: "",
     folder: null,
-    signatureOverride: null,
   };
 
   let {
@@ -92,12 +91,7 @@
     onDraftChange?: (draft: DraftContent) => void;
   } = $props();
 
-  const effectiveSignature = $derived(
-    template?.signature_override !== null && template?.signature_override !== undefined
-      ? template.signature_override
-      : globalSignature,
-  );
-  const signatureAvailable = $derived(effectiveSignature.trim().length > 0);
+  const signatureAvailable = $derived(globalSignature.trim().length > 0);
 
   let copyState = $state<"idle" | "ok" | "error">("idle");
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -122,7 +116,6 @@
         opening: template.opening,
         body: template.body,
         folder: template.folder,
-        signatureOverride: template.signature_override,
       };
     }
   });
@@ -261,9 +254,6 @@
 
   function handleSave(): void {
     if (!template) return;
-    const sig = draft.signatureOverride !== null && draft.signatureOverride.length > 0
-      ? draft.signatureOverride
-      : null;
     const folder = draft.folder !== null && draft.folder.trim().length > 0 ? draft.folder.trim() : null;
     onSave({
       ...template,
@@ -271,7 +261,6 @@
       tags: draft.tags,
       opening: draft.opening,
       body: draft.body,
-      signature_override: sig,
       folder,
       updated_at: new Date().toISOString(),
     });

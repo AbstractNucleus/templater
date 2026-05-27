@@ -6,7 +6,6 @@
     opening,
     body,
     globalSignature,
-    signatureOverride,
     includeOpening,
     includeSignature,
     canSave,
@@ -20,7 +19,6 @@
     opening: string;
     body: string;
     globalSignature: string;
-    signatureOverride: string | null;
     includeOpening: boolean;
     includeSignature: boolean;
     canSave: boolean;
@@ -34,16 +32,13 @@
   let copyState = $state<"idle" | "ok" | "error">("idle");
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const effectiveSignature = $derived(
-    signatureOverride !== null && signatureOverride.length > 0 ? signatureOverride : globalSignature,
-  );
-  const signatureAvailable = $derived(effectiveSignature.trim().length > 0);
+  const signatureAvailable = $derived(globalSignature.trim().length > 0);
 
   const composed = $derived.by(() => {
     const parts: string[] = [];
     if (includeOpening && opening.trim().length > 0) parts.push(opening);
     parts.push(body);
-    if (includeSignature && signatureAvailable) parts.push(effectiveSignature);
+    if (includeSignature && signatureAvailable) parts.push(globalSignature);
     return parts.join("\n\n");
   });
 
