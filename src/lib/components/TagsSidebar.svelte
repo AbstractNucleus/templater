@@ -143,7 +143,7 @@
   </div>
   <ul class="tag-list">
     {#each tagCounts as [tag, count] (tag)}
-      <li>
+      <li class="tag-row">
         <button
           class="tag"
           class:active={selectedTagIds.has(tag)}
@@ -163,6 +163,12 @@
           <span class="tag-name">{tag}</span>
           <span class="tag-count">{count}</span>
         </button>
+        <button
+          class="tag-exclude"
+          title={excludedTagIds.has(tag) ? `Un-exclude ${tag}` : `Exclude ${tag}`}
+          aria-label={excludedTagIds.has(tag) ? `Un-exclude ${tag}` : `Exclude ${tag}`}
+          onclick={(e) => { e.stopPropagation(); onTagExclude(tag); }}
+        >−</button>
       </li>
     {:else}
       <li class="empty">Tags will appear here as you add them.</li>
@@ -244,6 +250,50 @@
 
   .tag-list li {
     margin: 0;
+  }
+
+  .tag-row {
+    position: relative;
+  }
+
+  .tag-exclude {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background: var(--bg-base);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms;
+  }
+
+  .tag-row:hover .tag-exclude,
+  .tag-row:focus-within .tag-exclude {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .tag-row:hover .tag-count {
+    opacity: 0;
+  }
+
+  .tag-exclude:hover {
+    background: var(--accent-danger-bg);
+    border-color: var(--accent-danger-border);
+    color: var(--accent-danger-text);
   }
 
   .tag {

@@ -992,32 +992,31 @@
     {contextOpen}
     onToggleCapture={() => (captureOpen = !captureOpen)}
     {captureOpen}
+    showSearch={!agentStore.baseMode && !editing}
+    {searchQuery}
+    onSearchChange={handleSearchChange}
+    onClearSearch={clearSearch}
+    onSearchInputMount={(el) => (searchInput = el ?? undefined)}
+    aiActive={inPasteMode}
+    aiBusy={inPasteMode && rankLoading}
   />
-  {#if !agentStore.baseMode && !editing}
-    <div class="search-row">
-      <div class="search-wrap">
-        <input
-          bind:this={searchInput}
-          class="search"
-          type="text"
-          placeholder="Search or paste a message to find matching templates…"
-          value={searchQuery}
-          oninput={(e) => handleSearchChange(e.currentTarget.value)}
-        />
-        {#if searchQuery.length > 0}
-          <button
-            class="clear-btn"
-            title="Clear (Ctrl+L)"
-            aria-label="Clear search"
-            onclick={clearSearch}
-          >×</button>
-        {/if}
-      </div>
-    </div>
-  {/if}
   <div class="shell">
     {#if !loaded}
-      <div class="loading">Loading…</div>
+      <aside class="skel skel-tags" style="width: {tagsWidth}px" aria-hidden="true">
+        {#each Array(7) as _, i (i)}
+          <div class="skel-row" style="animation-delay: {i * 80}ms"></div>
+        {/each}
+      </aside>
+      <aside class="skel skel-templates" style="width: {templatesWidth}px" aria-hidden="true">
+        {#each Array(9) as _, i (i)}
+          <div class="skel-row tall" style="animation-delay: {i * 80}ms"></div>
+        {/each}
+      </aside>
+      <section class="skel skel-main" aria-hidden="true">
+        <div class="skel-line wide"></div>
+        <div class="skel-line"></div>
+        <div class="skel-block"></div>
+      </section>
     {:else if agentStore.baseMode}
       <AgentSidebar
         kind={agentStore.baseKind}
@@ -1182,6 +1181,10 @@
         onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
         onMoveToFolder={(ids, folder) => void templatesStore.moveToFolder(ids, folder)}
         onSortModeToggle={() => templatesStore.handleSortModeToggle()}
+        onBulkAddTag={() => (bulkTagPromptOpen = true)}
+        onBulkRemoveTag={() => (bulkRemoveTagPromptOpen = true)}
+        onBulkExport={() => void templatesStore.bulkExport(selectionStore.bulkSelectedIds)}
+        onBulkDelete={() => (bulkDeleteConfirmOpen = true)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1459,23 +1462,27 @@
 
 <style>
   :global(:root) {
-    --bg-base: #1a1a1a;
-    --bg-elevated: #161616;
-    --bg-titlebar: #131313;
-    --bg-input: #0f0f0f;
-    --bg-hover: #222222;
-    --bg-active: #2a2a2a;
-    --border: #2a2a2a;
-    --border-strong: #3a3a3a;
-    --border-focus: #4a4a4a;
-    --text: #e6e6e6;
-    --text-strong: #f0f0f0;
-    --text-muted: #888888;
-    --text-subtle: #666666;
-    --text-deemphasis: #777777;
-    --text-placeholder: #555555;
+    --bg-base: #1c1c1e;
+    --bg-elevated: #18181a;
+    --bg-titlebar: #141416;
+    --bg-input: #121214;
+    --bg-hover: #25252a;
+    --bg-active: #2d2d33;
+    --border: #2a2a2e;
+    --border-strong: #3a3a40;
+    --border-focus: #5a5a62;
+    --text: #e8e6e3;
+    --text-strong: #f3f1ee;
+    --text-muted: #8c8a86;
+    --text-subtle: #6a6862;
+    --text-deemphasis: #7a7874;
+    --text-placeholder: #56544f;
     --shadow: rgba(0, 0, 0, 0.6);
     --backdrop: rgba(0, 0, 0, 0.5);
+    --accent-brand: #cc785c;
+    --accent-brand-hover: #d88a6f;
+    --accent-brand-soft: #3a2419;
+    --accent-brand-text: #f5d4c4;
     --accent-positive-bg: #2a3a2a;
     --accent-positive-border: #3a5a3a;
     --accent-positive-text: #d0e0d0;
@@ -1494,23 +1501,27 @@
   }
 
   :global([data-theme="light"]) {
-    --bg-base: #fafafa;
-    --bg-elevated: #f0f0f0;
-    --bg-titlebar: #e8e8e8;
-    --bg-input: #ffffff;
-    --bg-hover: #e0e0e0;
-    --bg-active: #d6d6d6;
-    --border: #d8d8d8;
-    --border-strong: #c0c0c0;
-    --border-focus: #888888;
-    --text: #1a1a1a;
-    --text-strong: #000000;
-    --text-muted: #555555;
-    --text-subtle: #888888;
-    --text-deemphasis: #666666;
-    --text-placeholder: #aaaaaa;
-    --shadow: rgba(0, 0, 0, 0.15);
+    --bg-base: #f7f5f1;
+    --bg-elevated: #f1ede6;
+    --bg-titlebar: #ebe7df;
+    --bg-input: #fdfcf9;
+    --bg-hover: #e4dfd5;
+    --bg-active: #d8d2c5;
+    --border: #ddd6c8;
+    --border-strong: #c2bbac;
+    --border-focus: #8a8275;
+    --text: #2a2724;
+    --text-strong: #161310;
+    --text-muted: #5c5852;
+    --text-subtle: #8c8780;
+    --text-deemphasis: #6f6a62;
+    --text-placeholder: #b0aa9e;
+    --shadow: rgba(60, 50, 35, 0.18);
     --backdrop: rgba(0, 0, 0, 0.3);
+    --accent-brand: #c5613e;
+    --accent-brand-hover: #b4542f;
+    --accent-brand-soft: #f5e0d4;
+    --accent-brand-text: #6d2c14;
     --accent-positive-bg: #d4eada;
     --accent-positive-border: #88c896;
     --accent-positive-text: #1e5f2e;
@@ -1605,67 +1616,58 @@
     min-height: 0;
   }
 
-  .search-row {
-    padding: 10px 12px;
-    background: var(--bg-titlebar);
-    border-bottom: 1px solid var(--border);
+  .skel {
     flex-shrink: 0;
-  }
-
-  .search-wrap {
-    position: relative;
-  }
-
-  .search {
-    width: 100%;
+    border-right: 1px solid var(--border);
+    background: var(--bg-elevated);
+    padding: 12px 8px;
     box-sizing: border-box;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 7px 34px 7px 12px;
-    border-radius: 6px;
-    font: inherit;
-    font-size: 0.85rem;
   }
 
-  .clear-btn {
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    font-size: 1.05rem;
-    line-height: 1;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .skel-main {
+    flex: 1;
+    padding: 20px 24px;
+    background: var(--bg-base);
+    border-right: none;
   }
 
-  .clear-btn:hover {
+  .skel-row,
+  .skel-line,
+  .skel-block {
     background: var(--bg-hover);
-    color: var(--text);
+    border-radius: 4px;
+    animation: skel-pulse 1.4s ease-in-out infinite;
   }
 
-  .search:focus {
-    outline: none;
-    border-color: var(--border-focus);
+  .skel-row {
+    height: 18px;
+    margin: 6px 4px;
   }
 
-  .search::placeholder {
-    color: var(--text-placeholder);
+  .skel-row.tall {
+    height: 28px;
   }
 
-  .loading {
-    margin: auto;
-    color: var(--text-subtle);
-    font-size: 0.9rem;
+  .skel-line {
+    height: 14px;
+    width: 60%;
+    margin-bottom: 12px;
+  }
+
+  .skel-line.wide {
+    width: 80%;
+    height: 22px;
+    margin-bottom: 8px;
+  }
+
+  .skel-block {
+    height: 240px;
+    margin-top: 16px;
+  }
+
+  @keyframes skel-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 0.85; }
   }
 
   .col-resize {

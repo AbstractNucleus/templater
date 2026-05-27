@@ -27,6 +27,10 @@
     onReorder,
     onMoveToFolder,
     onSortModeToggle,
+    onBulkAddTag,
+    onBulkRemoveTag,
+    onBulkExport,
+    onBulkDelete,
   }: {
     templates: Template[];
     searchResults: SearchHit[];
@@ -52,6 +56,10 @@
     onReorder: (newOrderIds: string[]) => void;
     onMoveToFolder: (ids: Set<string>, folder: string | null) => void;
     onSortModeToggle: () => void;
+    onBulkAddTag: () => void;
+    onBulkRemoveTag: () => void;
+    onBulkExport: () => void;
+    onBulkDelete: () => void;
   } = $props();
 
   function handleEmptyContext(e: MouseEvent): void {
@@ -206,36 +214,52 @@
 </script>
 
 <aside bind:this={sidebarEl} class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
-  <div class="section-row">
-    <div class="section-label">
-      {inPasteMode ? "Ranked matches" : "Templates"}
+  <div class="sticky-header">
+    <div class="section-row">
+      <div class="section-label">
+        {inPasteMode ? "Ranked matches" : "Templates"}
+      </div>
+      <div class="header-controls">
+        {#if !inPasteMode}
+          <button
+            class="sort-btn"
+            title={sortMode === "manual"
+              ? "Manual order. Drag templates to reorder. Click → recent."
+              : sortMode === "recent"
+                ? "Sorted by most recently copied. Click → most used."
+                : sortMode === "most_used"
+                  ? "Sorted by lifetime copy count. Click → never used."
+                  : "Sorted by never used first. Click → manual."}
+            onclick={onSortModeToggle}
+          >{
+            sortMode === "manual" ? "Manual ↕"
+            : sortMode === "recent" ? "Recent ↓"
+            : sortMode === "most_used" ? "Most used ★"
+            : "Never used 0"
+          }</button>
+        {/if}
+        {#if canCreate}
+          <button class="new-btn" title="New template" onclick={onNew}>+</button>
+        {/if}
+      </div>
     </div>
-    <div class="header-controls">
-      {#if !inPasteMode}
-        <button
-          class="sort-btn"
-          title={sortMode === "manual"
-            ? "Manual order. Drag templates to reorder. Click → recent."
-            : sortMode === "recent"
-              ? "Sorted by most recently copied. Click → most used."
-              : sortMode === "most_used"
-                ? "Sorted by lifetime copy count. Click → never used."
-                : "Sorted by never used first. Click → manual."}
-          onclick={onSortModeToggle}
-        >{sortMode === "manual" ? "⇅" : sortMode === "recent" ? "↻" : sortMode === "most_used" ? "★" : "0"}</button>
-      {/if}
-      {#if canCreate}
-        <button class="new-btn" title="New template" onclick={onNew}>+</button>
-      {/if}
-    </div>
-  </div>
 
-  {#if bulkSelectedIds.size > 1}
-    <div class="bulk-bar">
-      <span class="bulk-count">{bulkSelectedIds.size} selected</span>
-      <span class="bulk-hint">right-click for actions</span>
-    </div>
-  {/if}
+    {#if bulkSelectedIds.size > 1}
+      <div class="bulk-bar">
+        <span class="bulk-count">{bulkSelectedIds.size} selected</span>
+        <div class="bulk-actions">
+          {#if canCreate}
+            <button class="bulk-btn" onclick={onBulkAddTag} title="Add tag to selected">Tag</button>
+            <button class="bulk-btn" onclick={onBulkRemoveTag} title="Remove tag from selected">Untag</button>
+          {/if}
+          <button class="bulk-btn" onclick={onBulkExport} title="Export selected">Export</button>
+          {#if canCreate}
+            <button class="bulk-btn danger" onclick={onBulkDelete} title="Delete selected">Delete</button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
 
   {#if inPasteMode}
     <ul class="template-list">
@@ -274,8 +298,8 @@
       {/if}
     </ul>
   {:else}
-    {#snippet templateRow(hit: SearchHit)}
-      <li>
+    {#snippet templateRow(hit: SearchHit, indent: boolean = false)}
+      <li class:in-folder={indent}>
         <button
           class="template-item"
           class:active={selectedTemplateId === hit.template.id}
@@ -296,7 +320,10 @@
         >
           <span class="name">
             {#if hit.template.pinned}
-              <span class="pin-mark" aria-label="pinned" title="Pinned">▸</span>
+              <svg class="pin-mark" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-label="pinned" role="img"><title>Pinned</title>
+                <path d="M12 17v5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none" />
+                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+              </svg>
             {/if}
             {#each highlightName(hit.template.name, hit.nameHits) as seg}
               {#if seg.hit}
@@ -349,7 +376,7 @@
           </li>
           {#if !collapsed}
             {#each group.hits as hit (hit.template.id)}
-              {@render templateRow(hit)}
+              {@render templateRow(hit, true)}
             {/each}
           {/if}
         {/each}
@@ -371,9 +398,17 @@
     flex-shrink: 0;
     border-right: 1px solid var(--border);
     background: var(--bg-elevated);
-    padding: 12px 8px;
+    padding: 0 8px 12px;
     overflow-y: auto;
     box-sizing: border-box;
+  }
+
+  .sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-elevated);
+    padding-top: 12px;
   }
 
   .section-row {
@@ -404,20 +439,31 @@
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text);
-    width: 22px;
     height: 22px;
     border-radius: 4px;
     cursor: pointer;
     font: inherit;
-    font-size: 0.9rem;
     line-height: 1;
+  }
+
+  .new-btn {
+    width: 22px;
     padding: 0;
+    font-size: 0.9rem;
+  }
+
+  .sort-btn {
+    padding: 0 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
   }
 
   .new-btn:hover,
   .sort-btn:hover {
     background: var(--bg-hover);
     border-color: var(--border-strong);
+    color: var(--text);
   }
 
   .bulk-bar {
@@ -425,7 +471,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 4px 8px;
+    padding: 3px 4px 3px 8px;
     margin: 0 2px 6px;
     background: var(--accent-info-bg);
     border: 1px solid var(--accent-info-border);
@@ -436,11 +482,34 @@
 
   .bulk-count {
     font-weight: 600;
+    flex-shrink: 0;
   }
 
-  .bulk-hint {
-    font-style: italic;
-    opacity: 0.8;
+  .bulk-actions {
+    display: flex;
+    gap: 2px;
+  }
+
+  .bulk-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: inherit;
+    padding: 2px 7px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.7rem;
+    line-height: 1.3;
+  }
+
+  .bulk-btn:hover {
+    background: var(--accent-info-border);
+    color: var(--bg-base);
+  }
+
+  .bulk-btn.danger:hover {
+    background: var(--accent-danger-border);
+    color: var(--bg-base);
   }
 
   ul {
@@ -451,6 +520,10 @@
 
   .template-list li {
     margin: 0;
+  }
+
+  .template-list li.in-folder {
+    padding-left: 12px;
   }
 
   .folder-header {
@@ -561,9 +634,8 @@
   .pin-mark {
     display: inline-block;
     margin-right: 4px;
-    color: var(--accent-positive-text);
-    font-size: 0.7rem;
-    transform: translateY(-1px);
+    color: var(--accent-brand);
+    vertical-align: -1px;
   }
 
   .template-item .excerpt {

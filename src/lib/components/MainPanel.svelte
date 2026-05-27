@@ -140,6 +140,51 @@
   });
 
   let historyOpen = $state(false);
+
+  let renamingTitle = $state(false);
+  let renameDraft = $state("");
+
+  function startRename(): void {
+    if (!template || !canEdit) return;
+    renameDraft = template.name;
+    renamingTitle = true;
+  }
+
+  function commitRename(): void {
+    if (!template) {
+      renamingTitle = false;
+      return;
+    }
+    const trimmed = renameDraft.trim();
+    if (trimmed.length > 0 && trimmed !== template.name) {
+      onSave({
+        ...template,
+        name: trimmed,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    renamingTitle = false;
+  }
+
+  function cancelRename(): void {
+    renamingTitle = false;
+  }
+
+  function handleRenameKey(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitRename();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
+
+  // Svelte action: focus + select on mount, used by the inline-rename input.
+  function focusOnMount(node: HTMLInputElement): void {
+    node.focus();
+    node.select();
+  }
   // Close the history panel when the template changes so it never claims to
   // show one template's history while another is selected.
   $effect(() => {
@@ -191,11 +236,16 @@
   const placeholders = $derived(template ? extractPlaceholders(composed, snippets) : []);
   const canAdapt = $derived(inboundText != null && inboundText.trim().length > 0);
 
-  const breadcrumb = $derived.by(() => {
-    if (!template) return "";
-    const firstTag = template.tags[0] ?? "untagged";
-    return `${firstTag} / ${template.name}`;
-  });
+  function compactDate(iso: string): string {
+    const d = new Date(iso);
+    const now = new Date();
+    const sameYear = d.getFullYear() === now.getFullYear();
+    return d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      ...(sameYear ? {} : { year: "numeric" }),
+    });
+  }
 
   type HistoryDiff = { field: string; before: string; after: string };
 
@@ -322,9 +372,18 @@
 <section class="main">
   {#if !template && !creatingDraft}
     <div class="empty">
-      {canEdit
-        ? "Select a template from the sidebar, or create a new one."
-        : "Select a template from the sidebar."}
+      <p class="empty-line">
+        {canEdit
+          ? "Select a template from the sidebar, or create a new one."
+          : "Select a template from the sidebar."}
+      </p>
+      <div class="empty-kbd-row">
+        <span><kbd>↑</kbd><kbd>↓</kbd> pick</span>
+        <span class="empty-sep">·</span>
+        <span><kbd>⏎</kbd> copy</span>
+        <span class="empty-sep">·</span>
+        <span><kbd>?</kbd> all shortcuts</span>
+      </div>
     </div>
   {:else if canEdit && (creatingDraft || editing)}
     <div class="header-row">
@@ -345,19 +404,69 @@
     />
   {:else if template}
     <div class="header-row">
-      <div>
-        <div class="breadcrumb">{breadcrumb}</div>
-        <h2 class="name">{template.name}</h2>
-        <div class="meta">
-          Created {new Date(template.created_at).toLocaleString()}
-          · Updated {new Date(template.updated_at).toLocaleString()}
+      <div class="title-block">
+        {#if template.tags.length > 0}
+          <div class="tag-chips">
+            {#each template.tags as t (t)}
+              <span class="tag-chip">{t}</span>
+            {/each}
+          </div>
+        {/if}
+        <div class="title-row">
+          {#if renamingTitle}
+            <input
+              class="name-input"
+              type="text"
+              bind:value={renameDraft}
+              onblur={commitRename}
+              onkeydown={handleRenameKey}
+              use:focusOnMount
+            />
+          {:else}
+            <h2 class="name">{template.name}</h2>
+            {#if canEdit}
+              <button
+                class="name-edit-btn"
+                onclick={startRename}
+                title="Rename template"
+                aria-label="Rename template"
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                </svg>
+              </button>
+            {/if}
+            <span
+              class="meta"
+              title={`Created ${new Date(template.created_at).toLocaleString()} · Updated ${new Date(template.updated_at).toLocaleString()}`}
+            >
+              Created {compactDate(template.created_at)} · Updated {compactDate(template.updated_at)}
+            </span>
+          {/if}
         </div>
       </div>
       {#if canEdit}
         <div class="actions">
-          <button class="icon-btn" onclick={onEnterEdit}>Edit</button>
-          <button class="icon-btn" onclick={onDuplicate}>Duplicate</button>
-          <button class="icon-btn danger" onclick={handleDelete}>Delete</button>
+          <button class="icon-action" onclick={onEnterEdit} title="Edit (or click the body to inline-edit)" aria-label="Edit template">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+            </svg>
+          </button>
+          <button class="icon-action" onclick={onDuplicate} title="Duplicate" aria-label="Duplicate template">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          </button>
+          <button class="icon-action danger" onclick={handleDelete} title="Delete" aria-label="Delete template">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            </svg>
+          </button>
         </div>
       {/if}
     </div>
@@ -392,6 +501,7 @@
           {#if p.kind.type === "choice"}
             <select
               class="placeholder-input placeholder-select"
+              class:filled={(placeholderValues[p.key] ?? "") !== ""}
               value={placeholderValues[p.key] ?? ""}
               onchange={(e) => setPlaceholderValue(p.key, e.currentTarget.value)}
               title={p.label}
@@ -404,6 +514,7 @@
           {:else}
             <input
               class="placeholder-input"
+              class:filled={(placeholderValues[p.key] ?? "") !== ""}
               type="text"
               placeholder={`{{${p.key}}}`}
               value={placeholderValues[p.key] ?? ""}
@@ -414,40 +525,33 @@
       </div>
     {/if}
 
-    {#if canEdit && template.history.length > 0}
-      <div class="history">
-        <button class="history-toggle" onclick={() => (historyOpen = !historyOpen)}>
-          {historyOpen ? "Hide" : "Show"} history ({template.history.length})
-        </button>
-        {#if historyOpen}
-          <ul class="history-list">
-            {#each [...template.history].reverse() as v, idx (v.saved_at + idx)}
-              {@const realIdx = template.history.length - 1 - idx}
-              {@const changes = historyDiff(template, v)}
-              <li class="history-row">
-                <div class="history-meta">
-                  <span class="history-time">{new Date(v.saved_at).toLocaleString()}</span>
-                  <button
-                    class="history-revert"
-                    onclick={() => onRevertHistory(template.id, realIdx)}
-                  >Revert</button>
-                </div>
-                {#if changes.length === 0}
-                  <div class="history-empty">No visible diff.</div>
-                {:else}
-                  <div class="history-diff">
-                    {#each changes as change (change.field)}
-                      <div class="history-diff-field">{change.field}</div>
-                      <pre class="history-diff-line removed">- {change.before}</pre>
-                      <pre class="history-diff-line added">+ {change.after}</pre>
-                    {/each}
-                  </div>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
+    {#if canEdit && template.history.length > 0 && historyOpen}
+      <ul class="history-list">
+        {#each [...template.history].reverse() as v, idx (v.saved_at + idx)}
+          {@const realIdx = template.history.length - 1 - idx}
+          {@const changes = historyDiff(template, v)}
+          <li class="history-row">
+            <div class="history-meta">
+              <span class="history-time">{new Date(v.saved_at).toLocaleString()}</span>
+              <button
+                class="history-revert"
+                onclick={() => onRevertHistory(template.id, realIdx)}
+              >Revert</button>
+            </div>
+            {#if changes.length === 0}
+              <div class="history-empty">No visible diff.</div>
+            {:else}
+              <div class="history-diff">
+                {#each changes as change (change.field)}
+                  <div class="history-diff-field">{change.field}</div>
+                  <pre class="history-diff-line removed">- {change.before}</pre>
+                  <pre class="history-diff-line added">+ {change.after}</pre>
+                {/each}
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
     {/if}
 
     {#if adaptError}
@@ -459,6 +563,16 @@
     {/if}
 
     <div class="footer">
+      {#if canEdit && template.history.length > 0}
+        <button
+          class="history-toggle"
+          onclick={() => (historyOpen = !historyOpen)}
+          title={historyOpen ? "Collapse history" : "Show previous saved versions"}
+        >
+          {historyOpen ? "Hide" : "Show"} history ({template.history.length})
+        </button>
+      {/if}
+      <div class="footer-spacer"></div>
       {#if canAdapt}
         <button
           class="base-btn"
@@ -472,13 +586,14 @@
       <button class="base-btn" onclick={onBaseOnTemplate} title="Open this template in the agent editor">
         Base on template
       </button>
-      <button class="copy" onclick={copyToClipboard}>
+      <button class="copy" class:ok={copyState === "ok"} class:err={copyState === "error"} onclick={copyToClipboard}>
         {#if copyState === "ok"}
-          Copied
+          <span class="copy-label">Copied</span>
         {:else if copyState === "error"}
-          Copy failed
+          <span class="copy-label">Copy failed</span>
         {:else}
-          Copy
+          <span class="copy-label">Copy</span>
+          <kbd class="copy-kbd">⏎</kbd>
         {/if}
       </button>
     </div>
@@ -523,6 +638,45 @@
     color: var(--text-placeholder);
     font-size: 0.9rem;
     margin: auto;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .empty-line {
+    margin: 0;
+  }
+
+  .empty-kbd-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.78rem;
+    color: var(--text-subtle);
+  }
+
+  .empty-kbd-row kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 18px;
+    padding: 0 5px;
+    margin-right: 3px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    line-height: 1;
+  }
+
+  .empty-sep {
+    color: var(--text-subtle);
   }
 
   .header-row {
@@ -539,17 +693,90 @@
     margin-bottom: 4px;
   }
 
+  .title-block {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .tag-chip {
+    font-size: 0.68rem;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  .title-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+    min-width: 0;
+  }
+
   .name {
     margin: 0;
-    font-size: 1.05rem;
-    font-weight: 600;
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.2;
     color: var(--text-strong);
+    min-width: 0;
+  }
+
+  .name-edit-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 100ms;
+  }
+
+  .title-row:hover .name-edit-btn,
+  .title-row:focus-within .name-edit-btn {
+    opacity: 1;
+  }
+
+  .name-edit-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .name-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--accent-brand);
+    border-radius: 4px;
+    color: var(--text-strong);
+    font: inherit;
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.2;
+    padding: 2px 8px;
+    outline: none;
   }
 
   .meta {
-    margin-top: 4px;
     font-size: 0.72rem;
     color: var(--text-subtle);
+    white-space: nowrap;
   }
 
   .actions {
@@ -584,7 +811,27 @@
     background: var(--accent-positive-hover);
   }
 
-  .icon-btn.danger:hover {
+  .icon-action {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon-action:hover {
+    background: var(--bg-hover);
+    border-color: var(--border);
+    color: var(--text);
+  }
+
+  .icon-action.danger:hover {
     background: var(--accent-danger-bg);
     border-color: var(--accent-danger-border);
     color: var(--accent-danger-text);
@@ -617,14 +864,14 @@
   .preview {
     flex: 1;
     margin: 0 0 16px;
-    padding: 12px 14px;
+    padding: 18px 20px;
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text);
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.85rem;
-    line-height: 1.5;
+    font-family: -apple-system, "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+    font-size: 0.9rem;
+    line-height: 1.55;
     white-space: pre-wrap;
     overflow-y: auto;
     min-height: 120px;
@@ -634,7 +881,9 @@
     color: var(--accent-info-text);
     background: var(--accent-info-bg);
     border-radius: 3px;
-    padding: 0 2px;
+    padding: 0 3px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.82em;
   }
 
   .placeholders {
@@ -660,8 +909,16 @@
     border-radius: 10px;
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     font-size: 0.72rem;
-    width: 140px;
+    field-sizing: content;
+    min-width: 4ch;
+    max-width: 32ch;
     outline: none;
+  }
+
+  .placeholder-input.filled {
+    background: var(--bg-input);
+    color: var(--text);
+    border-color: var(--border);
   }
 
   .placeholder-input::placeholder {
@@ -674,8 +931,7 @@
   }
 
   .placeholder-select {
-    width: auto;
-    min-width: 100px;
+    min-width: 6ch;
     padding-right: 18px;
     appearance: none;
     background-image: linear-gradient(
@@ -693,19 +949,31 @@
     background-repeat: no-repeat;
   }
 
-  .history {
-    margin: 0 0 12px;
+  .placeholder-select.filled {
+    background-image: linear-gradient(
+      45deg,
+      transparent 50%,
+      var(--text-muted) 50%
+    ),
+    linear-gradient(
+      135deg,
+      var(--text-muted) 50%,
+      transparent 50%
+    );
+    background-position: calc(100% - 11px) 50%, calc(100% - 7px) 50%;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
   }
 
   .history-toggle {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text-muted);
-    padding: 3px 10px;
-    border-radius: 4px;
+    padding: 6px 12px;
+    border-radius: 6px;
     cursor: pointer;
     font: inherit;
-    font-size: 0.72rem;
+    font-size: 0.78rem;
   }
 
   .history-toggle:hover {
@@ -715,7 +983,7 @@
 
   .history-list {
     list-style: none;
-    margin: 6px 0 0;
+    margin: 0 0 12px;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -802,8 +1070,12 @@
 
   .footer {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
     gap: 8px;
+  }
+
+  .footer-spacer {
+    flex: 1;
   }
 
   .adapt-error {
@@ -872,19 +1144,68 @@
   }
 
   .copy {
-    background: var(--bg-active);
-    color: var(--text);
-    border: 1px solid var(--border-strong);
-    padding: 6px 16px;
+    background: var(--accent-brand);
+    color: #fff;
+    border: 1px solid var(--accent-brand);
+    padding: 7px 14px 7px 16px;
     border-radius: 6px;
     cursor: pointer;
     font: inherit;
     font-size: 0.85rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.18);
+    transition: background 120ms, transform 80ms;
   }
 
   .copy:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-focus);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
+  }
+
+  .copy:active {
+    transform: translateY(1px);
+  }
+
+  .copy.ok {
+    background: var(--accent-positive-border);
+    border-color: var(--accent-positive-border);
+    color: var(--accent-positive-text);
+    animation: copy-success 380ms ease-out;
+  }
+
+  @keyframes copy-success {
+    0% {
+      transform: scale(1);
+      box-shadow: 0 0 0 0 var(--accent-positive-border);
+    }
+    35% {
+      transform: scale(1.035);
+      box-shadow: 0 0 0 4px rgba(136, 200, 150, 0.35);
+    }
+    100% {
+      transform: scale(1);
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
+  }
+
+  .copy.err {
+    background: var(--accent-danger-bg);
+    border-color: var(--accent-danger-border);
+    color: var(--accent-danger-text);
+  }
+
+  .copy-kbd {
+    font-family: inherit;
+    font-size: 0.72rem;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: rgba(255, 255, 255, 0.92);
   }
 
   .confirm-backdrop {
