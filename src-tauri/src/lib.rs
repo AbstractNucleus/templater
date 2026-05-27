@@ -176,7 +176,6 @@ async fn context_search(
 async fn context_capture_memory(
     raw: String,
     source: String,
-    filename: Option<String>,
     backend: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
@@ -186,7 +185,6 @@ async fn context_capture_memory(
             "op": "context-capture-memory",
             "raw": raw,
             "source": source,
-            "filename": filename,
             "backend": backend,
         }))
         .await
