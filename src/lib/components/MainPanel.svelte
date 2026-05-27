@@ -349,6 +349,10 @@
       <div>
         <div class="breadcrumb">{breadcrumb}</div>
         <h2 class="name">{template.name}</h2>
+        <div class="meta">
+          Created {new Date(template.created_at).toLocaleString()}
+          · Updated {new Date(template.updated_at).toLocaleString()}
+        </div>
       </div>
       {#if canEdit}
         <div class="actions">
@@ -541,6 +545,12 @@
     font-size: 1.05rem;
     font-weight: 600;
     color: var(--text-strong);
+  }
+
+  .meta {
+    margin-top: 4px;
+    font-size: 0.72rem;
+    color: var(--text-subtle);
   }
 
   .actions {
