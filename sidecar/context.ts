@@ -354,8 +354,14 @@ export async function captureMemory(
   raw: string,
   sourceRoot: string,
   extractor: MemoryExtractor,
-  filename = "memories.md",
+  filename?: string | null,
 ): Promise<{ appendedTo: string; signal: string }> {
+  // The Rust→sidecar bridge serializes `Option<String>::None` to JSON `null`,
+  // so this function is invoked with `filename = null` (not `undefined`) when
+  // the frontend omits the filename. JS default-parameter values only fire on
+  // `undefined`, which is why a plain `filename = "memories.md"` default isn't
+  // enough — coalesce explicitly to cover both.
+  const resolvedFilename = filename ?? "memories.md";
   const normalizedRoot = normalizePath(sourceRoot);
   if (!activeSources.includes(normalizedRoot)) {
     throw new Error(`source root not active: ${sourceRoot}`);
@@ -367,7 +373,7 @@ export async function captureMemory(
   if (signal.length === 0) {
     throw new Error("memory extractor returned empty signal");
   }
-  const finalPath = normalizePath(path.join(normalizedRoot, filename));
+  const finalPath = normalizePath(path.join(normalizedRoot, resolvedFilename));
   const now = new Date().toISOString();
   const block = `\n\n## ${now}\n\n${signal}\n`;
   // Park the path in queuedSet so chokidar's change event (fired by the
