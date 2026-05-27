@@ -108,12 +108,19 @@ export async function getAppVersion(): Promise<string> {
 
 export interface ImportTemplatesResult {
   added: number;
+  /** Number of duplicates whose content was replaced by the import file
+   *  (only nonzero when called with `overwrite = true`). */
+  overwritten: number;
+  /** Number of duplicates left untouched (nonzero only when `overwrite = false`). */
   skipped: number;
   templates: Template[];
 }
 
-export async function importTemplates(path: string): Promise<ImportTemplatesResult> {
-  return await invoke<ImportTemplatesResult>("import_templates", { path });
+export async function importTemplates(
+  path: string,
+  overwrite: boolean,
+): Promise<ImportTemplatesResult> {
+  return await invoke<ImportTemplatesResult>("import_templates", { path, overwrite });
 }
 
 export interface BackupEntry {

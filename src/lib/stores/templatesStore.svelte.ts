@@ -537,7 +537,7 @@ export async function handleExportTemplates(): Promise<PortResult> {
   }
 }
 
-export async function handleImportTemplates(): Promise<PortResult> {
+export async function handleImportTemplates(overwrite: boolean): Promise<PortResult> {
   if (!templatesStore.isEditorMode) return { kind: "err", error: "import disabled in User mode" };
   try {
     const path = await openDialog({
@@ -546,15 +546,17 @@ export async function handleImportTemplates(): Promise<PortResult> {
     });
     if (path === null || Array.isArray(path)) return { kind: "cancelled" };
     templatesStore.pushUndo("import");
-    const result = await importTemplates(path);
+    const result = await importTemplates(path, overwrite);
     // Rust has already persisted the merged list; just sync local state.
     templatesStore.templates = result.templates;
     templatesStore.bulkSelectedIds = new Set();
-    const dupNote =
-      result.skipped > 0 ? ` (${pluralise(result.skipped, "duplicate")} skipped)` : "";
+    const notes: string[] = [];
+    if (result.overwritten > 0) notes.push(`${pluralise(result.overwritten, "duplicate")} overwritten`);
+    if (result.skipped > 0) notes.push(`${pluralise(result.skipped, "duplicate")} skipped`);
+    const suffix = notes.length > 0 ? ` (${notes.join(", ")})` : "";
     return {
       kind: "ok",
-      message: `Imported ${pluralise(result.added, "template")}${dupNote}.`,
+      message: `Imported ${pluralise(result.added, "template")}${suffix}.`,
     };
   } catch (e) {
     return { kind: "err", error: String(e) };

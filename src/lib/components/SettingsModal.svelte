@@ -50,7 +50,7 @@
     onClose: () => void;
     onUpdate: (next: Settings) => void;
     onExportTemplates: () => Promise<PortResult>;
-    onImportTemplates: () => Promise<PortResult>;
+    onImportTemplates: (overwrite: boolean) => Promise<PortResult>;
     onCheckUpdate: () => Promise<UpdateInfo | null>;
     onListBackups: () => Promise<BackupEntry[]>;
     onRestoreBackup: (name: string) => Promise<void>;
@@ -64,6 +64,8 @@
   let portMessage = $state<string | null>(null);
   let portError = $state<string | null>(null);
   let portBusy = $state(false);
+  /** Transient per-action choice — not persisted; resets to false each open. */
+  let overwriteOnImport = $state(false);
   let activeTab = $state<"general" | "context" | "templates" | "diagnostics" | "updates">("general");
 
   async function handleExportClick(): Promise<void> {
@@ -86,7 +88,7 @@
     portMessage = null;
     portError = null;
     try {
-      const r = await onImportTemplates();
+      const r = await onImportTemplates(overwriteOnImport);
       if (r.kind === "ok") portMessage = r.message;
       else if (r.kind === "err") portError = r.error;
     } finally {
@@ -395,6 +397,16 @@
           </button>
         {/if}
       </div>
+      {#if settings.mode === "editor"}
+        <label class="overwrite-toggle">
+          <input
+            type="checkbox"
+            checked={overwriteOnImport}
+            onchange={(e) => (overwriteOnImport = e.currentTarget.checked)}
+          />
+          <span>Overwrite duplicates</span>
+        </label>
+      {/if}
       {#if portMessage}
         <div class="port-message">{portMessage}</div>
       {/if}
@@ -404,7 +416,14 @@
       <div class="hint">
         {#if settings.mode === "editor"}
           Export writes all templates to a JSON file. Import merges by id —
-          templates already on this machine are kept and duplicates are skipped.
+          {#if overwriteOnImport}
+            matching templates are <strong>replaced</strong> with the import
+            file's content (your usage stats stay; the pre-overwrite version
+            is appended to history so you can Revert).
+          {:else}
+            templates already on this machine are kept and duplicates are
+            skipped.
+          {/if}
         {:else}
           Export writes all templates to a JSON file. Import is disabled in User mode.
         {/if}
@@ -746,6 +765,21 @@
   .port-btn:hover:not(:disabled) {
     background: var(--bg-hover);
     border-color: var(--border-strong);
+  }
+
+  .overwrite-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .overwrite-toggle input[type="checkbox"] {
+    accent-color: var(--text-muted);
   }
 
   .port-btn:disabled {

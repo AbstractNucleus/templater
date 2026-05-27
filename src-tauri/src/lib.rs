@@ -2,11 +2,15 @@ mod sidecar;
 mod store;
 mod windows_snap;
 
+use chrono::Utc;
 use sidecar::{Diagnostics, Sidecar};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Mutex;
-use store::{AppData, BackupEntry, Store, Template, WindowGeometry, DATA_VERSION, DEFAULT_HOTKEY};
+use store::{
+    AppData, BackupEntry, Store, Template, TemplateVersion, WindowGeometry, DATA_VERSION,
+    DEFAULT_HOTKEY,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -261,9 +265,13 @@ struct ImportFile {
 #[derive(serde::Serialize)]
 struct ImportResult {
     added: usize,
+    overwritten: usize,
     skipped: usize,
     templates: Vec<Template>,
 }
+
+/// Mirror of `TEMPLATE_HISTORY_CAP` in `src/lib/types.ts`. Keep in sync.
+const TEMPLATE_HISTORY_CAP: usize = 10;
 
 #[tauri::command]
 fn export_templates(path: String, store: tauri::State<'_, Store>) -> Result<usize, String> {
@@ -401,6 +409,7 @@ fn bulk_remove_template_tag(
 #[tauri::command]
 fn import_templates(
     path: String,
+    overwrite: bool,
     store: tauri::State<'_, Store>,
 ) -> Result<ImportResult, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
@@ -414,27 +423,63 @@ fn import_templates(
     let mut data = store
         .load()?
         .unwrap_or_else(|| AppData::new(Vec::new()));
-    let existing: HashSet<String> = data.templates.iter().map(|t| t.id.clone()).collect();
 
+    // id → index in data.templates, so we can mutate in place on overwrite.
+    let index: HashMap<String, usize> = data
+        .templates
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.clone(), i))
+        .collect();
+
+    let now = Utc::now().to_rfc3339();
     let mut additions: Vec<Template> = Vec::new();
+    let mut overwritten = 0usize;
     let mut skipped = 0usize;
+
     for tpl in file.templates {
-        if existing.contains(&tpl.id) {
-            skipped += 1;
-        } else {
-            additions.push(tpl);
+        match index.get(&tpl.id).copied() {
+            Some(_) if !overwrite => skipped += 1,
+            Some(i) => {
+                let local = &mut data.templates[i];
+                // Snapshot the pre-overwrite local content so the existing
+                // Revert UI can recover it. Mirrors `pushHistorySnapshot` in
+                // `templatesStore.svelte.ts`.
+                local.history.push(TemplateVersion {
+                    saved_at: now.clone(),
+                    opening: local.opening.clone(),
+                    body: local.body.clone(),
+                    tags: local.tags.clone(),
+                });
+                let len = local.history.len();
+                if len > TEMPLATE_HISTORY_CAP {
+                    local.history.drain(0..len - TEMPLATE_HISTORY_CAP);
+                }
+                // Replace content; keep id, pinned, copy_count, last_used_at,
+                // created_at so the user's usage stats and ownership history
+                // survive the overwrite.
+                local.name = tpl.name;
+                local.tags = tpl.tags;
+                local.folder = tpl.folder;
+                local.opening = tpl.opening;
+                local.body = tpl.body;
+                local.updated_at = now.clone();
+                overwritten += 1;
+            }
+            None => additions.push(tpl),
         }
     }
     let added = additions.len();
 
-    // Prepend in file order so the imported chunk lands at the top and keeps
-    // its internal ordering. tail = existing.
+    // Prepend new additions in file order so the imported chunk lands at the
+    // top and keeps its internal ordering. Overwrites stayed in place above.
     additions.extend(data.templates.into_iter());
     data.templates = additions;
 
     store.save(&data)?;
     Ok(ImportResult {
         added,
+        overwritten,
         skipped,
         templates: data.templates,
     })
