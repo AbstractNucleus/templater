@@ -4,6 +4,31 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-05-27
+
+### Added
+
+- **"Overwrite duplicates" toggle on template import.** Off by default
+  (existing behavior: matching ids are skipped). Toggled on, matching
+  templates have their `name` / `tags` / `folder` / `opening` / `body`
+  replaced by the import file's version; `pinned` / `copy_count` /
+  `last_used_at` / `created_at` stay local; the pre-overwrite content is
+  prepended onto the template's `history` (cap 10) so the existing
+  Revert UI is the undo. Templates not present in the import file are
+  always untouched
+  ([PR #23](https://github.com/AbstractNucleus/templater/pull/23)).
+
+### Fixed
+
+- **Capture memory crashed with `The "path" argument must be of type
+  string. Received null`.** The popover passed `filename = undefined`,
+  which `api.ts` coerced to `null`, which the Rust command re-serialized
+  to JSON `null`, which the sidecar's `captureMemory` received as
+  `null` — and JS default-parameter values only fire on `undefined`, so
+  `filename = "memories.md"` never engaged and `path.join(root, null)`
+  threw. Coalesced explicitly at the function entry
+  ([PR #24](https://github.com/AbstractNucleus/templater/pull/24)).
+
 ## [0.5.1] — 2026-05-27
 
 ### Added
