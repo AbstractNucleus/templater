@@ -8,11 +8,6 @@
   import HotkeySection from "./settings/HotkeySection.svelte";
   import DiagnosticsSection from "./settings/DiagnosticsSection.svelte";
   import UpdatesSection from "./settings/UpdatesSection.svelte";
-  import SettingsGeneral from "./settings/SettingsGeneral.svelte";
-  import SettingsContext from "./settings/SettingsContext.svelte";
-  import SettingsTemplates from "./settings/SettingsTemplates.svelte";
-  import SettingsUpdates from "./settings/SettingsUpdates.svelte";
-  import SettingsDiagnostics from "./settings/SettingsDiagnostics.svelte";
 
   type PortResult =
     | { kind: "ok"; message: string }
@@ -25,6 +20,15 @@
     notes: string;
     install: (onProgress?: (received: number, total: number | null) => void) => Promise<void>;
   };
+
+  type TabId =
+    | "general"
+    | "shortcuts"
+    | "ai"
+    | "snippets"
+    | "context"
+    | "templates"
+    | "about";
 
   let {
     settings,
@@ -66,7 +70,37 @@
   let portBusy = $state(false);
   /** Transient per-action choice — not persisted; resets to false each open. */
   let overwriteOnImport = $state(false);
-  let activeTab = $state<"general" | "context" | "templates" | "diagnostics" | "updates">("general");
+  let activeTab = $state<TabId>("general");
+
+  // Sidebar groups: visual divider between groups, no labels — 7 items don't
+  // need headings, but app vs. writing vs. data is a useful eye anchor.
+  const TAB_GROUPS: { id: TabId; label: string }[][] = [
+    [
+      { id: "general", label: "General" },
+      { id: "shortcuts", label: "Shortcuts" },
+    ],
+    [
+      { id: "ai", label: "AI" },
+      { id: "snippets", label: "Snippets" },
+      { id: "context", label: "Context" },
+    ],
+    [
+      { id: "templates", label: "Templates" },
+    ],
+    [
+      { id: "about", label: "About" },
+    ],
+  ];
+
+  const TAB_TITLES: Record<TabId, string> = {
+    general: "General",
+    shortcuts: "Shortcuts",
+    ai: "AI backend",
+    snippets: "Signature & snippets",
+    context: "Context sources",
+    templates: "Templates",
+    about: "About",
+  };
 
   async function handleExportClick(): Promise<void> {
     if (portBusy) return;
@@ -259,248 +293,257 @@
   onkeydown={(e) => e.key === "Escape" && onClose()}
 >
   <div class="modal">
-    <header>
-      <h2>Settings</h2>
-      <button class="close" onclick={onClose} aria-label="Close">×</button>
-    </header>
-
-    <nav class="settings-tabs" aria-label="Settings sections">
-      <button class:active={activeTab === "general"} onclick={() => (activeTab = "general")}>General</button>
-      <button class:active={activeTab === "context"} onclick={() => (activeTab = "context")}>Context</button>
-      <button class:active={activeTab === "templates"} onclick={() => (activeTab = "templates")}>Templates</button>
-      <button class:active={activeTab === "diagnostics"} onclick={() => (activeTab = "diagnostics")}>Diagnostics</button>
-      <button class:active={activeTab === "updates"} onclick={() => (activeTab = "updates")}>Updates</button>
-    </nav>
-
-    {#if activeTab === "general"}
-      <SettingsGeneral>
-    <section>
-      <div class="section-label">Mode</div>
-      <div class="theme-toggle">
-        <button
-          class="theme-btn"
-          class:active={settings.mode === "editor"}
-          onclick={() => setMode("editor")}
-        >
-          Editor
-        </button>
-        <button
-          class="theme-btn"
-          class:active={settings.mode === "user"}
-          onclick={() => setMode("user")}
-        >
-          User
-        </button>
+    <aside class="sidebar" aria-label="Settings sections">
+      <div class="sidebar-header">
+        <span class="sidebar-title">Settings</span>
       </div>
-      <div class="hint">
-        {#if settings.mode === "editor"}
-          Editor mode — full access. You can create, edit, duplicate, and delete templates.
-        {:else}
-          User mode — read-only. You can browse, "Base on template" to draft a message,
-          and copy the result, but you can't save changes to the catalog.
-        {/if}
-      </div>
-    </section>
-
-    <BackendSection
-      backend={settings.paste_backend}
-      {envApiKeyOverride}
-      onChange={setPasteBackend}
-    />
-
-    <section>
-      <div class="section-label">Appearance</div>
-      <div class="theme-toggle">
-        <button
-          class="theme-btn"
-          class:active={settings.theme === "dark"}
-          onclick={() => setTheme("dark")}
-        >
-          Dark
-        </button>
-        <button
-          class="theme-btn"
-          class:active={settings.theme === "light"}
-          onclick={() => setTheme("light")}
-        >
-          Light
-        </button>
-      </div>
-    </section>
-
-    <section>
-      <div class="section-label">Global signature</div>
-      <textarea
-        class="field-textarea"
-        rows="3"
-        placeholder={"— Your Name\\nyou@example.com"}
-        value={settings.global_signature}
-        oninput={(e) => updateSignature(e.currentTarget.value)}
-      ></textarea>
-      <div class="hint">Used when a template's own signature is empty and "Include signature" is on.</div>
-    </section>
-
-    <section>
-      <div class="section-label">Global snippets</div>
-      {#if snippetRows.length > 0}
-        <ul class="snippet-list">
-          {#each snippetRows as row, idx (idx)}
-            <li class="snippet-row">
-              <input
-                class="snippet-input snippet-key"
-                type="text"
-                placeholder="key (e.g. me_name)"
-                value={row.key}
-                oninput={(e) => updateSnippetKey(idx, e.currentTarget.value)}
-              />
-              <input
-                class="snippet-input snippet-value"
-                type="text"
-                placeholder="expansion"
-                value={row.value}
-                oninput={(e) => updateSnippetValue(idx, e.currentTarget.value)}
-              />
-              <button
-                class="snippet-remove"
-                title="Remove snippet"
-                aria-label="Remove snippet"
-                onclick={() => removeSnippet(idx)}
-              >×</button>
-            </li>
+      <nav class="sidebar-nav">
+        {#each TAB_GROUPS as group, gi (gi)}
+          {#if gi > 0}
+            <div class="sidebar-divider" aria-hidden="true"></div>
+          {/if}
+          {#each group as tab (tab.id)}
+            <button
+              class="sidebar-tab"
+              class:active={activeTab === tab.id}
+              onclick={() => (activeTab = tab.id)}
+            >
+              {tab.label}
+            </button>
           {/each}
-        </ul>
-      {/if}
-      <div class="port-row">
-        <button class="port-btn" onclick={addSnippetRow}>+ Add snippet</button>
-      </div>
-      <div class="hint">
-        Snippets expand at copy time alongside <code>{"{{date}}"}</code> /
-        <code>{"{{time}}"}</code>. Use the key as the placeholder name —
-        <code>{"{{me_name}}"}</code> with key <code>me_name</code> expands to its value.
-        Per-template fills override snippets.
-      </div>
-    </section>
-      </SettingsGeneral>
-    {/if}
+        {/each}
+      </nav>
+    </aside>
 
-    {#if activeTab === "templates"}
-      <SettingsTemplates>
-    <section>
-      <div class="section-label">Templates</div>
-      <div class="port-row">
-        <button class="port-btn" disabled={portBusy} onclick={handleExportClick}>
-          Export…
-        </button>
-        {#if settings.mode === "editor"}
-          <button class="port-btn" disabled={portBusy} onclick={handleImportClick}>
-            Import…
-          </button>
+    <div class="pane">
+      <header class="pane-header">
+        <h2>{TAB_TITLES[activeTab]}</h2>
+        <button class="close" onclick={onClose} aria-label="Close">×</button>
+      </header>
+
+      <div class="pane-body">
+        {#if activeTab === "general"}
+          <section>
+            <div class="section-label">Mode</div>
+            <div class="seg-toggle">
+              <button
+                class="seg-btn"
+                class:active={settings.mode === "editor"}
+                onclick={() => setMode("editor")}
+              >
+                Editor
+              </button>
+              <button
+                class="seg-btn"
+                class:active={settings.mode === "user"}
+                onclick={() => setMode("user")}
+              >
+                User
+              </button>
+            </div>
+            <div class="hint">
+              {#if settings.mode === "editor"}
+                Full access. Create, edit, duplicate, and delete templates.
+              {:else}
+                Read-only. Browse, "Base on template" to draft a message, and copy the result —
+                but no catalog changes.
+              {/if}
+            </div>
+          </section>
+
+          <section>
+            <div class="section-label">Appearance</div>
+            <div class="seg-toggle">
+              <button
+                class="seg-btn"
+                class:active={settings.theme === "dark"}
+                onclick={() => setTheme("dark")}
+              >
+                Dark
+              </button>
+              <button
+                class="seg-btn"
+                class:active={settings.theme === "light"}
+                onclick={() => setTheme("light")}
+              >
+                Light
+              </button>
+            </div>
+          </section>
+
+          <WindowSection {settings} {onUpdate} />
         {/if}
-      </div>
-      {#if settings.mode === "editor"}
-        <label class="overwrite-toggle">
-          <input
-            type="checkbox"
-            checked={overwriteOnImport}
-            onchange={(e) => (overwriteOnImport = e.currentTarget.checked)}
+
+        {#if activeTab === "shortcuts"}
+          <HotkeySection
+            {settings}
+            {captureCapturing}
+            bind:captureError
+            {onUpdate}
+            onStartCapture={startCapture}
           />
-          <span>Overwrite duplicates</span>
-        </label>
-      {/if}
-      {#if portMessage}
-        <div class="port-message">{portMessage}</div>
-      {/if}
-      {#if portError}
-        <div class="capture-error">{portError}</div>
-      {/if}
-      <div class="hint">
-        {#if settings.mode === "editor"}
-          Export writes all templates to a JSON file. Import merges by id —
-          {#if overwriteOnImport}
-            matching templates are <strong>replaced</strong> with the import
-            file's content (your usage stats stay; the pre-overwrite version
-            is appended to history so you can Revert).
-          {:else}
-            templates already on this machine are kept and duplicates are
-            skipped.
+
+          <section>
+            <div class="section-label">Keyboard shortcuts</div>
+            <div class="port-row">
+              <button class="port-btn" onclick={onOpenCheatSheet}>Show cheat sheet</button>
+            </div>
+            <div class="hint">Or press <code>?</code> any time the search isn't focused.</div>
+          </section>
+        {/if}
+
+        {#if activeTab === "ai"}
+          <BackendSection
+            backend={settings.paste_backend}
+            {envApiKeyOverride}
+            onChange={setPasteBackend}
+          />
+        {/if}
+
+        {#if activeTab === "snippets"}
+          <section>
+            <div class="section-label">Global signature</div>
+            <textarea
+              class="field-textarea"
+              rows="3"
+              placeholder={"— Your Name\\nyou@example.com"}
+              value={settings.global_signature}
+              oninput={(e) => updateSignature(e.currentTarget.value)}
+            ></textarea>
+            <div class="hint">
+              Used when a template's own signature is empty and "Include signature" is on.
+            </div>
+          </section>
+
+          <section>
+            <div class="section-label">Global snippets</div>
+            {#if snippetRows.length > 0}
+              <ul class="snippet-list">
+                {#each snippetRows as row, idx (idx)}
+                  <li class="snippet-row">
+                    <input
+                      class="snippet-input snippet-key"
+                      type="text"
+                      placeholder="key (e.g. me_name)"
+                      value={row.key}
+                      oninput={(e) => updateSnippetKey(idx, e.currentTarget.value)}
+                    />
+                    <input
+                      class="snippet-input snippet-value"
+                      type="text"
+                      placeholder="expansion"
+                      value={row.value}
+                      oninput={(e) => updateSnippetValue(idx, e.currentTarget.value)}
+                    />
+                    <button
+                      class="snippet-remove"
+                      title="Remove snippet"
+                      aria-label="Remove snippet"
+                      onclick={() => removeSnippet(idx)}
+                    >×</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            <div class="port-row">
+              <button class="port-btn" onclick={addSnippetRow}>+ Add snippet</button>
+            </div>
+            <div class="hint">
+              Snippets expand at copy time alongside <code>{"{{date}}"}</code> /
+              <code>{"{{time}}"}</code>. Use the key as the placeholder name —
+              <code>{"{{me_name}}"}</code> with key <code>me_name</code> expands to its value.
+              Per-template fills override snippets.
+            </div>
+          </section>
+        {/if}
+
+        {#if activeTab === "context"}
+          <section>
+            <div class="section-label">Context sources</div>
+            {#if settings.context_sources.length === 0}
+              <div class="hint">No context folders configured. Add folders from the Context pane.</div>
+            {:else}
+              <ul class="context-source-list">
+                {#each settings.context_sources as source (source)}
+                  <li>{source}</li>
+                {/each}
+              </ul>
+            {/if}
+            <div class="hint">
+              These folders are indexed lazily by the sidecar and used during adapt/edit calls.
+            </div>
+          </section>
+        {/if}
+
+        {#if activeTab === "templates"}
+          <section>
+            <div class="section-label">Import / export</div>
+            <div class="port-row">
+              <button class="port-btn" disabled={portBusy} onclick={handleExportClick}>
+                Export…
+              </button>
+              {#if settings.mode === "editor"}
+                <button class="port-btn" disabled={portBusy} onclick={handleImportClick}>
+                  Import…
+                </button>
+              {/if}
+            </div>
+            {#if settings.mode === "editor"}
+              <label class="overwrite-toggle">
+                <input
+                  type="checkbox"
+                  checked={overwriteOnImport}
+                  onchange={(e) => (overwriteOnImport = e.currentTarget.checked)}
+                />
+                <span>Overwrite duplicates</span>
+              </label>
+            {/if}
+            {#if portMessage}
+              <div class="port-message">{portMessage}</div>
+            {/if}
+            {#if portError}
+              <div class="capture-error">{portError}</div>
+            {/if}
+            <div class="hint">
+              {#if settings.mode === "editor"}
+                Export writes all templates to a JSON file. Import merges by id —
+                {#if overwriteOnImport}
+                  matching templates are <strong>replaced</strong> with the import
+                  file's content (your usage stats stay; the pre-overwrite version
+                  is appended to history so you can Revert).
+                {:else}
+                  templates already on this machine are kept and duplicates are
+                  skipped.
+                {/if}
+              {:else}
+                Export writes all templates to a JSON file. Import is disabled in User mode.
+              {/if}
+            </div>
+          </section>
+
+          {#if settings.mode === "editor"}
+            <TagsSection
+              {tagCounts}
+              bind:renamingTag
+              bind:confirmingDeleteTag
+              {onRenameTag}
+              {onDeleteTag}
+            />
           {/if}
-        {:else}
-          Export writes all templates to a JSON file. Import is disabled in User mode.
+
+          <BackupsSection
+            mode={settings.mode}
+            {onListBackups}
+            {onRestoreBackup}
+          />
+        {/if}
+
+        {#if activeTab === "about"}
+          <UpdatesSection {currentVersion} {onCheckUpdate} />
+          <DiagnosticsSection />
         {/if}
       </div>
-    </section>
-
-    {#if settings.mode === "editor"}
-      <TagsSection
-        {tagCounts}
-        bind:renamingTag
-        bind:confirmingDeleteTag
-        {onRenameTag}
-        {onDeleteTag}
-      />
-    {/if}
-
-    <BackupsSection
-      mode={settings.mode}
-      {onListBackups}
-      {onRestoreBackup}
-    />
-      </SettingsTemplates>
-    {/if}
-
-    {#if activeTab === "general"}
-      <SettingsGeneral>
-    <WindowSection {settings} {onUpdate} />
-
-    <HotkeySection
-      {settings}
-      {captureCapturing}
-      bind:captureError
-      {onUpdate}
-      onStartCapture={startCapture}
-    />
-
-    <section>
-      <div class="section-label">Keyboard shortcuts</div>
-      <div class="port-row">
-        <button class="port-btn" onclick={onOpenCheatSheet}>Show cheat sheet</button>
-      </div>
-      <div class="hint">Or press <code>?</code> any time the search isn't focused.</div>
-    </section>
-      </SettingsGeneral>
-    {/if}
-
-    {#if activeTab === "context"}
-      <SettingsContext>
-        <section>
-          <div class="section-label">Context sources</div>
-          {#if settings.context_sources.length === 0}
-            <div class="hint">No context folders configured. Add folders from the Context pane.</div>
-          {:else}
-            <ul class="context-source-list">
-              {#each settings.context_sources as source (source)}
-                <li>{source}</li>
-              {/each}
-            </ul>
-          {/if}
-          <div class="hint">
-            These folders are indexed lazily by the sidecar and used during adapt/edit calls.
-          </div>
-        </section>
-      </SettingsContext>
-    {/if}
-
-    {#if activeTab === "diagnostics"}
-      <SettingsDiagnostics>
-        <DiagnosticsSection />
-      </SettingsDiagnostics>
-    {/if}
-
-    {#if activeTab === "updates"}
-      <SettingsUpdates>
-        <UpdatesSection {currentVersion} {onCheckUpdate} />
-      </SettingsUpdates>
-    {/if}
+    </div>
   </div>
 </div>
 
@@ -516,58 +559,101 @@
   }
 
   .modal {
+    display: grid;
+    grid-template-columns: 184px 1fr;
     background: var(--bg-base);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    width: 480px;
-    max-width: calc(100vw - 48px);
-    max-height: calc(100vh - 80px);
-    overflow-y: auto;
+    border-radius: 10px;
+    width: min(780px, calc(100vw - 48px));
+    height: min(620px, calc(100vh - 80px));
+    box-shadow: 0 24px 60px var(--shadow);
     color: var(--text);
+    overflow: hidden;
   }
 
-  header {
+  /* Sidebar */
+  .sidebar {
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border);
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
+    flex-direction: column;
+    min-height: 0;
   }
 
-  header h2 {
-    margin: 0;
-    font-size: 0.95rem;
+  .sidebar-header {
+    padding: 16px 16px 10px;
+  }
+
+  .sidebar-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-deemphasis);
     font-weight: 600;
   }
 
-  .settings-tabs {
+  .sidebar-nav {
     display: flex;
-    gap: 4px;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
+    flex-direction: column;
+    gap: 1px;
+    padding: 0 8px 12px;
+    overflow-y: auto;
+    flex: 1;
   }
 
-  .settings-tabs button {
+  .sidebar-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 8px 4px;
+  }
+
+  .sidebar-tab {
+    text-align: left;
     background: transparent;
     color: var(--text-muted);
-    border: 1px solid transparent;
-    border-radius: 4px;
-    padding: 4px 8px;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 10px;
     cursor: pointer;
     font: inherit;
-    font-size: 0.76rem;
+    font-size: 0.85rem;
+    line-height: 1.2;
+    position: relative;
   }
 
-  .settings-tabs button:hover {
+  .sidebar-tab:hover {
     background: var(--bg-hover);
     color: var(--text);
   }
 
-  .settings-tabs button.active {
+  .sidebar-tab.active {
     background: var(--bg-active);
     color: var(--text-strong);
-    border-color: var(--border);
+  }
+
+  /* Right pane */
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+
+  .pane-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-strong);
+    letter-spacing: -0.005em;
   }
 
   .close {
@@ -578,36 +664,48 @@
     line-height: 1;
     cursor: pointer;
     padding: 0 4px;
+    border-radius: 4px;
   }
 
   .close:hover {
     color: var(--text);
+    background: var(--bg-hover);
   }
 
-  section {
-    padding: 14px 16px;
+  .pane-body {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Shared section styles — global so child section components inherit them
+     without each one re-declaring the same ~80 lines. Scoped to .pane-body
+     so they don't leak to the rest of the app. */
+  :global(.pane-body section) {
+    padding: 16px 20px;
     border-bottom: 1px solid var(--border);
   }
 
-  section:last-of-type {
+  :global(.pane-body section:last-of-type) {
     border-bottom: none;
   }
 
-  .section-label {
-    font-size: 0.7rem;
+  :global(.pane-body .section-label) {
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-deemphasis);
     margin-bottom: 8px;
+    font-weight: 600;
   }
 
-  .hint {
+  :global(.pane-body .hint) {
     color: var(--text-muted);
     font-size: 0.82rem;
-    line-height: 1.4;
+    line-height: 1.45;
   }
 
-  code {
+  :global(.pane-body code) {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -617,31 +715,110 @@
     color: var(--text);
   }
 
-  .capture-error {
+  :global(.pane-body .capture-error) {
     color: var(--accent-danger-text);
     font-size: 0.78rem;
     margin-top: 6px;
   }
 
+  :global(.pane-body .port-row) {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  :global(.pane-body .port-btn) {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 14px;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+    transition: background 0.08s ease, border-color 0.08s ease;
+  }
+
+  :global(.pane-body .port-btn:hover:not(:disabled)) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+
+  :global(.pane-body .port-btn:disabled) {
+    opacity: 0.5;
+    cursor: wait;
+  }
+
+  :global(.pane-body .port-message) {
+    color: var(--accent-positive-text);
+    background: var(--accent-positive-bg);
+    border: 1px solid var(--accent-positive-border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    margin-bottom: 6px;
+  }
+
+  /* Segmented toggle — used for binary choices (Editor/User, Dark/Light,
+     Agent/API). Active state uses the brand color so the selection reads as
+     identity, not status. */
+  :global(.pane-body .seg-toggle) {
+    display: inline-flex;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  :global(.pane-body .seg-btn) {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 5px 14px;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.83rem;
+    transition: background 0.1s ease, color 0.1s ease;
+    min-width: 84px;
+  }
+
+  :global(.pane-body .seg-btn:hover:not(.active)) {
+    color: var(--text);
+  }
+
+  :global(.pane-body .seg-btn.active) {
+    background: var(--accent-brand-soft);
+    color: var(--accent-brand-text);
+    box-shadow: inset 0 0 0 1px var(--accent-brand);
+  }
+
+  /* Snippets */
   .field-textarea {
     width: 100%;
     box-sizing: border-box;
     background: var(--bg-input);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 6px 10px;
-    border-radius: 4px;
+    padding: 8px 10px;
+    border-radius: 5px;
     font: inherit;
     font-size: 0.85rem;
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    line-height: 1.4;
+    line-height: 1.45;
     resize: vertical;
     min-height: 60px;
   }
 
+  .field-textarea:focus {
+    outline: none;
+    border-color: var(--border-focus);
+  }
+
   .snippet-list {
     list-style: none;
-    margin: 0 0 6px;
+    margin: 0 0 8px;
     padding: 0;
     display: flex;
     flex-direction: column;
@@ -658,8 +835,8 @@
     background: var(--bg-input);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 4px 8px;
-    border-radius: 4px;
+    padding: 5px 9px;
+    border-radius: 5px;
     font: inherit;
     font-size: 0.8rem;
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -671,7 +848,7 @@
   }
 
   .snippet-key {
-    flex: 0 0 130px;
+    flex: 0 0 140px;
   }
 
   .snippet-value {
@@ -683,12 +860,12 @@
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text-muted);
-    width: 24px;
-    height: 24px;
-    border-radius: 4px;
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
     cursor: pointer;
     font: inherit;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
     line-height: 1;
     padding: 0;
     flex-shrink: 0;
@@ -700,73 +877,28 @@
     color: var(--accent-danger-text);
   }
 
+  /* Context */
   .context-source-list {
     list-style: none;
     margin: 0 0 8px;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.72rem;
+    font-size: 0.74rem;
     color: var(--text-muted);
   }
 
-  .field-textarea:focus {
-    outline: none;
-    border-color: var(--border-focus);
-  }
-
-  .theme-toggle {
-    display: flex;
-    gap: 6px;
-  }
-
-  .theme-btn {
-    flex: 1;
-    background: transparent;
+  .context-source-list li {
+    background: var(--bg-input);
     border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 12px;
     border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
+    padding: 6px 10px;
+    word-break: break-all;
   }
 
-  .theme-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .theme-btn.active {
-    background: var(--accent-positive-bg);
-    border-color: var(--accent-positive-border);
-    color: var(--accent-positive-text);
-  }
-
-  .port-row {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .port-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .port-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
+  /* Templates */
   .overwrite-toggle {
     display: flex;
     align-items: center;
@@ -779,21 +911,6 @@
   }
 
   .overwrite-toggle input[type="checkbox"] {
-    accent-color: var(--text-muted);
-  }
-
-  .port-btn:disabled {
-    opacity: 0.5;
-    cursor: wait;
-  }
-
-  .port-message {
-    color: var(--accent-positive-text);
-    background: var(--accent-positive-bg);
-    border: 1px solid var(--accent-positive-border);
-    border-radius: 4px;
-    padding: 6px 10px;
-    font-size: 0.8rem;
-    margin-bottom: 6px;
+    accent-color: var(--accent-brand);
   }
 </style>

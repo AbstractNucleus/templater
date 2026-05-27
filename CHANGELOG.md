@@ -4,6 +4,45 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-28
+
+### Changed
+
+- **Settings dialog reworked.** Switched from a 480-px vertical-scroll
+  modal with a top tab strip to a 780×620 dialog with a left rail of
+  sections and a single right-hand content pane. New IA: **General**
+  (mode, appearance, window) · **Shortcuts** · **AI** (paste-match
+  backend) · **Snippets** (signature + global snippets) · **Context** ·
+  **Templates** (import/export, tags, backups) · **About** (version,
+  updates, diagnostics). The previous tab structure split General
+  content across two render blocks; that's gone.
+- **Active segmented toggles now use the brand orange.** Editor/User,
+  Dark/Light, and Agent SDK / Anthropic API selectors moved from the
+  `--accent-positive` green to a pill-grouped `.seg-toggle` with a
+  brand-color inset ring so selection reads as identity, not status.
+- **Hotkey display now renders real keycaps.** The accelerator string
+  is split on `+` and each modifier and key renders as a `<kbd>` with a
+  vertical gradient, top-inset highlight, and 1 px bottom shadow ledge.
+  Symbol codes get friendly labels (`Backslash` → `\`, `ArrowUp` → `↑`,
+  etc).
+
+### Removed
+
+- **Dead settings wrapper components.** `SettingsGeneral.svelte`,
+  `SettingsContext.svelte`, `SettingsTemplates.svelte`,
+  `SettingsDiagnostics.svelte`, and `SettingsUpdates.svelte` were
+  `{@render children()}` passthroughs left over from a prior refactor;
+  they've been deleted.
+
+### Internal
+
+- **Consolidated duplicated section CSS.** `.section-label`, `.hint`,
+  `.port-btn`, `.port-row`, `.port-message`, `.capture-error`, `code`,
+  and `section` rules used to be re-declared in each
+  `settings/*Section.svelte` file (~80 lines per component). They now
+  live once as `:global(.pane-body …)` rules in `SettingsModal.svelte`
+  and the child components only carry their section-specific styles.
+
 ## [0.5.2] — 2026-05-27
 
 ### Added

@@ -108,67 +108,14 @@
     The newest 5 templates.json backups are kept. Restoring keeps your settings and
     backs up the current templates first, so undoing a restore is one more restore away.
   </div>
-  <div class="port-row">
+  <div class="port-row data-folder-row">
     <button class="port-btn" onclick={() => void openDataDir()}>Open data folder</button>
   </div>
 </section>
 
 <style>
-  section {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  section:last-of-type {
-    border-bottom: none;
-  }
-
-  .section-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-deemphasis);
-    margin-bottom: 8px;
-  }
-
-  .hint {
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    line-height: 1.4;
-  }
-
-  .capture-error {
-    color: var(--accent-danger-text);
-    font-size: 0.78rem;
-    margin-top: 6px;
-  }
-
-  .port-row {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .port-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .port-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .port-btn:disabled {
-    opacity: 0.5;
-    cursor: wait;
-  }
+  /* section / label / hint / port-btn / port-row / capture-error inherited
+     from .pane-body. */
 
   .port-btn.danger {
     background: var(--accent-danger-bg);
@@ -185,8 +132,9 @@
     margin: 0 0 8px;
     padding: 0;
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 6px;
     overflow: hidden;
+    background: var(--bg-input);
   }
 
   .backup-row {
@@ -194,7 +142,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 10px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     font-size: 0.82rem;
   }
@@ -223,15 +171,20 @@
     background: var(--accent-warning-bg);
     border: 1px solid var(--accent-warning-border);
     color: var(--accent-warning-text);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 10px 12px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     font-size: 0.82rem;
     line-height: 1.45;
   }
 
-  .restore-confirm .port-row {
+  .restore-confirm :global(.port-row) {
     margin-top: 8px;
+    margin-bottom: 0;
+  }
+
+  .data-folder-row {
+    margin-top: 10px;
     margin-bottom: 0;
   }
 </style>

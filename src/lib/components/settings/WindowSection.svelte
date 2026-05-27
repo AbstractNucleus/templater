@@ -21,7 +21,7 @@
 
 <section>
   <div class="section-label">Window</div>
-  <label class="row">
+  <label class="check-row">
     <input
       type="checkbox"
       checked={settings.always_on_top_default}
@@ -29,7 +29,7 @@
     />
     <span>Always on top by default (applies on launch)</span>
   </label>
-  <label class="row">
+  <label class="check-row">
     <input
       type="checkbox"
       checked={settings.start_minimised_to_tray}
@@ -38,7 +38,7 @@
     <span>Start minimised to tray</span>
   </label>
   {#if settings.window_geometry}
-    <div class="hint">
+    <div class="hint window-pos">
       Window position saved: {settings.window_geometry.x},{settings.window_geometry.y}
       ({settings.window_geometry.width}×{settings.window_geometry.height})
     </div>
@@ -56,30 +56,9 @@
 </section>
 
 <style>
-  section {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
+  /* section / label / hint / port-btn / port-row inherited from .pane-body. */
 
-  section:last-of-type {
-    border-bottom: none;
-  }
-
-  .section-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-deemphasis);
-    margin-bottom: 8px;
-  }
-
-  .hint {
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    line-height: 1.4;
-  }
-
-  .row {
+  .check-row {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -89,38 +68,15 @@
     margin-bottom: 6px;
   }
 
-  .row:last-of-type {
+  .check-row:last-of-type {
     margin-bottom: 0;
   }
 
-  .row input[type="checkbox"] {
-    accent-color: var(--text-muted);
+  .check-row input[type="checkbox"] {
+    accent-color: var(--accent-brand);
   }
 
-  .port-row {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .port-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .port-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .port-btn:disabled {
-    opacity: 0.5;
-    cursor: wait;
+  .window-pos {
+    margin-top: 8px;
   }
 </style>

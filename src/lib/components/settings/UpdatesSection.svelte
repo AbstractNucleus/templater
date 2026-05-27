@@ -109,81 +109,8 @@
 </section>
 
 <style>
-  section {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  section:last-of-type {
-    border-bottom: none;
-  }
-
-  .section-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-deemphasis);
-    margin-bottom: 8px;
-  }
-
-  .hint {
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    line-height: 1.4;
-  }
-
-  code {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 5px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.78rem;
-    color: var(--text);
-  }
-
-  .capture-error {
-    color: var(--accent-danger-text);
-    font-size: 0.78rem;
-    margin-top: 6px;
-  }
-
-  .port-row {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .port-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .port-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .port-btn:disabled {
-    opacity: 0.5;
-    cursor: wait;
-  }
-
-  .port-message {
-    color: var(--accent-positive-text);
-    background: var(--accent-positive-bg);
-    border: 1px solid var(--accent-positive-border);
-    border-radius: 4px;
-    padding: 6px 10px;
-    font-size: 0.8rem;
-    margin-bottom: 6px;
-  }
+  /* section / label / hint / code / port-btn / port-row / port-message /
+     capture-error inherited from .pane-body. */
 
   .release-notes {
     background: var(--bg-input);

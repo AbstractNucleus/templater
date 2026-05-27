@@ -143,43 +143,17 @@
 </section>
 
 <style>
-  section {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  section:last-of-type {
-    border-bottom: none;
-  }
-
-  .section-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-deemphasis);
-    margin-bottom: 8px;
-  }
-
-  .hint {
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    line-height: 1.4;
-  }
-
-  .capture-error {
-    color: var(--accent-danger-text);
-    font-size: 0.78rem;
-    margin-top: 6px;
-  }
+  /* section / label / hint / capture-error inherited from .pane-body. */
 
   .tag-manage-list {
     list-style: none;
     margin: 0 0 8px;
     padding: 0;
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 6px;
     max-height: 220px;
     overflow-y: auto;
+    background: var(--bg-input);
   }
 
   .tag-manage-row {
