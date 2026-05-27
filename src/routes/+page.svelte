@@ -397,6 +397,11 @@
   let editAgentDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
   let editBodyUpdateSeq = $state(0);
   let editBodyUpdate = $state<{ templateId: string; body: string; seq: number } | null>(null);
+  // Agent → form body sync for the new-template flow. Mirrors editBodyUpdate
+  // but uses templateId=null since no template exists yet. The form's
+  // current body lives in agentStore.baseDraft (synced via onDraftChange).
+  let createBodyUpdateSeq = $state(0);
+  let createBodyUpdate = $state<{ templateId: string | null; body: string; seq: number } | null>(null);
   let settingsOpen = $state(false);
   let cheatSheetOpen = $state(false);
 
@@ -706,6 +711,20 @@
     editAgentDraft = draft;
   }
 
+  // Parallels handleEditAgentPrompt for the new-template flow. The shared
+  // draft is agentStore.baseDraft (kept current by handleCreateDraftChange
+  // below), so the agent sees the user's latest in-form edits as context.
+  async function handleCreateAgentPrompt(prompt: string): Promise<void> {
+    await agentStore.handleEditAgentPrompt(agentStore.baseDraft, prompt, (updated) => {
+      createBodyUpdateSeq += 1;
+      createBodyUpdate = { templateId: null, body: updated.body, seq: createBodyUpdateSeq };
+    });
+  }
+
+  function handleCreateDraftChange(draft: { opening: string; body: string }): void {
+    agentStore.baseDraft = draft;
+  }
+
   function ignoreDraftChange(): void {}
 
   async function duplicateSelectedTemplate(): Promise<void> {
@@ -949,6 +968,16 @@
   $effect(() => {
     if (!inPasteMode && agentStore.adaptError !== null) agentStore.adaptError = null;
   });
+
+  // Drop the agent → form body signal when the new-template flow exits.
+  // Unlike edit mode (which dedupes by templateId), create mode uses
+  // templateId=null, so a stale signal would re-apply on next mount.
+  $effect(() => {
+    if (!agentStore.baseMode && createBodyUpdate !== null) {
+      createBodyUpdate = null;
+      createBodyUpdateSeq = 0;
+    }
+  });
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
@@ -998,7 +1027,10 @@
         progress={agentStore.agentProgress}
         sourceName={agentStore.baseSourceName}
         width={agentSidebarWidth}
-        onSubmit={(p) => agentStore.handleAgentPrompt(p)}
+        onSubmit={(p) =>
+          agentStore.baseKind === "new"
+            ? void handleCreateAgentPrompt(p)
+            : agentStore.handleAgentPrompt(p)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -1027,7 +1059,10 @@
           onToggleOpening={(v) => (includeOpening = v)}
           onToggleSignature={(v) => (includeSignature = v)}
           onEnterEdit={() => {}}
-          onCancelEdit={() => agentStore.closeSaveAs()}
+          onCancelEdit={() =>
+            agentStore.baseKind === "new"
+              ? agentStore.exitBaseMode()
+              : agentStore.closeSaveAs()}
           onSave={() => {}}
           onCreate={(d) => void agentStore.commitNewTemplate(d)}
           onDuplicate={() => {}}
@@ -1037,8 +1072,8 @@
           onCopySuccess={(id) => void templatesStore.recordCopy(id)}
           onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
           onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
-          aiBodyUpdate={null}
-          onDraftChange={ignoreDraftChange}
+          aiBodyUpdate={agentStore.baseKind === "new" ? createBodyUpdate : null}
+          onDraftChange={agentStore.baseKind === "new" ? handleCreateDraftChange : ignoreDraftChange}
         />
       {:else}
         <EditorPane
