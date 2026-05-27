@@ -1,11 +1,20 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-  import type { Template } from "$lib/types";
+  import type { Template, TemplateDraft } from "$lib/types";
   import { composeText, splitPlaceholders, extractPlaceholders, applyValues } from "$lib/compose";
-  import TagPicker from "./TagPicker.svelte";
+  import TemplateForm from "./TemplateForm.svelte";
 
   type DraftContent = { opening: string; body: string };
   type BodyUpdate = { templateId: string; body: string; seq: number };
+
+  const EMPTY_DRAFT: TemplateDraft = {
+    name: "",
+    tags: [],
+    opening: "",
+    body: "",
+    folder: null,
+    signatureOverride: null,
+  };
 
   let {
     template,
@@ -16,16 +25,19 @@
     snippets,
     canEdit,
     availableTags,
+    availableFolders,
     copyTrigger,
     savedPlaceholderValues,
     inboundText,
     adaptBusy,
     adaptError,
+    creatingDraft = null,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
     onCancelEdit,
     onSave,
+    onCreate = () => {},
     onDuplicate,
     onDelete,
     onBaseOnTemplate,
@@ -45,6 +57,7 @@
     snippets: Record<string, string>;
     canEdit: boolean;
     availableTags: string[];
+    availableFolders: string[];
     copyTrigger: number;
     /** Persisted per-template fill-ins. Outer key: template id. */
     savedPlaceholderValues: Record<string, Record<string, string>>;
@@ -54,11 +67,16 @@
     adaptBusy: boolean;
     /** Last adapt-to-inbound error message. Null when no error or after retry. */
     adaptError: string | null;
+    /** When non-null, the panel renders the new-template form seeded from this
+     *  draft (instead of an existing template). Parent must hold a stable
+     *  reference for the form's lifetime. */
+    creatingDraft?: TemplateDraft | null;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
     onCancelEdit: () => void;
     onSave: (t: Template) => void;
+    onCreate?: (draft: TemplateDraft) => void;
     onDuplicate: () => void;
     onDelete: () => void;
     onBaseOnTemplate: () => void;
@@ -81,37 +99,41 @@
   let copyState = $state<"idle" | "ok" | "error">("idle");
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Draft state — only used when editing.
-  let draftName = $state("");
-  let draftTags = $state<string[]>([]);
-  let draftOpening = $state("");
-  let draftBody = $state("");
-  let draftSignatureOverride = $state<string | null>(null);
-  let draftFolder = $state<string | null>(null);
+  // Draft state — used by both edit and create flows.
+  let draft = $state<TemplateDraft>({ ...EMPTY_DRAFT });
   let lastAiBodyUpdateSeq = $state(0);
 
-  // Reset draft whenever we enter edit mode or switch templates while editing.
+  // Seed draft whenever we enter edit/create mode or switch templates.
+  // Reference identity on `template` and `creatingDraft` keeps this stable
+  // during ongoing edits — the effect only refires when the parent swaps
+  // the source.
   $effect(() => {
+    if (creatingDraft) {
+      draft = { ...creatingDraft };
+      return;
+    }
     if (editing && template) {
-      draftName = template.name;
-      draftTags = [...template.tags];
-      draftOpening = template.opening;
-      draftBody = template.body;
-      draftSignatureOverride = template.signature_override;
-      draftFolder = template.folder;
+      draft = {
+        name: template.name,
+        tags: [...template.tags],
+        opening: template.opening,
+        body: template.body,
+        folder: template.folder,
+        signatureOverride: template.signature_override,
+      };
     }
   });
 
   $effect(() => {
     if (!editing || !template) return;
-    onDraftChange({ opening: draftOpening, body: draftBody });
+    onDraftChange({ opening: draft.opening, body: draft.body });
   });
 
   $effect(() => {
     if (!editing || !template || aiBodyUpdate === null) return;
     if (aiBodyUpdate.templateId !== template.id || aiBodyUpdate.seq === lastAiBodyUpdateSeq) return;
     lastAiBodyUpdateSeq = aiBodyUpdate.seq;
-    draftBody = aiBodyUpdate.body;
+    draft = { ...draft, body: aiBodyUpdate.body };
   });
 
   let historyOpen = $state(false);
@@ -229,19 +251,43 @@
 
   function handleSave(): void {
     if (!template) return;
-    const sigDraft = draftSignatureOverride;
-    const sig = sigDraft !== null && sigDraft.length > 0 ? sigDraft : null;
-    const folder = draftFolder !== null && draftFolder.trim().length > 0 ? draftFolder.trim() : null;
+    const sig = draft.signatureOverride !== null && draft.signatureOverride.length > 0
+      ? draft.signatureOverride
+      : null;
+    const folder = draft.folder !== null && draft.folder.trim().length > 0 ? draft.folder.trim() : null;
     onSave({
       ...template,
-      name: draftName.trim() || "Untitled",
-      tags: draftTags,
-      opening: draftOpening,
-      body: draftBody,
+      name: draft.name.trim() || "Untitled",
+      tags: draft.tags,
+      opening: draft.opening,
+      body: draft.body,
       signature_override: sig,
       folder,
       updated_at: new Date().toISOString(),
     });
+  }
+
+  function handleCreate(): void {
+    onCreate(draft);
+  }
+
+  function handleFormSubmit(): void {
+    if (creatingDraft) handleCreate();
+    else handleSave();
+  }
+
+  function handleFormKey(e: KeyboardEvent): void {
+    if (!canEdit) return;
+    if (!creatingDraft && !editing) return;
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleFormSubmit();
+    } else if (e.key === "Escape" && creatingDraft) {
+      // Mirrors the old SaveAsModal cancel-on-Escape. Pickers stopPropagation
+      // when their dropdown is open, so this only fires from "outside" focus.
+      e.preventDefault();
+      onCancelEdit();
+    }
   }
 
   let confirmingDelete = $state(false);
@@ -272,63 +318,33 @@
   }
 </script>
 
-<svelte:window onkeydown={handleConfirmKey} />
+<svelte:window onkeydown={(e) => { handleConfirmKey(e); handleFormKey(e); }} />
 
 <section class="main">
-  {#if !template}
+  {#if !template && !creatingDraft}
     <div class="empty">
       {canEdit
         ? "Select a template from the sidebar, or create a new one."
         : "Select a template from the sidebar."}
     </div>
-  {:else if editing && canEdit}
+  {:else if canEdit && (creatingDraft || editing)}
     <div class="header-row">
-      <div class="breadcrumb">editing</div>
+      <div class="breadcrumb">{creatingDraft ? "new template" : "editing"}</div>
       <div class="actions">
         <button class="icon-btn" onclick={onCancelEdit}>Cancel</button>
-        <button class="icon-btn primary" onclick={handleSave}>Save</button>
+        <button class="icon-btn primary" onclick={handleFormSubmit}>Save</button>
       </div>
     </div>
 
-    <label class="field">
-      <span>Name</span>
-      <input type="text" bind:value={draftName} />
-    </label>
-    <div class="field">
-      <span>Tags</span>
-      <TagPicker
-        value={draftTags}
-        available={availableTags}
-        onChange={(next) => (draftTags = next)}
-      />
-    </div>
-    <label class="field">
-      <span>Opening</span>
-      <input type="text" bind:value={draftOpening} placeholder="Hi {'{{'}name{'}}'}," />
-    </label>
-    <label class="field grow">
-      <span>Body</span>
-      <textarea bind:value={draftBody} rows="10"></textarea>
-    </label>
-    <label class="field">
-      <span>Folder (optional)</span>
-      <input
-        type="text"
-        placeholder="ungrouped"
-        value={draftFolder ?? ""}
-        oninput={(e) => (draftFolder = e.currentTarget.value.length > 0 ? e.currentTarget.value : null)}
-      />
-    </label>
-    <label class="field">
-      <span>Signature override (optional)</span>
-      <textarea
-        rows="2"
-        placeholder="Leave blank to use the global signature"
-        value={draftSignatureOverride ?? ""}
-        oninput={(e) => (draftSignatureOverride = e.currentTarget.value.length > 0 ? e.currentTarget.value : null)}
-      ></textarea>
-    </label>
-  {:else}
+    <TemplateForm
+      value={draft}
+      {availableTags}
+      {availableFolders}
+      bodyGrow
+      autofocusName={!!creatingDraft}
+      onChange={(next) => (draft = next)}
+    />
+  {:else if template}
     <div class="header-row">
       <div>
         <div class="breadcrumb">{breadcrumb}</div>
@@ -859,50 +875,6 @@
 
   .copy:hover {
     background: var(--bg-hover);
-    border-color: var(--border-focus);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 10px;
-  }
-
-  .field.grow {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .field span {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-deemphasis);
-  }
-
-  .field input,
-  .field textarea {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 10px;
-    border-radius: 4px;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .field textarea {
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    line-height: 1.5;
-    resize: vertical;
-    min-height: 120px;
-    flex: 1;
-  }
-
-  .field input:focus,
-  .field textarea:focus {
-    outline: none;
     border-color: var(--border-focus);
   }
 
