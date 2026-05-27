@@ -316,24 +316,24 @@ export async function searchContext(query: string, limit?: number): Promise<Cont
 export interface CaptureMemoryResult {
   appendedTo: string;
   signal: string;
+  title: string;
 }
 
 export async function captureMemory(
   raw: string,
   source: string,
-  filename: string | undefined,
   backend: PasteBackend,
 ): Promise<CaptureMemoryResult> {
   const res = await invoke<OkResponse>("context_capture_memory", {
     raw,
     source,
-    filename: filename ?? null,
     backend,
   });
   if (!res.ok) throw new Error(res.error ?? "capture failed");
   return {
     appendedTo: String(res.appendedTo ?? ""),
     signal: String(res.signal ?? ""),
+    title: String(res.title ?? ""),
   };
 }
 

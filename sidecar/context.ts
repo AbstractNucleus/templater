@@ -91,7 +91,7 @@ export interface PickedFile {
 
 export type Summarizer = (text: string, filename: string) => Promise<{ summary: string; tags: string[] }>;
 export type Picker = (query: string, candidates: PickerCandidate[], k: number) => Promise<PickResult[]>;
-export type MemoryExtractor = (raw: string) => Promise<string>;
+export type MemoryExtractor = (raw: string) => Promise<{ signal: string; title: string }>;
 
 export interface PickerCandidate {
   path: string;
@@ -166,26 +166,43 @@ export async function setSources(sources: string[]): Promise<void> {
   const normalized = sources.map(normalizePath);
   const next = new Set(normalized);
   const prev = new Set(activeSources);
+  const removed = activeSources.filter((s) => !next.has(s));
+  const added = normalized.filter((s) => !prev.has(s));
 
-  for (const removed of activeSources.filter((s) => !next.has(s))) {
-    const w = watchers.get(removed);
-    if (w) {
-      await w.close().catch(() => undefined);
-      watchers.delete(removed);
+  // Update activeSources synchronously, before any await, so concurrent
+  // maybeEnqueue / ingestFile / in-flight scanSource calls see the new state
+  // and short-circuit work for removed sources. Otherwise a fire-and-forget
+  // walk or queued file would keep ingesting after the user removed its root.
+  activeSources = normalized;
+
+  // Drop queued entries for removed sources. Done synchronously after the
+  // activeSources swap so a parallel drainQueue tick sees neither the queue
+  // entry nor an active source.
+  for (let i = ingestQueue.length - 1; i >= 0; i--) {
+    const entry = ingestQueue[i];
+    if (!next.has(entry.sourceRoot)) {
+      queuedSet.delete(entry.path);
+      ingestQueue.splice(i, 1);
     }
-    // Purge all rows under this source; user removed it, they want it gone.
-    requireDb().prepare("DELETE FROM files WHERE source_root = ?").run(removed);
   }
 
-  for (const added of normalized.filter((s) => !prev.has(s))) {
-    await startWatcher(added);
+  for (const r of removed) {
+    const w = watchers.get(r);
+    if (w) {
+      await w.close().catch(() => undefined);
+      watchers.delete(r);
+    }
+    // Purge all rows under this source; user removed it, they want it gone.
+    requireDb().prepare("DELETE FROM files WHERE source_root = ?").run(r);
+  }
+
+  for (const a of added) {
+    await startWatcher(a);
     // Fire-and-forget the walk so a large folder add doesn't block the IPC
     // response past the 30s sidecar timeout. Files trickle in via the ingest
     // queue; the UI polls contextStatus() to track progress.
-    void scanSource(added);
+    void scanSource(a);
   }
-
-  activeSources = normalized;
 }
 
 /**
@@ -346,22 +363,16 @@ export async function pickRelevantFiles(
 }
 
 /**
- * Distill a pasted Slack/email/etc snippet into durable signal and append it
- * to `<sourceRoot>/<filename>` (default memories.md). Triggers re-ingest so
- * the new content is searchable immediately.
+ * Distill a pasted Slack/email/etc snippet into durable signal and write it
+ * as a new file `<sourceRoot>/memory/YYYY-MM-DD-<slug>.md` with YAML
+ * frontmatter (title, created). Ingest runs in the background so the caller's
+ * popover can show the signal immediately and poll for indexing status.
  */
 export async function captureMemory(
   raw: string,
   sourceRoot: string,
   extractor: MemoryExtractor,
-  filename?: string | null,
-): Promise<{ appendedTo: string; signal: string }> {
-  // The Rust→sidecar bridge serializes `Option<String>::None` to JSON `null`,
-  // so this function is invoked with `filename = null` (not `undefined`) when
-  // the frontend omits the filename. JS default-parameter values only fire on
-  // `undefined`, which is why a plain `filename = "memories.md"` default isn't
-  // enough — coalesce explicitly to cover both.
-  const resolvedFilename = filename ?? "memories.md";
+): Promise<{ appendedTo: string; signal: string; title: string }> {
   const normalizedRoot = normalizePath(sourceRoot);
   if (!activeSources.includes(normalizedRoot)) {
     throw new Error(`source root not active: ${sourceRoot}`);
@@ -369,25 +380,58 @@ export async function captureMemory(
   if (!(await pathExists(normalizedRoot))) {
     throw new Error(`source root does not exist: ${sourceRoot}`);
   }
-  const signal = (await extractor(raw)).trim();
+  const { signal: rawSignal, title: rawTitle } = await extractor(raw);
+  const signal = rawSignal.trim();
   if (signal.length === 0) {
     throw new Error("memory extractor returned empty signal");
   }
-  const finalPath = normalizePath(path.join(normalizedRoot, resolvedFilename));
-  const now = new Date().toISOString();
-  const block = `\n\n## ${now}\n\n${signal}\n`;
-  // Park the path in queuedSet so chokidar's change event (fired by the
-  // appendFile) sees it as already-queued and skips re-enqueueing. Otherwise
-  // we'd summarize twice — once via this direct ingestFile call, once via
-  // the watcher.
+  const title = rawTitle.trim() || "untitled";
+  const memoryDir = normalizePath(path.join(normalizedRoot, "memory"));
+  await fs.mkdir(memoryDir, { recursive: true });
+  const now = new Date();
+  const datePrefix = now.toISOString().slice(0, 10);
+  const slug = slugifyTitle(title);
+  const finalPath = await resolveCapturePath(memoryDir, datePrefix, slug);
+  const body = `---\ntitle: ${escapeYaml(title)}\ncreated: ${now.toISOString()}\n---\n\n${signal}\n`;
+  // Park the path in queuedSet so chokidar's add event (fired by the write)
+  // doesn't double-enqueue alongside the direct ingestFile call below.
   queuedSet.add(finalPath);
-  try {
-    await fs.appendFile(finalPath, block, "utf8");
-    await ingestFile(finalPath, normalizedRoot);
-  } finally {
+  await fs.writeFile(finalPath, body, "utf8");
+  // Fire-and-forget ingest — capture returns as soon as the file is written.
+  // ingestFile updates the SQLite row's status, which the popover polls.
+  void ingestFile(finalPath, normalizedRoot).finally(() => {
     queuedSet.delete(finalPath);
+  });
+  return { appendedTo: finalPath, signal, title };
+}
+
+/** Slugify a Haiku-returned title for use in a filename. */
+function slugifyTitle(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return slug.length > 0 ? slug : "untitled";
+}
+
+/** Resolve `<dir>/<date>-<slug>.md`, appending `-2`, `-3`, ... on collision. */
+async function resolveCapturePath(dir: string, datePrefix: string, slug: string): Promise<string> {
+  const base = `${datePrefix}-${slug}`;
+  for (let i = 1; i < 1000; i++) {
+    const name = i === 1 ? `${base}.md` : `${base}-${i}.md`;
+    const candidate = normalizePath(path.join(dir, name));
+    if (!(await pathExists(candidate))) return candidate;
   }
-  return { appendedTo: finalPath, signal };
+  throw new Error("could not find a free capture filename");
+}
+
+/** Escape a YAML scalar value. Wraps in double quotes if it contains chars that need it. */
+function escapeYaml(value: string): string {
+  if (/[:#\[\]{}&*!|>'"%@`,\n]/.test(value)) {
+    return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+  return value;
 }
 
 async function startWatcher(sourceRoot: string): Promise<void> {
@@ -412,6 +456,9 @@ async function startWatcher(sourceRoot: string): Promise<void> {
 function maybeEnqueue(filePath: string, sourceRoot: string): void {
   const ext = path.extname(filePath).toLowerCase();
   if (!SUPPORTED_EXTENSIONS.has(ext)) return;
+  // Catches stale events from an in-flight scanSource walk or late-firing
+  // watcher event after the user removed this source root.
+  if (!activeSources.includes(sourceRoot)) return;
   if (queuedSet.has(filePath)) return;
   queuedSet.add(filePath);
   ingestQueue.push({ path: filePath, sourceRoot });
@@ -434,6 +481,9 @@ function drainQueue(): void {
 }
 
 async function ingestFile(filePath: string, sourceRoot: string): Promise<void> {
+  // Source may have been removed between enqueue and drain. Without this, the
+  // INSERT below would resurrect a row that setSources just purged.
+  if (!activeSources.includes(sourceRoot)) return;
   const d = requireDb();
   let stat;
   try {

@@ -119,7 +119,6 @@ type ContextCaptureMemoryRequest = {
   op: "context-capture-memory";
   raw: string;
   source: string;
-  filename?: string;
   backend: Backend;
 };
 
@@ -387,19 +386,24 @@ clearly help. Use the exact path from the candidate list.`;
 
 const MEMORY_SCHEMA = {
   type: "object",
-  required: ["signal"],
+  required: ["signal", "title"],
   additionalProperties: false,
   properties: {
     signal: {
       type: "string",
       description: "The durable, reusable knowledge distilled from the raw input. Drop greetings, scheduling chatter, and one-off context.",
     },
+    title: {
+      type: "string",
+      description: "A short topic label for this memory (3-6 words, Title Case-ish). Used as the filename and as a UI heading. No punctuation needed.",
+    },
   },
 } as const;
 
 const MEMORY_INSTRUCTIONS = `You extract durable signal from pasted messages (Slack threads, emails, notes).
 Return one tight paragraph capturing the reusable knowledge — facts, decisions, procedures, names of people-and-what-they-own.
-Drop greetings, scheduling, and one-off context. If the input has no durable signal, return an empty string.`;
+Drop greetings, scheduling, and one-off context. If the input has no durable signal, return an empty string.
+Also return a short title (3-6 words) summarizing the topic — used as the filename and a UI heading.`;
 
 async function runStructuredAgent<T>(
   prompt: string,
@@ -510,20 +514,18 @@ async function pickFiles(query: string, candidates: PickerCandidate[], k: number
   return out.picks ?? [];
 }
 
-async function extractMemory(raw: string, backend: Backend): Promise<string> {
+async function extractMemory(raw: string, backend: Backend): Promise<{ signal: string; title: string }> {
   const prompt = `RAW INPUT:\n${raw}`;
-  if (backend === "api") {
-    const out = await runStructuredApi<{ signal: string }>(
-      prompt,
-      MEMORY_INSTRUCTIONS,
-      MEMORY_SCHEMA,
-      MEMORY_MODEL,
-      "submit_memory",
-    );
-    return out.signal ?? "";
-  }
-  const out = await runStructuredAgent<{ signal: string }>(prompt, MEMORY_INSTRUCTIONS, MEMORY_SCHEMA, MEMORY_MODEL);
-  return out.signal ?? "";
+  const out = backend === "api"
+    ? await runStructuredApi<{ signal: string; title: string }>(
+        prompt,
+        MEMORY_INSTRUCTIONS,
+        MEMORY_SCHEMA,
+        MEMORY_MODEL,
+        "submit_memory",
+      )
+    : await runStructuredAgent<{ signal: string; title: string }>(prompt, MEMORY_INSTRUCTIONS, MEMORY_SCHEMA, MEMORY_MODEL);
+  return { signal: out.signal ?? "", title: out.title ?? "" };
 }
 
 function renderContextBlock(picks: PickedFile[]): string {
@@ -969,7 +971,6 @@ async function handleContextCaptureMemory(req: ContextCaptureMemoryRequest): Pro
       req.raw,
       req.source,
       (raw) => extractMemory(raw, req.backend),
-      req.filename,
     );
     return { id: req.id, ok: true, ...result };
   } catch (err) {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { captureMemory, openPath } from "$lib/api";
+  import { captureMemory, listContextFiles, openPath, rescanContext } from "$lib/api";
   import type { PasteBackend } from "$lib/types";
 
   let {
@@ -14,13 +14,18 @@
     onAddSource: () => void;
   } = $props();
 
+  type IndexStatus = "indexing" | "indexed" | "failed";
+
   let raw = $state("");
   let target = $state<string>("");
   let busy = $state(false);
-  let result = $state<{ path: string; signal: string } | null>(null);
+  let result = $state<{ path: string; signal: string; title: string; source: string } | null>(null);
+  let indexStatus = $state<IndexStatus | null>(null);
+  let indexError = $state<string | null>(null);
   let err = $state<string | null>(null);
 
   let textareaEl: HTMLTextAreaElement | undefined = $state();
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   $effect(() => {
     if (target.length === 0 && sources.length > 0) target = sources[0];
@@ -29,6 +34,10 @@
 
   $effect(() => {
     textareaEl?.focus();
+  });
+
+  $effect(() => {
+    return () => stopPolling();
   });
 
   function handleKeydown(e: KeyboardEvent): void {
@@ -48,16 +57,69 @@
     const text = raw.trim();
     if (text.length === 0 || target.length === 0) return;
     busy = true;
+    stopPolling();
     result = null;
+    indexStatus = null;
+    indexError = null;
     err = null;
     try {
-      const r = await captureMemory(text, target, undefined, backend);
-      result = { path: r.appendedTo, signal: r.signal };
+      const r = await captureMemory(text, target, backend);
+      result = { path: r.appendedTo, signal: r.signal, title: r.title, source: target };
+      indexStatus = "indexing";
       raw = "";
+      schedulePoll();
     } catch (e) {
       err = `Capture failed: ${e}`;
     } finally {
       busy = false;
+    }
+  }
+
+  function schedulePoll(): void {
+    stopPolling();
+    pollTimer = setTimeout(() => {
+      void pollIndex();
+    }, 600);
+  }
+
+  async function pollIndex(): Promise<void> {
+    if (!result || indexStatus !== "indexing") return;
+    const target_path = result.path;
+    try {
+      const files = await listContextFiles(result.source);
+      const row = files.find((f) => f.path === target_path);
+      if (row && row.status === "ingested") {
+        indexStatus = "indexed";
+        return;
+      }
+      if (row && row.status === "failed") {
+        indexStatus = "failed";
+        indexError = row.error;
+        return;
+      }
+    } catch {
+      // Transient — keep polling.
+    }
+    schedulePoll();
+  }
+
+  function stopPolling(): void {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function retryIndex(): Promise<void> {
+    if (!result) return;
+    indexStatus = "indexing";
+    indexError = null;
+    try {
+      await rescanContext(result.source);
+      schedulePoll();
+    } catch (e) {
+      indexStatus = "failed";
+      indexError = `${e}`;
     }
   }
 
@@ -125,14 +187,25 @@
       {#if result}
         <div class="ok">
           <div class="ok-hdr">
-            <span>Saved to <code>{basename(result.path)}</code></span>
+            <span class="ok-title">{result.title}</span>
             <button
               class="ok-open"
               onclick={() => void openPath(result!.path)}
               title={result.path}
             >Open</button>
           </div>
+          <div class="ok-file"><code>{basename(result.path)}</code></div>
           <div class="ok-signal">{result.signal}</div>
+          <div class="badge-row">
+            {#if indexStatus === "indexing"}
+              <span class="badge badge-indexing">Indexing…</span>
+            {:else if indexStatus === "indexed"}
+              <span class="badge badge-indexed">Indexed</span>
+            {:else if indexStatus === "failed"}
+              <span class="badge badge-failed" title={indexError ?? undefined}>Index failed</span>
+              <button class="badge-retry" onclick={() => void retryIndex()}>Retry</button>
+            {/if}
+          </div>
         </div>
       {/if}
     {/if}
@@ -291,12 +364,24 @@
   }
 
   .ok-hdr {
-    font-size: 0.72rem;
+    font-size: 0.78rem;
     font-weight: 600;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+  }
+
+  .ok-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ok-file {
+    margin-top: 2px;
+    font-size: 0.68rem;
+    color: var(--text-muted);
   }
 
   .ok-open {
@@ -308,6 +393,7 @@
     cursor: pointer;
     font: inherit;
     font-size: 0.7rem;
+    flex-shrink: 0;
   }
 
   .ok-open:hover {
@@ -316,8 +402,56 @@
 
   .ok-signal {
     font-size: 0.78rem;
-    margin-top: 4px;
+    margin-top: 6px;
     line-height: 1.4;
+  }
+
+  .badge-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .badge {
+    font-size: 0.66rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .badge-indexing {
+    background: var(--bg-active);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+
+  .badge-indexed {
+    background: var(--accent-positive-bg);
+    color: var(--accent-positive-text);
+    border: 1px solid var(--accent-positive-border);
+  }
+
+  .badge-failed {
+    background: var(--accent-danger-bg);
+    color: var(--accent-danger-text);
+    border: 1px solid var(--accent-danger-border);
+  }
+
+  .badge-retry {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 1px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.66rem;
+  }
+
+  .badge-retry:hover {
+    background: var(--bg-hover);
   }
 
   .err {
