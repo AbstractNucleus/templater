@@ -5,7 +5,10 @@
   import TemplateForm from "./TemplateForm.svelte";
 
   type DraftContent = { opening: string; body: string };
-  type BodyUpdate = { templateId: string; body: string; seq: number };
+  /** `templateId` is null in the create-new-template flow (no template yet);
+   *  in edit mode it's the edited template's id so a stale signal from a
+   *  prior selection can be rejected. */
+  type BodyUpdate = { templateId: string | null; body: string; seq: number };
 
   const EMPTY_DRAFT: TemplateDraft = {
     name: "",
@@ -125,12 +128,19 @@
   });
 
   $effect(() => {
-    if (!editing || !template) return;
+    if (!creatingDraft && (!editing || !template)) return;
     onDraftChange({ opening: draft.opening, body: draft.body });
   });
 
   $effect(() => {
-    if (!editing || !template || aiBodyUpdate === null) return;
+    if (aiBodyUpdate === null) return;
+    if (creatingDraft) {
+      if (aiBodyUpdate.seq === lastAiBodyUpdateSeq) return;
+      lastAiBodyUpdateSeq = aiBodyUpdate.seq;
+      draft = { ...draft, body: aiBodyUpdate.body };
+      return;
+    }
+    if (!editing || !template) return;
     if (aiBodyUpdate.templateId !== template.id || aiBodyUpdate.seq === lastAiBodyUpdateSeq) return;
     lastAiBodyUpdateSeq = aiBodyUpdate.seq;
     draft = { ...draft, body: aiBodyUpdate.body };

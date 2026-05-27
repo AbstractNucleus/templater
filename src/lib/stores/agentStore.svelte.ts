@@ -44,6 +44,12 @@ class AgentStore {
     this.agentBusy = false;
     this.agentError = null;
     this.baseMode = true;
+    // Open the full create form immediately — the old two-step (EditorPane
+    // first, then "Save as new…") was redundant for explicit new-template
+    // creation. `buildSaveDraft` reads baseDraft, so the seeding above must
+    // happen first.
+    this.saveDraft = this.buildSaveDraft();
+    this.saveAsOpen = true;
   }
 
   enterBaseMode(source: Template | null): void {
