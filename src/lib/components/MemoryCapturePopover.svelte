@@ -1,15 +1,17 @@
 <script lang="ts">
   import { captureMemory, listContextFiles, openPath, rescanContext } from "$lib/api";
-  import type { PasteBackend } from "$lib/types";
+  import type { ModelTier, PasteBackend } from "$lib/types";
 
   let {
     sources,
     backend,
+    model,
     onClose,
     onAddSource,
   }: {
     sources: string[];
     backend: PasteBackend;
+    model: ModelTier;
     onClose: () => void;
     onAddSource: () => void;
   } = $props();
@@ -63,7 +65,7 @@
     indexError = null;
     err = null;
     try {
-      const r = await captureMemory(text, target, backend);
+      const r = await captureMemory(text, target, backend, model);
       result = { path: r.appendedTo, signal: r.signal, title: r.title, source: target };
       indexStatus = "indexing";
       raw = "";

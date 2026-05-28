@@ -143,6 +143,7 @@ class AgentStore {
         history,
         prompt,
         templatesStore.settings.paste_backend,
+        templatesStore.settings.models.edit,
       );
       onUpdate(updated);
       this.agentMessages = [
@@ -217,6 +218,7 @@ class AgentStore {
         { opening: source.opening, body: source.body },
         trimmed,
         templatesStore.settings.paste_backend,
+        templatesStore.settings.models.adapt,
       );
       // Enter base mode with the adapted draft pre-filled. Seed the chat with
       // the implicit "adapt this" turn so further refinement has context.

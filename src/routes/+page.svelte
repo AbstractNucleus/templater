@@ -629,7 +629,7 @@
       rankLoading = true;
       rankError = null;
       try {
-        const result = await rankTemplates(q, catalog, backend);
+        const result = await rankTemplates(q, catalog, backend, settings.models.rank);
         if (searchQuery === q) rankings = result;
       } catch (e) {
         if (searchQuery === q) {
@@ -648,7 +648,7 @@
     if (q.trim().length < PASTE_THRESHOLD) return;
     rankLoading = true;
     try {
-      const result = await rankTemplates(q, templates, settings.paste_backend);
+      const result = await rankTemplates(q, templates, settings.paste_backend, settings.models.rank);
       if (searchQuery === q) rankings = result;
     } catch (e) {
       if (searchQuery === q) rankError = explainRankError(String(e));
@@ -916,18 +916,29 @@
   // before (including pushing `[]` to clear).
   let lastForwardedSourcesJson = "";
   let lastForwardedBackend: typeof settings.paste_backend | null = null;
+  let lastForwardedModel: typeof settings.models.context | null = null;
   $effect(() => {
     if (!loaded) return;
     const sources = settings.context_sources;
     const backend = settings.paste_backend;
+    const model = settings.models.context;
     const sourcesJson = JSON.stringify(sources);
-    if (sourcesJson === lastForwardedSourcesJson && backend === lastForwardedBackend) return;
+    if (
+      sourcesJson === lastForwardedSourcesJson &&
+      backend === lastForwardedBackend &&
+      model === lastForwardedModel
+    )
+      return;
     const skip =
-      lastForwardedSourcesJson === "" && lastForwardedBackend === null && sources.length === 0;
+      lastForwardedSourcesJson === "" &&
+      lastForwardedBackend === null &&
+      lastForwardedModel === null &&
+      sources.length === 0;
     lastForwardedSourcesJson = sourcesJson;
     lastForwardedBackend = backend;
+    lastForwardedModel = model;
     if (skip) return;
-    void setContextSources(sources, backend).catch(() => {
+    void setContextSources(sources, backend, model).catch(() => {
       /* sidecar may be down; pane will surface the error */
     });
   });
@@ -955,7 +966,8 @@
     const unlisten = listen("sidecar-respawned", () => {
       lastForwardedSourcesJson = "";
       lastForwardedBackend = null;
-      void setContextSources(settings.context_sources, settings.paste_backend).catch(() => {});
+      lastForwardedModel = null;
+      void setContextSources(settings.context_sources, settings.paste_backend, settings.models.context).catch(() => {});
     });
     return () => {
       void unlisten.then((u) => u());
@@ -1235,6 +1247,7 @@
         width={contextWidth}
         sources={settings.context_sources}
         backend={settings.paste_backend}
+        model={settings.models.context}
         onClose={() => (contextOpen = false)}
         onSourcesChange={async (next) => {
           await templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_sources: next });
@@ -1288,6 +1301,7 @@
   <MemoryCapturePopover
     sources={settings.context_sources}
     backend={settings.paste_backend}
+    model={settings.models.memory}
     onClose={() => (captureOpen = false)}
     onAddSource={() => {
       captureOpen = false;

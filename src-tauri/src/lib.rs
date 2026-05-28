@@ -38,6 +38,7 @@ async fn rank_templates(
     pasted: String,
     catalog: Vec<Template>,
     backend: String,
+    model: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -47,6 +48,7 @@ async fn rank_templates(
             "pasted": pasted,
             "catalog": catalog,
             "backend": backend,
+            "model": model,
         }))
         .await
 }
@@ -57,6 +59,7 @@ async fn edit_template(
     history: serde_json::Value,
     prompt: String,
     backend: String,
+    model: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -67,6 +70,7 @@ async fn edit_template(
             "history": history,
             "prompt": prompt,
             "backend": backend,
+            "model": model,
         }))
         .await
 }
@@ -76,6 +80,7 @@ async fn adapt_template(
     draft: serde_json::Value,
     inbound: String,
     backend: String,
+    model: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -85,6 +90,7 @@ async fn adapt_template(
             "draft": draft,
             "inbound": inbound,
             "backend": backend,
+            "model": model,
         }))
         .await
 }
@@ -93,6 +99,7 @@ async fn adapt_template(
 async fn context_set_sources(
     sources: Vec<String>,
     backend: String,
+    model: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -101,6 +108,7 @@ async fn context_set_sources(
             "op": "context-set-sources",
             "sources": sources,
             "backend": backend,
+            "model": model,
         }))
         .await
 }
@@ -177,6 +185,7 @@ async fn context_capture_memory(
     raw: String,
     source: String,
     backend: String,
+    model: String,
     state: tauri::State<'_, Sidecar>,
 ) -> Result<serde_json::Value, String> {
     state
@@ -186,6 +195,7 @@ async fn context_capture_memory(
             "raw": raw,
             "source": source,
             "backend": backend,
+            "model": model,
         }))
         .await
 }

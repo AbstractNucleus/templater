@@ -61,9 +61,29 @@ delete process.env.ANTHROPIC_API_KEY;
 
 type Backend = "agent" | "api";
 
+type ModelTier = "haiku" | "sonnet" | "opus";
+
+/** Tier alias → concrete model id. The single source of truth for model ids;
+ *  bump here when Anthropic ships new snapshots. */
+const MODEL_IDS: Record<ModelTier, string> = {
+  haiku: "claude-haiku-4-5-20251001",
+  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-4-7",
+};
+
+/** Resolve a stored tier alias to a concrete model id. Falls back to Haiku for
+ *  anything unrecognized — settings.json is user-editable. */
+function resolveModel(tier: string | undefined): string {
+  return MODEL_IDS[(tier ?? "") as ModelTier] ?? MODEL_IDS.haiku;
+}
+
 /** Backend used by context-side calls (ingest summaries, memory extraction).
  *  Adapt + edit + rank still pass their own backend per request. */
 let contextBackend: Backend = "agent";
+
+/** Model tier for context-pipeline calls (ingest summaries + relevance picker).
+ *  Set via context-set-sources alongside contextBackend. */
+let contextModel: ModelTier = "haiku";
 
 type PingRequest = { id: string; op: "ping" };
 
@@ -79,6 +99,7 @@ type RankRequest = {
   id: string;
   op: "rank";
   backend: Backend;
+  model: ModelTier;
   pasted: string;
   catalog: CatalogEntry[];
 };
@@ -89,6 +110,7 @@ type EditTemplateRequest = {
   id: string;
   op: "edit-template";
   backend: Backend;
+  model: ModelTier;
   draft: { opening: string; body: string };
   history: ChatTurn[];
   prompt: string;
@@ -98,6 +120,7 @@ type AdaptTemplateRequest = {
   id: string;
   op: "adapt-template";
   backend: Backend;
+  model: ModelTier;
   draft: { opening: string; body: string };
   inbound: string;
 };
@@ -107,6 +130,7 @@ type ContextSetSourcesRequest = {
   op: "context-set-sources";
   sources: string[];
   backend: Backend;
+  model: ModelTier;
 };
 
 type ContextStatusRequest = { id: string; op: "context-status" };
@@ -120,6 +144,7 @@ type ContextCaptureMemoryRequest = {
   raw: string;
   source: string;
   backend: Backend;
+  model: ModelTier;
 };
 
 type Request =
@@ -148,8 +173,6 @@ function emitProgress(id: string, text: string): void {
 }
 
 type Ranking = { template_id: string; score: number };
-
-const RANK_MODEL = "claude-haiku-4-5-20251001";
 
 const RANK_INSTRUCTIONS = `You match pasted messages against a reply-template catalog.
 For each request, pick up to 5 best-matching templates from the catalog below
@@ -194,9 +217,9 @@ function buildSystemPrompt(catalog: CatalogEntry[]): string[] {
   ];
 }
 
-function rankOptions(catalog: CatalogEntry[]) {
+function rankOptions(catalog: CatalogEntry[], model: string) {
   return {
-    model: RANK_MODEL,
+    model,
     outputFormat: { type: "json_schema" as const, schema: RANKINGS_SCHEMA },
     systemPrompt: buildSystemPrompt(catalog),
   };
@@ -211,11 +234,13 @@ function catalogKey(catalog: CatalogEntry[]): string {
 let warmKey: string | null = null;
 let warmHandle: Promise<WarmQuery> | null = null;
 
-function prewarmRank(catalog: CatalogEntry[]): Promise<WarmQuery> {
-  const key = catalogKey(catalog);
+function prewarmRank(catalog: CatalogEntry[], model: string): Promise<WarmQuery> {
+  // Key on model too: changing the rank model in Settings must invalidate a
+  // handle that was pre-spawned with the old model.
+  const key = `${model}\0${catalogKey(catalog)}`;
   if (warmKey === key && warmHandle) return warmHandle;
   warmKey = key;
-  warmHandle = startup({ options: rankOptions(catalog) }).catch((err) => {
+  warmHandle = startup({ options: rankOptions(catalog, model) }).catch((err) => {
     warmHandle = null;
     warmKey = null;
     throw err;
@@ -223,8 +248,8 @@ function prewarmRank(catalog: CatalogEntry[]): Promise<WarmQuery> {
   return warmHandle;
 }
 
-async function takeWarmRank(catalog: CatalogEntry[]): Promise<WarmQuery> {
-  const handle = await prewarmRank(catalog);
+async function takeWarmRank(catalog: CatalogEntry[], model: string): Promise<WarmQuery> {
+  const handle = await prewarmRank(catalog, model);
   warmHandle = null;
   warmKey = null;
   return handle;
@@ -240,18 +265,19 @@ async function handleRank(req: RankRequest): Promise<Response> {
 }
 
 async function runRankAgent(req: RankRequest): Promise<Response> {
+  const model = resolveModel(req.model);
   const userPrompt = `PASTED MESSAGE:\n${req.pasted}`;
-  const opts = rankOptions(req.catalog);
+  const opts = rankOptions(req.catalog, model);
 
   let stream;
   try {
-    const handle = await takeWarmRank(req.catalog);
+    const handle = await takeWarmRank(req.catalog, model);
     stream = handle.query(userPrompt);
   } catch {
     stream = query({ prompt: userPrompt, options: opts });
   }
 
-  prewarmRank(req.catalog).catch(() => {});
+  prewarmRank(req.catalog, model).catch(() => {});
 
   for await (const msg of stream) {
     if (msg.type !== "result") continue;
@@ -298,7 +324,7 @@ async function runRankApi(req: RankRequest): Promise<Response> {
   let msg;
   try {
     msg = await client.messages.create({
-      model: RANK_MODEL,
+      model: resolveModel(req.model),
       max_tokens: 1024,
       system: [
         { type: "text", text: RANK_INSTRUCTIONS },
@@ -336,10 +362,6 @@ async function runRankApi(req: RankRequest): Promise<Response> {
 // ---------------------------------------------------------------------------
 // Context: summarizer + picker + memory extractor
 // ---------------------------------------------------------------------------
-
-const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
-const PICK_MODEL = "claude-haiku-4-5-20251001";
-const MEMORY_MODEL = "claude-haiku-4-5-20251001";
 
 const SUMMARY_SCHEMA = {
   type: "object",
@@ -478,7 +500,7 @@ async function summarizeFile(text: string, filename: string): Promise<{ summary:
       userPrompt,
       SUMMARY_INSTRUCTIONS,
       SUMMARY_SCHEMA,
-      SUMMARY_MODEL,
+      resolveModel(contextModel),
       "submit_summary",
     );
   }
@@ -486,7 +508,7 @@ async function summarizeFile(text: string, filename: string): Promise<{ summary:
     userPrompt,
     SUMMARY_INSTRUCTIONS,
     SUMMARY_SCHEMA,
-    SUMMARY_MODEL,
+    resolveModel(contextModel),
   );
 }
 
@@ -500,7 +522,7 @@ async function pickFiles(query: string, candidates: PickerCandidate[], k: number
       userPrompt,
       PICK_INSTRUCTIONS,
       PICK_SCHEMA,
-      PICK_MODEL,
+      resolveModel(contextModel),
       "submit_picks",
     );
     return out.picks ?? [];
@@ -509,22 +531,22 @@ async function pickFiles(query: string, candidates: PickerCandidate[], k: number
     userPrompt,
     PICK_INSTRUCTIONS,
     PICK_SCHEMA,
-    PICK_MODEL,
+    resolveModel(contextModel),
   );
   return out.picks ?? [];
 }
 
-async function extractMemory(raw: string, backend: Backend): Promise<{ signal: string; title: string }> {
+async function extractMemory(raw: string, backend: Backend, model: string): Promise<{ signal: string; title: string }> {
   const prompt = `RAW INPUT:\n${raw}`;
   const out = backend === "api"
     ? await runStructuredApi<{ signal: string; title: string }>(
         prompt,
         MEMORY_INSTRUCTIONS,
         MEMORY_SCHEMA,
-        MEMORY_MODEL,
+        model,
         "submit_memory",
       )
-    : await runStructuredAgent<{ signal: string; title: string }>(prompt, MEMORY_INSTRUCTIONS, MEMORY_SCHEMA, MEMORY_MODEL);
+    : await runStructuredAgent<{ signal: string; title: string }>(prompt, MEMORY_INSTRUCTIONS, MEMORY_SCHEMA, model);
   return { signal: out.signal ?? "", title: out.title ?? "" };
 }
 
@@ -540,8 +562,6 @@ function renderContextBlock(picks: PickedFile[]): string {
 // ---------------------------------------------------------------------------
 // Edit template (with context pre-fetch)
 // ---------------------------------------------------------------------------
-
-const EDIT_MODEL = "claude-haiku-4-5-20251001";
 
 const EDIT_INSTRUCTIONS = `You are editing a reply-template draft on behalf of the user.
 Each turn the user gives an instruction (e.g. "make it more polite", "add an apology",
@@ -628,7 +648,7 @@ async function runEditAgent(req: EditTemplateRequest, contextBlock: string): Pro
   const stream = query({
     prompt: buildEditPrompt(req),
     options: {
-      model: EDIT_MODEL,
+      model: resolveModel(req.model),
       outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
       systemPrompt: editSystemPrompt(contextBlock),
       includePartialMessages: true,
@@ -686,7 +706,7 @@ async function runEditApi(req: EditTemplateRequest, contextBlock: string): Promi
   let msg;
   try {
     msg = await client.messages.create({
-      model: EDIT_MODEL,
+      model: resolveModel(req.model),
       max_tokens: 2048,
       system: editSystemPrompt(contextBlock),
       tools: [
@@ -725,8 +745,6 @@ async function runEditApi(req: EditTemplateRequest, contextBlock: string): Promi
 // ---------------------------------------------------------------------------
 // Adapt template (with context pre-fetch)
 // ---------------------------------------------------------------------------
-
-const ADAPT_MODEL = "claude-sonnet-4-6";
 
 const ADAPT_INSTRUCTIONS = `You adapt a reply-template draft to fit a specific inbound message.
 
@@ -783,7 +801,7 @@ async function runAdaptAgent(
   const stream = query({
     prompt: buildAdaptPrompt(req),
     options: {
-      model: ADAPT_MODEL,
+      model: resolveModel(req.model),
       outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
       systemPrompt: adaptSystemPrompt(contextBlock),
       includePartialMessages: true,
@@ -846,7 +864,7 @@ async function runAdaptApi(
   let msg;
   try {
     msg = await client.messages.create({
-      model: ADAPT_MODEL,
+      model: resolveModel(req.model),
       max_tokens: 2048,
       system: adaptSystemPrompt(contextBlock),
       tools: [
@@ -889,6 +907,7 @@ async function runAdaptApi(
 
 async function handleContextSetSources(req: ContextSetSourcesRequest): Promise<Response> {
   contextBackend = req.backend;
+  contextModel = req.model;
   try {
     await ctxSetSources(req.sources);
     return { id: req.id, ok: true, status: contextStatus() };
@@ -970,7 +989,7 @@ async function handleContextCaptureMemory(req: ContextCaptureMemoryRequest): Pro
     const result = await ctxCaptureMemory(
       req.raw,
       req.source,
-      (raw) => extractMemory(raw, req.backend),
+      (raw) => extractMemory(raw, req.backend, resolveModel(req.model)),
     );
     return { id: req.id, ok: true, ...result };
   } catch (err) {

@@ -99,6 +99,47 @@ impl Default for ColumnWidths {
     }
 }
 
+/// Per-task model tier ("haiku" | "sonnet" | "opus"). Stored as plain strings
+/// and forwarded to the sidecar untouched, where they resolve to concrete model
+/// ids. `context` covers both ingest summaries and the relevance picker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelSettings {
+    #[serde(default = "default_model_haiku")]
+    pub rank: String,
+    #[serde(default = "default_model_haiku")]
+    pub edit: String,
+    #[serde(default = "default_model_sonnet")]
+    pub adapt: String,
+    #[serde(default = "default_model_haiku")]
+    pub memory: String,
+    #[serde(default = "default_model_haiku")]
+    pub context: String,
+}
+
+fn default_model_haiku() -> String {
+    "haiku".to_string()
+}
+
+fn default_model_sonnet() -> String {
+    "sonnet".to_string()
+}
+
+impl Default for ModelSettings {
+    fn default() -> Self {
+        Self {
+            rank: default_model_haiku(),
+            edit: default_model_haiku(),
+            adapt: default_model_sonnet(),
+            memory: default_model_haiku(),
+            context: default_model_haiku(),
+        }
+    }
+}
+
+fn default_models() -> ModelSettings {
+    ModelSettings::default()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub always_on_top_default: bool,
@@ -121,6 +162,8 @@ pub struct Settings {
     pub column_widths: ColumnWidths,
     #[serde(default = "default_paste_backend")]
     pub paste_backend: String,
+    #[serde(default = "default_models")]
+    pub models: ModelSettings,
     #[serde(default)]
     pub placeholder_values: HashMap<String, HashMap<String, String>>,
     #[serde(default = "default_sort_mode")]
@@ -176,6 +219,7 @@ impl Default for Settings {
             zoom: default_zoom(),
             column_widths: ColumnWidths::default(),
             paste_backend: default_paste_backend(),
+            models: ModelSettings::default(),
             placeholder_values: HashMap::new(),
             sort_mode: default_sort_mode(),
             tag_order: Vec::new(),

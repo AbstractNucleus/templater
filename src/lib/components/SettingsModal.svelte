@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { type Mode, type PasteBackend, type Settings, type Theme } from "$lib/types";
+  import { type Mode, type ModelSettings, type PasteBackend, type Settings, type Theme } from "$lib/types";
   import { setHotkey, setQuickCaptureHotkey, type BackupEntry } from "$lib/api";
   import BackendSection from "./settings/BackendSection.svelte";
+  import ModelsSection from "./settings/ModelsSection.svelte";
   import TagsSection from "./settings/TagsSection.svelte";
   import BackupsSection from "./settings/BackupsSection.svelte";
   import WindowSection from "./settings/WindowSection.svelte";
@@ -95,7 +96,7 @@
   const TAB_TITLES: Record<TabId, string> = {
     general: "General",
     shortcuts: "Shortcuts",
-    ai: "AI backend",
+    ai: "AI",
     snippets: "Signature & snippets",
     context: "Context sources",
     templates: "Templates",
@@ -196,6 +197,10 @@
 
   function setPasteBackend(next: PasteBackend): void {
     onUpdate({ ...settings, paste_backend: next });
+  }
+
+  function setModels(next: ModelSettings): void {
+    onUpdate({ ...settings, models: next });
   }
 
   // Tag management state owned here so the Escape handler can drain it before
@@ -398,6 +403,7 @@
             {envApiKeyOverride}
             onChange={setPasteBackend}
           />
+          <ModelsSection models={settings.models} onChange={setModels} />
         {/if}
 
         {#if activeTab === "snippets"}

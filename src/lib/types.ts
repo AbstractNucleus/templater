@@ -63,6 +63,34 @@ export type Mode = "editor" | "user";
 
 export type PasteBackend = "agent" | "api";
 
+/** Selectable model tier. Resolved to a concrete model id in the sidecar. */
+export type ModelTier = "haiku" | "sonnet" | "opus";
+
+/** Per-task model choice. `context` covers both ingest summaries and the
+ *  relevance picker — the two background context-pipeline steps. */
+export interface ModelSettings {
+  rank: ModelTier;
+  edit: ModelTier;
+  adapt: ModelTier;
+  memory: ModelTier;
+  context: ModelTier;
+}
+
+/** Dropdown options, in display order. Hints describe the speed/cost tradeoff. */
+export const MODEL_TIERS: { value: ModelTier; label: string; hint: string }[] = [
+  { value: "haiku", label: "Haiku", hint: "Fastest, lightest" },
+  { value: "sonnet", label: "Sonnet", hint: "Balanced" },
+  { value: "opus", label: "Opus", hint: "Most capable, slowest" },
+];
+
+export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
+  rank: "haiku",
+  edit: "haiku",
+  adapt: "sonnet",
+  memory: "haiku",
+  context: "haiku",
+};
+
 export type SortMode = "manual" | "recent" | "most_used" | "never_used";
 
 export interface Settings {
@@ -77,6 +105,8 @@ export interface Settings {
   zoom: number;
   column_widths: ColumnWidths;
   paste_backend: PasteBackend;
+  /** Per-task Claude model tier (resolved to a concrete id in the sidecar). */
+  models: ModelSettings;
   /** Per-template placeholder fill-ins. Outer key: template id; inner: var → value. */
   placeholder_values: Record<string, Record<string, string>>;
   /** "recent" sorts non-pinned by last_used_at; "manual" preserves drag order. */
@@ -122,6 +152,7 @@ export const DEFAULT_SETTINGS: Settings = {
   zoom: 1,
   column_widths: DEFAULT_COLUMN_WIDTHS,
   paste_backend: "agent",
+  models: DEFAULT_MODEL_SETTINGS,
   placeholder_values: {},
   sort_mode: "recent",
   tag_order: [],

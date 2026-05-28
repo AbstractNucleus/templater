@@ -11,18 +11,20 @@
     type ContextSearchHit,
     type ContextStatus,
   } from "$lib/api";
-  import type { PasteBackend } from "$lib/types";
+  import type { ModelTier, PasteBackend } from "$lib/types";
 
   let {
     width,
     sources,
     backend,
+    model,
     onClose,
     onSourcesChange,
   }: {
     width: number;
     sources: string[];
     backend: PasteBackend;
+    model: ModelTier;
     onClose: () => void;
     onSourcesChange: (next: string[]) => Promise<void>;
   } = $props();
@@ -115,7 +117,7 @@
     const next = [...sources, path];
     await onSourcesChange(next);
     try {
-      status = await setContextSources(next, backend);
+      status = await setContextSources(next, backend, model);
     } catch (e) {
       errorBanner = String(e);
     }
@@ -126,7 +128,7 @@
     const next = sources.filter((s) => s !== path);
     await onSourcesChange(next);
     try {
-      status = await setContextSources(next, backend);
+      status = await setContextSources(next, backend, model);
     } catch (e) {
       errorBanner = String(e);
     }

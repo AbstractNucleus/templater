@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppData, PasteBackend, Template } from "./types";
+import type { AppData, ModelTier, PasteBackend, Template } from "./types";
 
 export async function loadAppData(): Promise<AppData | null> {
   return await invoke<AppData | null>("load_app_data");
@@ -152,8 +152,9 @@ export async function rankTemplates(
   pasted: string,
   catalog: Template[],
   backend: PasteBackend,
+  model: ModelTier,
 ): Promise<Ranking[]> {
-  const res = await invoke<RankResponse>("rank_templates", { pasted, catalog, backend });
+  const res = await invoke<RankResponse>("rank_templates", { pasted, catalog, backend, model });
   if (!res.ok) throw new Error(res.error ?? "rank failed");
   return res.rankings ?? [];
 }
@@ -180,8 +181,9 @@ export async function editTemplate(
   history: ChatTurn[],
   prompt: string,
   backend: PasteBackend,
+  model: ModelTier,
 ): Promise<{ reasoning: string; updated: EditedDraft }> {
-  const res = await invoke<EditResponse>("edit_template", { draft, history, prompt, backend });
+  const res = await invoke<EditResponse>("edit_template", { draft, history, prompt, backend, model });
   if (!res.ok || !res.updated) {
     throw new Error(res.error ?? "edit failed");
   }
@@ -202,8 +204,9 @@ export async function adaptTemplate(
   draft: EditedDraft,
   inbound: string,
   backend: PasteBackend,
+  model: ModelTier,
 ): Promise<{ reasoning: string; updated: EditedDraft; contextUsed: ContextUsage[] }> {
-  const res = await invoke<AdaptResponse>("adapt_template", { draft, inbound, backend });
+  const res = await invoke<AdaptResponse>("adapt_template", { draft, inbound, backend, model });
   if (!res.ok || !res.updated) {
     throw new Error(res.error ?? "adapt failed");
   }
@@ -272,8 +275,9 @@ function unwrap<T>(res: OkResponse, key: string, fallback: T, action: string): T
 export async function setContextSources(
   sources: string[],
   backend: PasteBackend,
+  model: ModelTier,
 ): Promise<ContextStatus> {
-  const res = await invoke<OkResponse>("context_set_sources", { sources, backend });
+  const res = await invoke<OkResponse>("context_set_sources", { sources, backend, model });
   return unwrap<ContextStatus>(res, "status", { sources: [], in_flight: 0 }, "set sources");
 }
 
@@ -323,11 +327,13 @@ export async function captureMemory(
   raw: string,
   source: string,
   backend: PasteBackend,
+  model: ModelTier,
 ): Promise<CaptureMemoryResult> {
   const res = await invoke<OkResponse>("context_capture_memory", {
     raw,
     source,
     backend,
+    model,
   });
   if (!res.ok) throw new Error(res.error ?? "capture failed");
   return {
