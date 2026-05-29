@@ -350,7 +350,11 @@ impl Store {
             fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
 
-        write_atomic(&self.templates_path, |w| {
+        // Stage BOTH temp files (backup + serialize + fsync) before renaming
+        // either into place. The two renames then run back-to-back, shrinking
+        // the window in which templates.json and settings.json can disagree if
+        // the process dies mid-save. Each file is still atomic individually.
+        let templates_tmp = prepare_temp(&self.templates_path, |w| {
             let payload = TemplatesFileWrite {
                 version: DATA_VERSION,
                 templates: &data.templates,
@@ -358,7 +362,7 @@ impl Store {
             serde_json::to_writer_pretty(w, &payload).map_err(|e| e.to_string())
         })?;
 
-        write_atomic(&self.settings_path, |w| {
+        let settings_tmp = prepare_temp(&self.settings_path, |w| {
             let payload = SettingsFileWrite {
                 version: DATA_VERSION,
                 settings: &data.settings,
@@ -366,7 +370,21 @@ impl Store {
             serde_json::to_writer_pretty(w, &payload).map_err(|e| e.to_string())
         })?;
 
+        commit_temp(&templates_tmp, &self.templates_path)?;
+        commit_temp(&settings_tmp, &self.settings_path)?;
+
         Ok(())
+    }
+
+    /// Load-or-default, run `f` against the merged [`AppData`], persist, and
+    /// return `f`'s result. Centralizes the read-modify-write-save pattern used
+    /// by the bulk/import commands. A missing data file defaults to empty,
+    /// matching those commands' prior behavior.
+    pub fn mutate<R>(&self, f: impl FnOnce(&mut AppData) -> Result<R, String>) -> Result<R, String> {
+        let mut data = self.load()?.unwrap_or_else(|| AppData::new(Vec::new()));
+        let result = f(&mut data)?;
+        self.save(&data)?;
+        Ok(result)
     }
 }
 
@@ -392,7 +410,12 @@ fn read_settings_file(path: &Path) -> Result<SettingsFileRead, String> {
         .map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
-fn write_atomic<F>(path: &Path, render: F) -> Result<(), String>
+/// Back up the current file (if any), then serialize the new contents to a
+/// sibling `<file>.tmp` and fsync it. Returns the temp path so the caller can
+/// rename it into place via [`commit_temp`] once every file in the batch has
+/// been staged. Split out of the old `write_atomic` so a multi-file save can
+/// stage all temps before committing any rename.
+fn prepare_temp<F>(path: &Path, render: F) -> Result<PathBuf, String>
 where
     F: FnOnce(&mut fs::File) -> Result<(), String>,
 {
@@ -416,8 +439,12 @@ where
         f.sync_all()
             .map_err(|e| format!("fsync {}: {e}", tmp.display()))?;
     }
+    Ok(tmp)
+}
 
-    fs::rename(&tmp, path)
+/// Atomically swap a staged temp file (from [`prepare_temp`]) into place.
+fn commit_temp(tmp: &Path, path: &Path) -> Result<(), String> {
+    fs::rename(tmp, path)
         .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;
     Ok(())
 }
