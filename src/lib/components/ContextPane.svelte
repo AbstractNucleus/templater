@@ -1,5 +1,6 @@
 <script lang="ts">
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { basename } from "$lib/pathUtils";
   import {
     getContextStatus,
     listContextFiles,
@@ -167,11 +168,6 @@
     } catch (e) {
       errorBanner = String(e);
     }
-  }
-
-  function basename(p: string): string {
-    const m = p.match(/[^\\/]+$/);
-    return m ? m[0] : p;
   }
 
   function fmtAgo(epochMs: number | null): string {

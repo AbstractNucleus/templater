@@ -41,6 +41,24 @@ export interface ParsedPlaceholder {
   kind: PlaceholderKind;
 }
 
+// Resolve a `<kind>` / `<kind>:<format>` token into its format + display
+// label, or null if `trimmed` isn't this kind. Unknown formats fall back to
+// `def`. Shared by the date and time cases below so they can't drift.
+function parseFormatToken<F extends string>(
+  trimmed: string,
+  kind: string,
+  formats: readonly F[],
+  def: F,
+): { format: F; label: string } | null {
+  if (trimmed === kind) return { format: def, label: kind };
+  if (trimmed.startsWith(`${kind}:`)) {
+    const fmt = trimmed.slice(kind.length + 1).trim();
+    const format = formats.find((f) => f === fmt) ?? def;
+    return { format, label: `${kind} (${format})` };
+  }
+  return null;
+}
+
 // Parses the inner token (between the braces) into a typed placeholder.
 // `date` and `date:<format>` auto-fill at compose time; `choice:a|b|c`
 // renders as a dropdown; anything else is a free-text variable.
@@ -48,32 +66,15 @@ export function parsePlaceholder(inner: string): ParsedPlaceholder {
   const trimmed = inner.trim();
   const raw = `{{${inner}}}`;
 
-  if (trimmed === "date") {
-    return { raw, key: trimmed, label: "date", kind: { type: "date", format: "iso" } };
+  const date = parseFormatToken<DateFormat>(trimmed, "date", ["iso", "long"], "iso");
+  if (date) {
+    return { raw, key: trimmed, label: date.label, kind: { type: "date", format: date.format } };
   }
-  if (trimmed.startsWith("date:")) {
-    const fmt = trimmed.slice("date:".length).trim();
-    const format: DateFormat = fmt === "long" ? "long" : "iso";
-    return {
-      raw,
-      key: trimmed,
-      label: `date (${format})`,
-      kind: { type: "date", format },
-    };
+  const time = parseFormatToken<TimeFormat>(trimmed, "time", ["short", "long"], "short");
+  if (time) {
+    return { raw, key: trimmed, label: time.label, kind: { type: "time", format: time.format } };
   }
-  if (trimmed === "time") {
-    return { raw, key: trimmed, label: "time", kind: { type: "time", format: "short" } };
-  }
-  if (trimmed.startsWith("time:")) {
-    const fmt = trimmed.slice("time:".length).trim();
-    const format: TimeFormat = fmt === "long" ? "long" : "short";
-    return {
-      raw,
-      key: trimmed,
-      label: `time (${format})`,
-      kind: { type: "time", format },
-    };
-  }
+
   if (trimmed.startsWith("choice:")) {
     const optsStr = trimmed.slice("choice:".length);
     const options = optsStr
@@ -165,18 +166,18 @@ export function splitPlaceholders(
 }
 
 // Substitute placeholders across the whole text. Dates always resolve;
-// text/choice fall through to the raw token if no value is set.
+// text/choice fall through to the raw token if no value is set. Built on
+// splitPlaceholders so the substitution rules can never diverge between the
+// preview (segments) and the copied text (this).
 export function applyValues(
   text: string,
   values: Record<string, string>,
   now: Date = new Date(),
   snippets: Record<string, string> = {},
 ): string {
-  return text.replace(PLACEHOLDER_RE, (raw, inner: string) => {
-    const p = parsePlaceholder(inner);
-    const resolved = resolveValue(p, values, snippets, now);
-    return resolved ?? raw;
-  });
+  return splitPlaceholders(text, values, now, snippets)
+    .map((s) => s.text)
+    .join("");
 }
 
 /**

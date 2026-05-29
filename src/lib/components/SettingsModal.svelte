@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type Mode, type ModelSettings, type PasteBackend, type Settings, type Theme } from "$lib/types";
+  import { type ModelSettings, type PasteBackend, type Settings } from "$lib/types";
   import { setHotkey, setQuickCaptureHotkey, type BackupEntry } from "$lib/api";
   import BackendSection from "./settings/BackendSection.svelte";
   import ModelsSection from "./settings/ModelsSection.svelte";
@@ -9,6 +9,10 @@
   import HotkeySection from "./settings/HotkeySection.svelte";
   import DiagnosticsSection from "./settings/DiagnosticsSection.svelte";
   import UpdatesSection from "./settings/UpdatesSection.svelte";
+  import GeneralSection from "./settings/GeneralSection.svelte";
+  import SnippetsSection from "./settings/SnippetsSection.svelte";
+  import ContextSection from "./settings/ContextSection.svelte";
+  import ImportExportSection from "./settings/ImportExportSection.svelte";
 
   type PortResult =
     | { kind: "ok"; message: string }
@@ -66,11 +70,6 @@
     onOpenCheatSheet: () => void;
   } = $props();
 
-  let portMessage = $state<string | null>(null);
-  let portError = $state<string | null>(null);
-  let portBusy = $state(false);
-  /** Transient per-action choice — not persisted; resets to false each open. */
-  let overwriteOnImport = $state(false);
   let activeTab = $state<TabId>("general");
 
   // Sidebar groups: visual divider between groups, no labels — 7 items don't
@@ -103,34 +102,6 @@
     about: "About",
   };
 
-  async function handleExportClick(): Promise<void> {
-    if (portBusy) return;
-    portBusy = true;
-    portMessage = null;
-    portError = null;
-    try {
-      const r = await onExportTemplates();
-      if (r.kind === "ok") portMessage = r.message;
-      else if (r.kind === "err") portError = r.error;
-    } finally {
-      portBusy = false;
-    }
-  }
-
-  async function handleImportClick(): Promise<void> {
-    if (portBusy) return;
-    portBusy = true;
-    portMessage = null;
-    portError = null;
-    try {
-      const r = await onImportTemplates(overwriteOnImport);
-      if (r.kind === "ok") portMessage = r.message;
-      else if (r.kind === "err") portError = r.error;
-    } finally {
-      portBusy = false;
-    }
-  }
-
   // Hotkey capture state lives at the parent level: the window-level keydown
   // handler below drains Escape across the modal (capture → rename → delete
   // confirm → close), and it has to mutate this state directly.
@@ -139,61 +110,6 @@
   // Distinct from `capturing` so the two rebinders don't interfere with each
   // other when both are exposed in the modal.
   let captureCapturing = $state<"none" | "main" | "quick">("none");
-
-  function updateSignature(next: string): void {
-    onUpdate({ ...settings, global_signature: next });
-  }
-
-  // Snippet management. The persisted shape is Record<string, string>, but
-  // rendering needs a stable order — turn it into [key, value] tuples and
-  // commit a Record back on every edit. A blank trailing row appears so the
-  // user always has somewhere to type the next snippet.
-  let snippetRows = $state<Array<{ key: string; value: string }>>([]);
-
-  // Sync local draft to settings whenever the props change (open / load /
-  // remote update). Drops empties on the way in so the UI shows exactly what's
-  // persisted; a single blank row is appended below.
-  $effect(() => {
-    const persisted = settings.snippets ?? {};
-    snippetRows = Object.entries(persisted).map(([key, value]) => ({ key, value }));
-  });
-
-  function commitSnippets(rows: Array<{ key: string; value: string }>): void {
-    const next: Record<string, string> = {};
-    for (const r of rows) {
-      const k = r.key.trim();
-      if (k.length === 0) continue;
-      next[k] = r.value;
-    }
-    onUpdate({ ...settings, snippets: next });
-  }
-
-  function updateSnippetKey(idx: number, key: string): void {
-    snippetRows[idx] = { ...snippetRows[idx], key };
-    commitSnippets(snippetRows);
-  }
-
-  function updateSnippetValue(idx: number, value: string): void {
-    snippetRows[idx] = { ...snippetRows[idx], value };
-    commitSnippets(snippetRows);
-  }
-
-  function removeSnippet(idx: number): void {
-    snippetRows = snippetRows.filter((_, i) => i !== idx);
-    commitSnippets(snippetRows);
-  }
-
-  function addSnippetRow(): void {
-    snippetRows = [...snippetRows, { key: "", value: "" }];
-  }
-
-  function setTheme(next: Theme): void {
-    onUpdate({ ...settings, theme: next });
-  }
-
-  function setMode(next: Mode): void {
-    onUpdate({ ...settings, mode: next });
-  }
 
   function setPasteBackend(next: PasteBackend): void {
     onUpdate({ ...settings, paste_backend: next });
@@ -328,54 +244,7 @@
 
       <div class="pane-body">
         {#if activeTab === "general"}
-          <section>
-            <div class="section-label">Mode</div>
-            <div class="seg-toggle">
-              <button
-                class="seg-btn"
-                class:active={settings.mode === "editor"}
-                onclick={() => setMode("editor")}
-              >
-                Editor
-              </button>
-              <button
-                class="seg-btn"
-                class:active={settings.mode === "user"}
-                onclick={() => setMode("user")}
-              >
-                User
-              </button>
-            </div>
-            <div class="hint">
-              {#if settings.mode === "editor"}
-                Full access. Create, edit, duplicate, and delete templates.
-              {:else}
-                Read-only. Browse, "Base on template" to draft a message, and copy the result —
-                but no catalog changes.
-              {/if}
-            </div>
-          </section>
-
-          <section>
-            <div class="section-label">Appearance</div>
-            <div class="seg-toggle">
-              <button
-                class="seg-btn"
-                class:active={settings.theme === "dark"}
-                onclick={() => setTheme("dark")}
-              >
-                Dark
-              </button>
-              <button
-                class="seg-btn"
-                class:active={settings.theme === "light"}
-                onclick={() => setTheme("light")}
-              >
-                Light
-              </button>
-            </div>
-          </section>
-
+          <GeneralSection {settings} {onUpdate} />
           <WindowSection {settings} {onUpdate} />
         {/if}
 
@@ -407,125 +276,15 @@
         {/if}
 
         {#if activeTab === "snippets"}
-          <section>
-            <div class="section-label">Global signature</div>
-            <textarea
-              class="field-textarea"
-              rows="3"
-              placeholder={"— Your Name\\nyou@example.com"}
-              value={settings.global_signature}
-              oninput={(e) => updateSignature(e.currentTarget.value)}
-            ></textarea>
-            <div class="hint">
-              Used when a template's own signature is empty and "Include signature" is on.
-            </div>
-          </section>
-
-          <section>
-            <div class="section-label">Global snippets</div>
-            {#if snippetRows.length > 0}
-              <ul class="snippet-list">
-                {#each snippetRows as row, idx (idx)}
-                  <li class="snippet-row">
-                    <input
-                      class="snippet-input snippet-key"
-                      type="text"
-                      placeholder="key (e.g. me_name)"
-                      value={row.key}
-                      oninput={(e) => updateSnippetKey(idx, e.currentTarget.value)}
-                    />
-                    <input
-                      class="snippet-input snippet-value"
-                      type="text"
-                      placeholder="expansion"
-                      value={row.value}
-                      oninput={(e) => updateSnippetValue(idx, e.currentTarget.value)}
-                    />
-                    <button
-                      class="snippet-remove"
-                      title="Remove snippet"
-                      aria-label="Remove snippet"
-                      onclick={() => removeSnippet(idx)}
-                    >×</button>
-                  </li>
-                {/each}
-              </ul>
-            {/if}
-            <div class="port-row">
-              <button class="port-btn" onclick={addSnippetRow}>+ Add snippet</button>
-            </div>
-            <div class="hint">
-              Snippets expand at copy time alongside <code>{"{{date}}"}</code> /
-              <code>{"{{time}}"}</code>. Use the key as the placeholder name —
-              <code>{"{{me_name}}"}</code> with key <code>me_name</code> expands to its value.
-              Per-template fills override snippets.
-            </div>
-          </section>
+          <SnippetsSection {settings} {onUpdate} />
         {/if}
 
         {#if activeTab === "context"}
-          <section>
-            <div class="section-label">Context sources</div>
-            {#if settings.context_sources.length === 0}
-              <div class="hint">No context folders configured. Add folders from the Context pane.</div>
-            {:else}
-              <ul class="context-source-list">
-                {#each settings.context_sources as source (source)}
-                  <li>{source}</li>
-                {/each}
-              </ul>
-            {/if}
-            <div class="hint">
-              These folders are indexed lazily by the sidecar and used during adapt/edit calls.
-            </div>
-          </section>
+          <ContextSection {settings} />
         {/if}
 
         {#if activeTab === "templates"}
-          <section>
-            <div class="section-label">Import / export</div>
-            <div class="port-row">
-              <button class="port-btn" disabled={portBusy} onclick={handleExportClick}>
-                Export…
-              </button>
-              {#if settings.mode === "editor"}
-                <button class="port-btn" disabled={portBusy} onclick={handleImportClick}>
-                  Import…
-                </button>
-              {/if}
-            </div>
-            {#if settings.mode === "editor"}
-              <label class="overwrite-toggle">
-                <input
-                  type="checkbox"
-                  checked={overwriteOnImport}
-                  onchange={(e) => (overwriteOnImport = e.currentTarget.checked)}
-                />
-                <span>Overwrite duplicates</span>
-              </label>
-            {/if}
-            {#if portMessage}
-              <div class="port-message">{portMessage}</div>
-            {/if}
-            {#if portError}
-              <div class="capture-error">{portError}</div>
-            {/if}
-            <div class="hint">
-              {#if settings.mode === "editor"}
-                Export writes all templates to a JSON file. Import merges by id —
-                {#if overwriteOnImport}
-                  matching templates are <strong>replaced</strong> with the import
-                  file's content (your usage stats stay; the pre-overwrite version
-                  is appended to history so you can Revert).
-                {:else}
-                  templates already on this machine are kept and duplicates are
-                  skipped.
-                {/if}
-              {:else}
-                Export writes all templates to a JSON file. Import is disabled in User mode.
-              {/if}
-            </div>
-          </section>
+          <ImportExportSection {settings} {onExportTemplates} {onImportTemplates} />
 
           {#if settings.mode === "editor"}
             <TagsSection
@@ -800,123 +559,4 @@
     box-shadow: inset 0 0 0 1px var(--accent-brand);
   }
 
-  /* Snippets */
-  .field-textarea {
-    width: 100%;
-    box-sizing: border-box;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 10px;
-    border-radius: 5px;
-    font: inherit;
-    font-size: 0.85rem;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    line-height: 1.45;
-    resize: vertical;
-    min-height: 60px;
-  }
-
-  .field-textarea:focus {
-    outline: none;
-    border-color: var(--border-focus);
-  }
-
-  .snippet-list {
-    list-style: none;
-    margin: 0 0 8px;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .snippet-row {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-  }
-
-  .snippet-input {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 5px 9px;
-    border-radius: 5px;
-    font: inherit;
-    font-size: 0.8rem;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  }
-
-  .snippet-input:focus {
-    outline: none;
-    border-color: var(--border-focus);
-  }
-
-  .snippet-key {
-    flex: 0 0 140px;
-  }
-
-  .snippet-value {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .snippet-remove {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    width: 26px;
-    height: 26px;
-    border-radius: 5px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.95rem;
-    line-height: 1;
-    padding: 0;
-    flex-shrink: 0;
-  }
-
-  .snippet-remove:hover {
-    background: var(--accent-danger-bg);
-    border-color: var(--accent-danger-border);
-    color: var(--accent-danger-text);
-  }
-
-  /* Context */
-  .context-source-list {
-    list-style: none;
-    margin: 0 0 8px;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.74rem;
-    color: var(--text-muted);
-  }
-
-  .context-source-list li {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 10px;
-    word-break: break-all;
-  }
-
-  /* Templates */
-  .overwrite-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-    color: var(--text-muted);
-    font-size: 0.82rem;
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .overwrite-toggle input[type="checkbox"] {
-    accent-color: var(--accent-brand);
-  }
 </style>

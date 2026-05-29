@@ -12,6 +12,7 @@ import {
   restoreTemplateBackup,
 } from "$lib/api";
 import { starterTemplates } from "$lib/starterTemplates";
+import { normalizeTag } from "$lib/tags";
 import {
   DEFAULT_SETTINGS,
   TEMPLATE_HISTORY_CAP,
@@ -56,8 +57,6 @@ function pushHistorySnapshot(cur: Template, savedAt: string): TemplateVersion[] 
 class TemplatesStore {
   templates = $state<Template[]>([]);
   settings = $state<Settings>({ ...DEFAULT_SETTINGS });
-  selectedTemplateId = $state<string | null>(null);
-  bulkSelectedIds = $state<Set<string>>(new Set());
   loaded = $state(false);
   loadError = $state<string | null>(null);
   undoToast = $state<string | null>(null);
@@ -97,7 +96,6 @@ class TemplatesStore {
           });
         }
       }
-      this.selectedTemplateId = this.templates[0]?.id ?? null;
     } catch (e) {
       // Surface the error and leave templates empty — DON'T fall back to
       // starter templates here. Any subsequent persist would overwrite the
@@ -155,12 +153,6 @@ class TemplatesStore {
       ...this.settings,
       placeholder_values: snap.placeholderValues,
     });
-    if (
-      this.selectedTemplateId === null ||
-      !snap.templates.some((t) => t.id === this.selectedTemplateId)
-    ) {
-      this.selectedTemplateId = snap.templates[0]?.id ?? null;
-    }
     this.#showUndoToast(`Undid ${snap.label}`);
   }
 
@@ -168,13 +160,6 @@ class TemplatesStore {
     this.undoToast = msg;
     if (this.#undoToastTimer) clearTimeout(this.#undoToastTimer);
     this.#undoToastTimer = setTimeout(() => (this.undoToast = null), 2000);
-  }
-
-  pruneBulkSelection(removedIds: Set<string>): void {
-    if (this.bulkSelectedIds.size === 0) return;
-    const next = new Set<string>();
-    for (const id of this.bulkSelectedIds) if (!removedIds.has(id)) next.add(id);
-    this.bulkSelectedIds = next;
   }
 
   async handleSave(updated: Template): Promise<void> {
@@ -197,20 +182,6 @@ class TemplatesStore {
     await this.persist(next);
   }
 
-  async handleDuplicate(): Promise<void> {
-    if (!this.isEditorMode) return;
-    const id = this.selectedTemplateId;
-    if (id === null) return;
-    await this.duplicateTemplateById(id);
-  }
-
-  async handleDelete(): Promise<void> {
-    if (!this.isEditorMode) return;
-    const id = this.selectedTemplateId;
-    if (id === null) return;
-    await this.deleteTemplateById(id);
-  }
-
   async duplicateTemplateById(id: string): Promise<string | null> {
     if (!this.isEditorMode) return null;
     const src = this.templates.find((t) => t.id === id);
@@ -228,7 +199,6 @@ class TemplatesStore {
     const next = [...this.templates];
     next.splice(idx + 1, 0, copy);
     await this.persist(next);
-    this.selectedTemplateId = copy.id;
     return copy.id;
   }
 
@@ -242,10 +212,6 @@ class TemplatesStore {
       ? { ...this.settings, placeholder_values: omitKey(this.settings.placeholder_values, id) }
       : this.settings;
     await this.persist(next, nextSettings);
-    if (this.selectedTemplateId === id) {
-      this.selectedTemplateId = next[Math.min(idx, next.length - 1)]?.id ?? null;
-    }
-    this.pruneBulkSelection(new Set([id]));
   }
 
   async togglePin(id: string): Promise<void> {
@@ -292,10 +258,6 @@ class TemplatesStore {
     const next = this.templates.filter((t) => !ids.has(t.id));
     const nextPlaceholders = { ...this.settings.placeholder_values };
     for (const id of ids) delete nextPlaceholders[id];
-    this.bulkSelectedIds = new Set();
-    if (this.selectedTemplateId !== null && ids.has(this.selectedTemplateId)) {
-      this.selectedTemplateId = next[0]?.id ?? null;
-    }
     try {
       const saved = await bulkDeleteTemplates([...ids]);
       this.templates = saved;
@@ -309,7 +271,7 @@ class TemplatesStore {
     if (!this.isEditorMode || ids.size === 0) return;
     // Mirror TagPicker's normalization so bulk-add doesn't create case-variant
     // duplicates (e.g. "Email" alongside an existing "email").
-    const trimmed = tag.trim().toLowerCase();
+    const trimmed = normalizeTag(tag);
     if (trimmed.length === 0) return;
     this.pushUndo(`tag ${ids.size}`);
     try {
@@ -321,7 +283,7 @@ class TemplatesStore {
 
   async bulkRemoveTag(ids: Set<string>, tag: string): Promise<void> {
     if (!this.isEditorMode || ids.size === 0) return;
-    const trimmed = tag.trim().toLowerCase();
+    const trimmed = normalizeTag(tag);
     if (trimmed.length === 0) return;
     this.pushUndo(`untag ${ids.size}`);
     try {
@@ -479,8 +441,6 @@ class TemplatesStore {
     // Rust already wrote the restored data to disk; sync local state.
     this.templates = data.templates;
     this.settings = data.settings;
-    this.selectedTemplateId = data.templates[0]?.id ?? null;
-    this.bulkSelectedIds = new Set();
   }
 
   async exportSingleTemplate(id: string): Promise<void> {
@@ -549,7 +509,6 @@ export async function handleImportTemplates(overwrite: boolean): Promise<PortRes
     const result = await importTemplates(path, overwrite);
     // Rust has already persisted the merged list; just sync local state.
     templatesStore.templates = result.templates;
-    templatesStore.bulkSelectedIds = new Set();
     const notes: string[] = [];
     if (result.overwritten > 0) notes.push(`${pluralise(result.overwritten, "duplicate")} overwritten`);
     if (result.skipped > 0) notes.push(`${pluralise(result.skipped, "duplicate")} skipped`);
