@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { Template, SortMode } from "$lib/types";
   import type { Ranking } from "$lib/api";
-  import { highlightName, type SearchHit } from "$lib/search";
+  import type { SearchHit } from "$lib/search";
+  import { createDragReorder } from "$lib/dragReorder.svelte";
+  import TemplateRow from "./TemplateRow.svelte";
 
   export type SelectModifier = "none" | "ctrl" | "shift";
 
@@ -74,12 +76,6 @@
     onContextTemplate(id, e.clientX, e.clientY);
   }
 
-  function modifierOf(e: MouseEvent): SelectModifier {
-    if (e.shiftKey) return "shift";
-    if (e.ctrlKey || e.metaKey) return "ctrl";
-    return "none";
-  }
-
   const templateById = $derived.by(() => {
     const map = new Map<string, Template>();
     for (const t of templates) map.set(t.id, t);
@@ -132,83 +128,45 @@
     btn?.scrollIntoView({ block: "nearest" });
   });
 
-  // Drag state. We track only the dragged id and the current hover target;
-  // the actual reorder fires on drop.
-  let draggingId = $state<string | null>(null);
-  let dragOverId = $state<string | null>(null);
-  let dragOverHalf = $state<"top" | "bottom">("top");
+  // Drag-to-reorder. The shared helper tracks the dragged id, hover target,
+  // and hover half; the reorder fires on drop. Gated on `canReorder` so a
+  // filtered view can't be reordered ambiguously.
+  const drag = createDragReorder({
+    enabled: () => canReorder,
+    currentIds: () => templates.map((t) => t.id),
+    onReorder: (ids) => onReorder(ids),
+  });
+
+  // Folder drop state lives outside the shared helper — it's specific to the
+  // Templates sidebar's grouped view.
   let dragOverFolder = $state<string | null>(null);
 
-  function handleDragStart(e: DragEvent, id: string): void {
-    if (!canReorder) return;
-    draggingId = id;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      // Required for Firefox to actually start the drag.
-      e.dataTransfer.setData("text/plain", id);
-    }
-  }
-
-  function handleDragOver(e: DragEvent, overId: string): void {
-    if (!canReorder || draggingId === null) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    dragOverHalf = e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
-    dragOverId = overId;
-  }
-
-  function handleDragLeave(overId: string): void {
-    if (dragOverId === overId) dragOverId = null;
-  }
-
-  function handleDrop(e: DragEvent, overId: string): void {
-    if (!canReorder || draggingId === null) return;
-    e.preventDefault();
-    const fromId = draggingId;
-    const half = dragOverHalf;
-    draggingId = null;
-    dragOverId = null;
-    if (fromId === overId) return;
-    const ids = templates.map((t) => t.id);
-    const fromIdx = ids.indexOf(fromId);
-    if (fromIdx < 0) return;
-    ids.splice(fromIdx, 1);
-    let toIdx = ids.indexOf(overId);
-    if (toIdx < 0) return;
-    if (half === "bottom") toIdx += 1;
-    ids.splice(toIdx, 0, fromId);
-    onReorder(ids);
-  }
-
   function draggedSelection(): Set<string> {
-    if (draggingId === null) return new Set();
-    if (bulkSelectedIds.size > 1 && bulkSelectedIds.has(draggingId)) {
+    if (drag.draggingId === null) return new Set();
+    if (bulkSelectedIds.size > 1 && bulkSelectedIds.has(drag.draggingId)) {
       return new Set(bulkSelectedIds);
     }
-    return new Set([draggingId]);
+    return new Set([drag.draggingId]);
   }
 
   function handleFolderDragOver(e: DragEvent, folder: string | null): void {
-    if (!canReorder || draggingId === null) return;
+    if (!canReorder || drag.draggingId === null) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     dragOverFolder = folder ?? "__ungrouped__";
   }
 
   function handleFolderDrop(e: DragEvent, folder: string | null): void {
-    if (!canReorder || draggingId === null) return;
+    if (!canReorder || drag.draggingId === null) return;
     e.preventDefault();
     const ids = draggedSelection();
-    draggingId = null;
-    dragOverId = null;
+    drag.reset();
     dragOverFolder = null;
     onMoveToFolder(ids, folder);
   }
 
   function handleDragEnd(): void {
-    draggingId = null;
-    dragOverId = null;
+    drag.handleDragEnd();
     dragOverFolder = null;
   }
 </script>
@@ -276,20 +234,15 @@
         {#each rankings as r (r.template_id)}
           {@const tpl = templateById.get(r.template_id)}
           {#if tpl}
-            {@const trimmed = tpl.body.trim()}
+            {@const rankedHit = { template: tpl, score: 0, matchedWords: 0, nameHits: [], tagHits: [], bodyHit: null } satisfies SearchHit}
             <li>
-              <button
-                class="template-item"
-                class:active={selectedTemplateId === tpl.id}
-                data-id={tpl.id}
-                onclick={(e) => onTemplateSelect(tpl.id, modifierOf(e))}
-                oncontextmenu={(e) => handleTemplateContext(e, tpl.id)}
-              >
-                <span class="name">{tpl.name}</span>
-                {#if trimmed.length > 0}
-                  <span class="excerpt">{trimmed.slice(0, 100)}{trimmed.length > 100 ? '…' : ''}</span>
-                {/if}
-              </button>
+              <TemplateRow
+                hit={rankedHit}
+                selected={selectedTemplateId === tpl.id}
+                plainExcerpt={tpl.body.trim()}
+                onSelect={(m) => onTemplateSelect(tpl.id, m)}
+                onContext={(e) => handleTemplateContext(e, tpl.id)}
+              />
             </li>
           {/if}
         {/each}
@@ -300,45 +253,22 @@
   {:else}
     {#snippet templateRow(hit: SearchHit, indent: boolean = false)}
       <li class:in-folder={indent}>
-        <button
-          class="template-item"
-          class:active={selectedTemplateId === hit.template.id}
-          class:bulk={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
-          class:pinned={hit.template.pinned}
-          class:dragging={draggingId === hit.template.id}
-          class:drag-over-top={dragOverId === hit.template.id && dragOverHalf === "top"}
-          class:drag-over-bottom={dragOverId === hit.template.id && dragOverHalf === "bottom"}
-          data-id={hit.template.id}
+        <TemplateRow
+          {hit}
+          selected={selectedTemplateId === hit.template.id}
+          bulkSelected={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
           draggable={canReorder}
-          ondragstart={(e) => handleDragStart(e, hit.template.id)}
-          ondragover={(e) => handleDragOver(e, hit.template.id)}
-          ondragleave={() => handleDragLeave(hit.template.id)}
-          ondrop={(e) => handleDrop(e, hit.template.id)}
-          ondragend={handleDragEnd}
-          onclick={(e) => onTemplateSelect(hit.template.id, modifierOf(e))}
-          oncontextmenu={(e) => handleTemplateContext(e, hit.template.id)}
-        >
-          <span class="name">
-            {#if hit.template.pinned}
-              <svg class="pin-mark" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-label="pinned" role="img"><title>Pinned</title>
-                <path d="M12 17v5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none" />
-                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
-              </svg>
-            {/if}
-            {#each highlightName(hit.template.name, hit.nameHits) as seg}
-              {#if seg.hit}
-                <span class="hit">{seg.text}</span>
-              {:else}
-                {seg.text}
-              {/if}
-            {/each}
-          </span>
-          {#if hit.nameHits.length === 0 && hit.bodyHit}
-            <span class="excerpt">
-              {#each hit.bodyHit.segments as seg}{#if seg.hit}<span class="hit">{seg.text}</span>{:else}{seg.text}{/if}{/each}
-            </span>
-          {/if}
-        </button>
+          dragging={drag.draggingId === hit.template.id}
+          dragOverTop={drag.dragOverId === hit.template.id && drag.dragOverHalf === "top"}
+          dragOverBottom={drag.dragOverId === hit.template.id && drag.dragOverHalf === "bottom"}
+          onSelect={(m) => onTemplateSelect(hit.template.id, m)}
+          onContext={(e) => handleTemplateContext(e, hit.template.id)}
+          onDragStart={(e) => drag.handleDragStart(e, hit.template.id)}
+          onDragOver={(e) => drag.handleDragOver(e, hit.template.id)}
+          onDragLeave={() => drag.handleDragLeave(hit.template.id)}
+          onDrop={(e) => drag.handleDrop(e, hit.template.id)}
+          onDragEnd={handleDragEnd}
+        />
       </li>
     {/snippet}
 
@@ -575,84 +505,6 @@
   .folder-count {
     color: var(--text-subtle);
     font-size: 0.65rem;
-  }
-
-  .template-item {
-    width: 100%;
-    text-align: left;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    padding: 4px 6px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-    position: relative;
-  }
-
-  .template-item:hover {
-    background: var(--bg-hover);
-  }
-
-  .template-item.active {
-    background: var(--bg-active);
-    color: var(--text-strong);
-  }
-
-  .template-item.bulk {
-    box-shadow: inset 3px 0 0 var(--accent-info-border);
-  }
-
-  .template-item.dragging {
-    opacity: 0.4;
-  }
-
-  .template-item.drag-over-top::before,
-  .template-item.drag-over-bottom::after {
-    content: "";
-    position: absolute;
-    left: 4px;
-    right: 4px;
-    height: 2px;
-    background: var(--accent-info-border);
-    border-radius: 1px;
-  }
-
-  .template-item.drag-over-top::before {
-    top: -1px;
-  }
-
-  .template-item.drag-over-bottom::after {
-    bottom: -1px;
-  }
-
-  .template-item .name {
-    display: block;
-  }
-
-  .pin-mark {
-    display: inline-block;
-    margin-right: 4px;
-    color: var(--accent-brand);
-    vertical-align: -1px;
-  }
-
-  .template-item .excerpt {
-    display: block;
-    margin-top: 2px;
-    font-size: 0.72rem;
-    color: var(--text-deemphasis);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .template-item .hit {
-    background: var(--accent-warning-bg);
-    color: var(--accent-warning-strong);
-    border-radius: 2px;
-    padding: 0 1px;
   }
 
   .empty,

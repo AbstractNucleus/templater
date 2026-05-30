@@ -133,7 +133,7 @@ export function searchTemplates(query: string, templates: Template[]): SearchHit
         template: t,
         score: total,
         matchedWords,
-        nameHits: mergeOverlapping(nameHits.sort((a, b) => a.start - b.start)),
+        nameHits: mergeOverlapping(nameHits),
         tagHits: [...tagHitSet],
         bodyHit,
       });
@@ -154,15 +154,36 @@ export function searchTemplates(query: string, templates: Template[]): SearchHit
 
 function mergeOverlapping(hits: NameHit[]): NameHit[] {
   if (hits.length === 0) return hits;
-  const out: NameHit[] = [{ ...hits[0] }];
-  for (let i = 1; i < hits.length; i++) {
+  const sorted = [...hits].sort((a, b) => a.start - b.start);
+  const out: NameHit[] = [{ ...sorted[0] }];
+  for (let i = 1; i < sorted.length; i++) {
     const last = out[out.length - 1];
-    if (hits[i].start <= last.end) {
-      last.end = Math.max(last.end, hits[i].end);
+    if (sorted[i].start <= last.end) {
+      last.end = Math.max(last.end, sorted[i].end);
     } else {
-      out.push({ ...hits[i] });
+      out.push({ ...sorted[i] });
     }
   }
+  return out;
+}
+
+/** Walk sorted, non-overlapping `ranges` over `text`, emitting `hit(range)`
+ *  for each range and `miss(slice)` for the gaps between and around them.
+ *  Shared by name-highlighting and the body-excerpt builder. */
+function segmentize<T, R extends { start: number; end: number }>(
+  text: string,
+  ranges: R[],
+  hit: (range: R) => T,
+  miss: (slice: string) => T,
+): T[] {
+  const out: T[] = [];
+  let cursor = 0;
+  for (const r of ranges) {
+    if (r.start > cursor) out.push(miss(text.slice(cursor, r.start)));
+    out.push(hit(r));
+    cursor = r.end;
+  }
+  if (cursor < text.length) out.push(miss(text.slice(cursor)));
   return out;
 }
 
@@ -191,17 +212,18 @@ function buildBodyHit(
     }
   }
   if (ranges.length === 0) return null;
-  const merged = mergeOverlapping(ranges.sort((a, b) => a.start - b.start));
+  const merged = mergeOverlapping(ranges);
 
   const segments: NameSegment[] = [];
   if (start > 0) segments.push({ text: "…", hit: false });
-  let cursor = 0;
-  for (const r of merged) {
-    if (r.start > cursor) segments.push({ text: excerpt.slice(cursor, r.start), hit: false });
-    segments.push({ text: excerpt.slice(r.start, r.end), hit: true });
-    cursor = r.end;
-  }
-  if (cursor < excerpt.length) segments.push({ text: excerpt.slice(cursor), hit: false });
+  segments.push(
+    ...segmentize<NameSegment, NameHit>(
+      excerpt,
+      merged,
+      (r) => ({ text: excerpt.slice(r.start, r.end), hit: true }),
+      (text) => ({ text, hit: false }),
+    ),
+  );
   if (end < body.length) segments.push({ text: "…", hit: false });
 
   return { segments };
@@ -215,13 +237,10 @@ export interface NameSegment {
 
 export function highlightName(name: string, hits: NameHit[]): NameSegment[] {
   if (hits.length === 0) return [{ text: name, hit: false }];
-  const out: NameSegment[] = [];
-  let cursor = 0;
-  for (const h of hits) {
-    if (h.start > cursor) out.push({ text: name.slice(cursor, h.start), hit: false });
-    out.push({ text: name.slice(h.start, h.end), hit: true });
-    cursor = h.end;
-  }
-  if (cursor < name.length) out.push({ text: name.slice(cursor), hit: false });
-  return out;
+  return segmentize<NameSegment, NameHit>(
+    name,
+    hits,
+    (h) => ({ text: name.slice(h.start, h.end), hit: true }),
+    (text) => ({ text, hit: false }),
+  );
 }

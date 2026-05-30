@@ -1,5 +1,6 @@
 <script lang="ts">
   import { captureMemory, listContextFiles, openPath, rescanContext } from "$lib/api";
+  import { basename } from "$lib/pathUtils";
   import type { ModelTier, PasteBackend } from "$lib/types";
 
   let {
@@ -125,10 +126,6 @@
     }
   }
 
-  function basename(p: string): string {
-    const m = p.match(/[^\\/]+$/);
-    return m ? m[0] : p;
-  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />

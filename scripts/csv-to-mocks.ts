@@ -16,6 +16,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseCsv, slugify } from "./lib/csv.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -27,63 +28,6 @@ function findCsv(): string {
     console.warn(`Multiple CSVs found, picking first: ${matches[0]}`);
   }
   return join(root, matches[0]);
-}
-
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuoted = false;
-  let i = 0;
-
-  while (i < text.length) {
-    const c = text[i];
-    if (inQuoted) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i += 2;
-          continue;
-        }
-        inQuoted = false;
-        i++;
-        continue;
-      }
-      field += c;
-      i++;
-      continue;
-    }
-    if (c === '"') {
-      inQuoted = true;
-      i++;
-      continue;
-    }
-    if (c === ",") {
-      row.push(field);
-      field = "";
-      i++;
-      continue;
-    }
-    if (c === "\r") {
-      i++;
-      continue;
-    }
-    if (c === "\n") {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = "";
-      i++;
-      continue;
-    }
-    field += c;
-    i++;
-  }
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
 }
 
 const GREETING_RE = /^\s*(hello|hi|hey)\b[,!.\s]*$/i;
@@ -121,15 +65,6 @@ function parseDate(raw: string): string {
   let year = m[3] ?? "2026";
   if (year.length === 2) year = "20" + year;
   return `${year}-${month}-${day}T00:00:00Z`;
-}
-
-function slugify(name: string, idx: number): string {
-  const base = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return `tpl-${idx.toString().padStart(4, "0")}-${base || "untitled"}`;
 }
 
 function tsString(s: string): string {

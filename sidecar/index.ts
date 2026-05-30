@@ -23,13 +23,7 @@
 
 import { createInterface } from "node:readline";
 import path from "node:path";
-import {
-  query,
-  startup,
-  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-  type WarmQuery,
-} from "@anthropic-ai/claude-agent-sdk";
-import Anthropic from "@anthropic-ai/sdk";
+import { query, startup, type WarmQuery } from "@anthropic-ai/claude-agent-sdk";
 import {
   captureMemory as ctxCaptureMemory,
   contextListFiles,
@@ -45,7 +39,34 @@ import {
   type PickerCandidate,
   type PickResult,
 } from "./context.js";
+import {
+  ADAPT_INSTRUCTIONS,
+  buildAdaptPrompt,
+  buildEditPrompt,
+  buildMemoryPrompt,
+  buildRankApiSystem,
+  buildRankPrompt,
+  buildRankSystemPrompt,
+  buildSummaryPrompt,
+  catalogKey,
+  EDIT_INSTRUCTIONS,
+  EDIT_SCHEMA,
+  MEMORY_INSTRUCTIONS,
+  MEMORY_SCHEMA,
+  PICK_INSTRUCTIONS,
+  PICK_SCHEMA,
+  RANKINGS_SCHEMA,
+  renderContextBlock,
+  resolveModel,
+  SUMMARY_INSTRUCTIONS,
+  SUMMARY_SCHEMA,
+  withContextBlock,
+  type CatalogEntry,
+  type ChatTurn,
+  type ModelTier,
+} from "./prompts.js";
 import { parseRequestLine } from "./protocol.js";
+import { callStructured, initApiKey, type AgentStream, type Backend } from "./transport.js";
 
 const APP_DATA_DIR = process.argv[2] ?? process.cwd();
 const CONTEXT_DB_PATH = path.join(APP_DATA_DIR, "context.db");
@@ -56,26 +77,8 @@ const CONTEXT_DB_PATH = path.join(APP_DATA_DIR, "context.db");
 // always uses the user's Claude subscription, API mode always uses the
 // captured key. Without this, an `ANTHROPIC_API_KEY` env var would silently
 // override Agent mode and bill against the API.
-const apiKeyForApiMode: string | null = process.env.ANTHROPIC_API_KEY ?? null;
+initApiKey(process.env.ANTHROPIC_API_KEY ?? null);
 delete process.env.ANTHROPIC_API_KEY;
-
-type Backend = "agent" | "api";
-
-type ModelTier = "haiku" | "sonnet" | "opus";
-
-/** Tier alias → concrete model id. The single source of truth for model ids;
- *  bump here when Anthropic ships new snapshots. */
-const MODEL_IDS: Record<ModelTier, string> = {
-  haiku: "claude-haiku-4-5-20251001",
-  sonnet: "claude-sonnet-4-6",
-  opus: "claude-opus-4-7",
-};
-
-/** Resolve a stored tier alias to a concrete model id. Falls back to Haiku for
- *  anything unrecognized — settings.json is user-editable. */
-function resolveModel(tier: string | undefined): string {
-  return MODEL_IDS[(tier ?? "") as ModelTier] ?? MODEL_IDS.haiku;
-}
 
 /** Backend used by context-side calls (ingest summaries, memory extraction).
  *  Adapt + edit + rank still pass their own backend per request. */
@@ -87,14 +90,6 @@ let contextModel: ModelTier = "haiku";
 
 type PingRequest = { id: string; op: "ping" };
 
-type CatalogEntry = {
-  id: string;
-  name: string;
-  tags?: string[];
-  opening?: string;
-  body: string;
-};
-
 type RankRequest = {
   id: string;
   op: "rank";
@@ -103,8 +98,6 @@ type RankRequest = {
   pasted: string;
   catalog: CatalogEntry[];
 };
-
-type ChatTurn = { role: "user" | "assistant"; content: string };
 
 type EditTemplateRequest = {
   id: string;
@@ -174,61 +167,17 @@ function emitProgress(id: string, text: string): void {
 
 type Ranking = { template_id: string; score: number };
 
-const RANK_INSTRUCTIONS = `You match pasted messages against a reply-template catalog.
-For each request, pick up to 5 best-matching templates from the catalog below
-and return them as structured output.
-Score each match 0..1 by semantic fit (intent, tone, scenario).
-Use the exact template_id from the catalog. Skip weak matches — fewer is fine.`;
+const RANK_TOOL_NAME = "submit_rankings";
+const EDIT_TOOL_NAME = "submit_edit";
 
-const RANKINGS_SCHEMA = {
-  type: "object",
-  required: ["rankings"],
-  additionalProperties: false,
-  properties: {
-    rankings: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["template_id", "score"],
-        additionalProperties: false,
-        properties: {
-          template_id: { type: "string" },
-          score: { type: "number" },
-        },
-      },
-    },
-  },
-} as const;
-
-function catalogToLines(catalog: CatalogEntry[]): string {
-  return catalog
-    .map((t) => {
-      const snippet = (t.body ?? "").replace(/\s+/g, " ").slice(0, 200);
-      return `- ${t.id} | ${t.name} | ${snippet}`;
-    })
-    .join("\n");
-}
-
-function buildSystemPrompt(catalog: CatalogEntry[]): string[] {
-  return [
-    RANK_INSTRUCTIONS,
-    `CATALOG (id | name | snippet):\n${catalogToLines(catalog)}`,
-    SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-  ];
-}
-
+/** Build the agent-SDK options used both for pre-warming (`startup`) and as the
+ *  cold-start fallback. systemPrompt is the boundary-marked string[] form. */
 function rankOptions(catalog: CatalogEntry[], model: string) {
   return {
     model,
     outputFormat: { type: "json_schema" as const, schema: RANKINGS_SCHEMA },
-    systemPrompt: buildSystemPrompt(catalog),
+    systemPrompt: buildRankSystemPrompt(catalog),
   };
-}
-
-function catalogKey(catalog: CatalogEntry[]): string {
-  return catalog
-    .map((t) => `${t.id}\0${t.name}\0${(t.body ?? "").slice(0, 200)}`)
-    .join("\n");
 }
 
 let warmKey: string | null = null;
@@ -255,106 +204,42 @@ async function takeWarmRank(catalog: CatalogEntry[], model: string): Promise<War
   return handle;
 }
 
+/** Obtain the agent stream for a rank request: consume a pre-warmed handle when
+ *  one is ready (skips the ~1-2s startup handshake), else cold-start via the
+ *  cold fallback options. Re-prewarms in the background for the next call. */
+async function rankAgentStream(req: RankRequest, model: string): Promise<AgentStream> {
+  const userPrompt = buildRankPrompt(req.pasted);
+  let stream: AgentStream;
+  try {
+    const handle = await takeWarmRank(req.catalog, model);
+    stream = handle.query(userPrompt);
+  } catch {
+    stream = query({ prompt: userPrompt, options: rankOptions(req.catalog, model) });
+  }
+  prewarmRank(req.catalog, model).catch(() => {});
+  return stream;
+}
+
 function send(response: Response): void {
   process.stdout.write(JSON.stringify(response) + "\n");
 }
 
 async function handleRank(req: RankRequest): Promise<Response> {
-  if (req.backend === "api") return runRankApi(req);
-  return runRankAgent(req);
-}
-
-async function runRankAgent(req: RankRequest): Promise<Response> {
   const model = resolveModel(req.model);
-  const userPrompt = `PASTED MESSAGE:\n${req.pasted}`;
-  const opts = rankOptions(req.catalog, model);
-
-  let stream;
-  try {
-    const handle = await takeWarmRank(req.catalog, model);
-    stream = handle.query(userPrompt);
-  } catch {
-    stream = query({ prompt: userPrompt, options: opts });
-  }
-
-  prewarmRank(req.catalog, model).catch(() => {});
-
-  for await (const msg of stream) {
-    if (msg.type !== "result") continue;
-    if (msg.subtype === "success") {
-      const out = msg.structured_output as { rankings?: Ranking[] } | undefined;
-      if (!out || !Array.isArray(out.rankings)) {
-        return { id: req.id, ok: false, error: "agent sdk returned no rankings" };
-      }
-      return { id: req.id, ok: true, rankings: out.rankings };
-    }
-    return {
-      id: req.id,
-      ok: false,
-      error: `agent sdk ${msg.subtype}: ${(msg.errors ?? []).join("; ") || "unknown"}`,
-    };
-  }
-  return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
-}
-
-let apiClient: Anthropic | null = null;
-function getApiClient(): Anthropic {
-  if (apiClient) return apiClient;
-  if (!apiKeyForApiMode) {
-    throw new Error("ANTHROPIC_API_KEY is not set; required for API backend");
-  }
-  apiClient = new Anthropic({ apiKey: apiKeyForApiMode });
-  return apiClient;
-}
-
-const RANK_TOOL_NAME = "submit_rankings";
-const EDIT_TOOL_NAME = "submit_edit";
-
-type ApiInputSchema = Anthropic.Messages.Tool["input_schema"];
-
-async function runRankApi(req: RankRequest): Promise<Response> {
-  let client: Anthropic;
-  try {
-    client = getApiClient();
-  } catch (err) {
-    return { id: req.id, ok: false, error: (err as Error).message };
-  }
-
-  const userPrompt = `PASTED MESSAGE:\n${req.pasted}`;
-  let msg;
-  try {
-    msg = await client.messages.create({
-      model: resolveModel(req.model),
-      max_tokens: 1024,
-      system: [
-        { type: "text", text: RANK_INSTRUCTIONS },
-        {
-          type: "text",
-          text: `CATALOG (id | name | snippet):\n${catalogToLines(req.catalog)}`,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      tools: [
-        {
-          name: RANK_TOOL_NAME,
-          description: "Submit the ranked template matches as structured output.",
-          input_schema: RANKINGS_SCHEMA as unknown as ApiInputSchema,
-        },
-      ],
-      tool_choice: { type: "tool", name: RANK_TOOL_NAME },
-      messages: [{ role: "user", content: userPrompt }],
-    });
-  } catch (err) {
-    return { id: req.id, ok: false, error: `anthropic api: ${(err as Error).message}` };
-  }
-
-  const block = msg.content.find((b) => b.type === "tool_use");
-  if (!block || block.type !== "tool_use" || block.name !== RANK_TOOL_NAME) {
-    return { id: req.id, ok: false, error: "anthropic api returned no tool_use block" };
-  }
-  const out = block.input as { rankings?: Ranking[] };
+  // Agent backend: hand callStructured a (warm or cold) pre-built stream that
+  // already carries the boundary-marked systemPrompt. API backend: pass the
+  // two-block system with cache_control on the catalog so prompt caching holds.
+  const out = await callStructured<{ rankings?: Ranking[] }>(req.backend, {
+    prompt: buildRankPrompt(req.pasted),
+    system: buildRankApiSystem(req.catalog),
+    agentStream: req.backend === "agent" ? await rankAgentStream(req, model) : undefined,
+    schema: RANKINGS_SCHEMA as unknown as Record<string, unknown>,
+    model,
+    toolName: RANK_TOOL_NAME,
+    toolDescription: "Submit the ranked template matches as structured output.",
+  });
   if (!out || !Array.isArray(out.rankings)) {
-    return { id: req.id, ok: false, error: "anthropic api returned no rankings" };
+    return { id: req.id, ok: false, error: "model returned no rankings" };
   }
   return { id: req.id, ok: true, rankings: out.rankings };
 }
@@ -363,153 +248,14 @@ async function runRankApi(req: RankRequest): Promise<Response> {
 // Context: summarizer + picker + memory extractor
 // ---------------------------------------------------------------------------
 
-const SUMMARY_SCHEMA = {
-  type: "object",
-  required: ["summary", "tags"],
-  additionalProperties: false,
-  properties: {
-    summary: { type: "string", description: "One to two short sentences describing what this file is about and when you'd reach for it." },
-    tags: {
-      type: "array",
-      items: { type: "string" },
-      description: "3-6 short topic keywords (lowercase, single words or short phrases).",
-    },
-  },
-} as const;
-
-const SUMMARY_INSTRUCTIONS = `You distill reference documents into a one-line gist plus a few topic tags.
-The summary will help an AI later decide whether this file is relevant to a question.
-Aim for 1-2 sentences. Tags should be short, lowercase, and topical (e.g. "refund-policy", "onboarding").`;
-
-const PICK_SCHEMA = {
-  type: "object",
-  required: ["picks"],
-  additionalProperties: false,
-  properties: {
-    picks: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["path", "reason"],
-        additionalProperties: false,
-        properties: {
-          path: { type: "string" },
-          reason: { type: "string" },
-        },
-      },
-    },
-  },
-} as const;
-
-const PICK_INSTRUCTIONS = `You select reference files that are relevant to a query.
-You are given a candidate list (path | summary | tags) and a query.
-Return 0..k picks — fewer is better than forcing weak matches. Only pick files that
-clearly help. Use the exact path from the candidate list.`;
-
-const MEMORY_SCHEMA = {
-  type: "object",
-  required: ["signal", "title"],
-  additionalProperties: false,
-  properties: {
-    signal: {
-      type: "string",
-      description: "The durable, reusable knowledge distilled from the raw input. Drop greetings, scheduling chatter, and one-off context.",
-    },
-    title: {
-      type: "string",
-      description: "A short topic label for this memory (3-6 words, Title Case-ish). Used as the filename and as a UI heading. No punctuation needed.",
-    },
-  },
-} as const;
-
-const MEMORY_INSTRUCTIONS = `You extract durable signal from pasted messages (Slack threads, emails, notes).
-Return one tight paragraph capturing the reusable knowledge — facts, decisions, procedures, names of people-and-what-they-own.
-Drop greetings, scheduling, and one-off context. If the input has no durable signal, return an empty string.
-Also return a short title (3-6 words) summarizing the topic — used as the filename and a UI heading.`;
-
-async function runStructuredAgent<T>(
-  prompt: string,
-  systemPrompt: string,
-  schema: Record<string, unknown>,
-  model: string,
-): Promise<T> {
-  // Cast at the boundary — the SDK wants a specific schema shape that's
-  // strict-typed via `as const` at the literal site, but our helper is
-  // schema-agnostic.
-  const outputFormat = { type: "json_schema" as const, schema } as unknown as {
-    type: "json_schema";
-    schema: Record<string, unknown>;
-  };
-  const stream = query({
-    prompt,
-    options: {
-      model,
-      outputFormat,
-      systemPrompt,
-    },
-  });
-  for await (const msg of stream) {
-    if (msg.type !== "result") continue;
-    if (msg.subtype === "success") {
-      if (msg.structured_output == null) {
-        throw new Error("agent sdk returned success without structured_output");
-      }
-      return msg.structured_output as T;
-    }
-    throw new Error(`agent sdk ${msg.subtype}: ${(msg.errors ?? []).join("; ") || "unknown"}`);
-  }
-  throw new Error("agent sdk stream ended without result");
-}
-
-async function runStructuredApi<T>(
-  prompt: string,
-  systemPrompt: string,
-  schema: unknown,
-  model: string,
-  toolName: string,
-): Promise<T> {
-  const client = getApiClient();
-  const msg = await client.messages.create({
-    model,
-    max_tokens: 1024,
-    system: systemPrompt,
-    tools: [
-      {
-        name: toolName,
-        description: "Submit the structured response.",
-        input_schema: schema as ApiInputSchema,
-      },
-    ],
-    tool_choice: { type: "tool", name: toolName },
-    messages: [{ role: "user", content: prompt }],
-  });
-  const block = msg.content.find((b) => b.type === "tool_use");
-  if (!block || block.type !== "tool_use") {
-    throw new Error("anthropic api returned no tool_use block");
-  }
-  if (block.input == null) {
-    throw new Error("anthropic api returned tool_use with null input");
-  }
-  return block.input as T;
-}
-
 async function summarizeFile(text: string, filename: string): Promise<{ summary: string; tags: string[] }> {
-  const userPrompt = `FILENAME: ${filename}\n\nCONTENT (truncated):\n${text}`;
-  if (contextBackend === "api") {
-    return await runStructuredApi<{ summary: string; tags: string[] }>(
-      userPrompt,
-      SUMMARY_INSTRUCTIONS,
-      SUMMARY_SCHEMA,
-      resolveModel(contextModel),
-      "submit_summary",
-    );
-  }
-  return await runStructuredAgent<{ summary: string; tags: string[] }>(
-    userPrompt,
-    SUMMARY_INSTRUCTIONS,
-    SUMMARY_SCHEMA,
-    resolveModel(contextModel),
-  );
+  return await callStructured<{ summary: string; tags: string[] }>(contextBackend, {
+    prompt: buildSummaryPrompt(text, filename),
+    system: SUMMARY_INSTRUCTIONS,
+    schema: SUMMARY_SCHEMA as unknown as Record<string, unknown>,
+    model: resolveModel(contextModel),
+    toolName: "submit_summary",
+  });
 }
 
 async function pickFiles(query: string, candidates: PickerCandidate[], k: number, backend: Backend): Promise<PickResult[]> {
@@ -517,107 +263,44 @@ async function pickFiles(query: string, candidates: PickerCandidate[], k: number
     .map((c) => `- ${c.path} | ${c.summary} | tags: ${c.tags.join(", ")}`)
     .join("\n");
   const userPrompt = `QUERY:\n${query}\n\nCANDIDATES (path | summary | tags):\n${candidateLines}\n\nReturn up to ${k} picks.`;
-  if (backend === "api") {
-    const out = await runStructuredApi<{ picks: PickResult[] }>(
-      userPrompt,
-      PICK_INSTRUCTIONS,
-      PICK_SCHEMA,
-      resolveModel(contextModel),
-      "submit_picks",
-    );
-    return out.picks ?? [];
-  }
-  const out = await runStructuredAgent<{ picks: PickResult[] }>(
-    userPrompt,
-    PICK_INSTRUCTIONS,
-    PICK_SCHEMA,
-    resolveModel(contextModel),
-  );
+  const out = await callStructured<{ picks: PickResult[] }>(backend, {
+    prompt: userPrompt,
+    system: PICK_INSTRUCTIONS,
+    schema: PICK_SCHEMA as unknown as Record<string, unknown>,
+    model: resolveModel(contextModel),
+    toolName: "submit_picks",
+  });
   return out.picks ?? [];
 }
 
 async function extractMemory(raw: string, backend: Backend, model: string): Promise<{ signal: string; title: string }> {
-  const prompt = `RAW INPUT:\n${raw}`;
-  const out = backend === "api"
-    ? await runStructuredApi<{ signal: string; title: string }>(
-        prompt,
-        MEMORY_INSTRUCTIONS,
-        MEMORY_SCHEMA,
-        model,
-        "submit_memory",
-      )
-    : await runStructuredAgent<{ signal: string; title: string }>(prompt, MEMORY_INSTRUCTIONS, MEMORY_SCHEMA, model);
+  const out = await callStructured<{ signal: string; title: string }>(backend, {
+    prompt: buildMemoryPrompt(raw),
+    system: MEMORY_INSTRUCTIONS,
+    schema: MEMORY_SCHEMA as unknown as Record<string, unknown>,
+    model,
+    toolName: "submit_memory",
+  });
   return { signal: out.signal ?? "", title: out.title ?? "" };
 }
 
-function renderContextBlock(picks: PickedFile[]): string {
-  if (picks.length === 0) return "";
-  const parts: string[] = ["The following reference material was selected as relevant. Use it to inform the draft when applicable; ignore anything that doesn't fit."];
-  for (const p of picks) {
-    parts.push(`---\nFILE: ${p.path}\nWHY: ${p.reason}\nCONTENT:\n${p.text}`);
-  }
-  return parts.join("\n\n");
-}
-
 // ---------------------------------------------------------------------------
-// Edit template (with context pre-fetch)
+// Draft (edit + adapt): shared transport + result shaping, divergent framing
 // ---------------------------------------------------------------------------
 
-const EDIT_INSTRUCTIONS = `You are editing a reply-template draft on behalf of the user.
-Each turn the user gives an instruction (e.g. "make it more polite", "add an apology",
-"shorten it"). Apply the instruction to the current draft and return the FULL updated
-draft along with a one-paragraph reasoning explaining what you changed.
+type DraftOutput = { reasoning?: string; updated?: { opening?: string; body?: string } };
 
-Rules:
-- Preserve {{variable}} placeholders unless the user explicitly asks to remove them.
-- Keep changes targeted — do not rewrite the entire message unless asked.
-- "opening" is the greeting line; "body" is everything else.
-- If the current draft is empty (both opening and body blank), treat the user's
-  instruction as a request to draft a new template from scratch. Use {{variable}}
-  placeholders for names, dates, or other context the recipient should fill in.
-- If the user's instruction is unclear or unsafe to apply, return the draft unchanged
-  and explain why in reasoning.`;
-
-const EDIT_SCHEMA = {
-  type: "object",
-  required: ["reasoning", "updated"],
-  additionalProperties: false,
-  properties: {
-    reasoning: { type: "string" },
-    updated: {
-      type: "object",
-      required: ["opening", "body"],
-      additionalProperties: false,
-      properties: {
-        opening: { type: "string" },
-        body: { type: "string" },
-      },
-    },
-  },
-} as const;
-
-function buildEditPrompt(req: EditTemplateRequest): string {
-  const historyBlock =
-    req.history.length === 0
-      ? "(no prior turns)"
-      : req.history
-          .map((t) => `${t.role.toUpperCase()}: ${t.content}`)
-          .join("\n\n");
-  return `CURRENT DRAFT:
-Opening: ${req.draft.opening}
-Body:
-${req.draft.body}
-
-PRIOR CONVERSATION:
-${historyBlock}
-
-NEW INSTRUCTION:
-${req.prompt}`;
-}
-
-async function fetchContextForEdit(req: EditTemplateRequest): Promise<PickedFile[]> {
-  const query = `${req.prompt}\n\nCurrent draft body:\n${req.draft.body}`;
-  return await pickRelevantFiles(query, (q, cs, k) => pickFiles(q, cs, k, req.backend));
+interface DraftSpec {
+  /** Draft instruction set (edit vs adapt). */
+  instructions: string;
+  /** The user prompt for the draft call. */
+  prompt: string;
+  /** Query text for context pre-fetch. */
+  contextQuery: string;
+  /** Tool description for the API backend. */
+  toolDescription: string;
+  /** Whether to attach the `context_used` payload (adapt only). */
+  includeContextUsed: boolean;
 }
 
 async function timedPick(fetcher: () => Promise<PickedFile[]>): Promise<{ picks: PickedFile[]; pickMs: number }> {
@@ -631,265 +314,36 @@ function withPickTiming(response: Response, pickMs: number): Response {
   return { ...response, timings: { pick_ms: pickMs } };
 }
 
-function editSystemPrompt(contextBlock: string): string {
-  return contextBlock.length > 0 ? `${EDIT_INSTRUCTIONS}\n\n${contextBlock}` : EDIT_INSTRUCTIONS;
-}
-
-async function handleEditTemplate(req: EditTemplateRequest): Promise<Response> {
-  const { picks, pickMs } = await timedPick(() => fetchContextForEdit(req));
-  const contextBlock = renderContextBlock(picks);
-  const response = req.backend === "api"
-    ? await runEditApi(req, contextBlock)
-    : await runEditAgent(req, contextBlock);
-  return withPickTiming(response, pickMs);
-}
-
-async function runEditAgent(req: EditTemplateRequest, contextBlock: string): Promise<Response> {
-  const stream = query({
-    prompt: buildEditPrompt(req),
-    options: {
-      model: resolveModel(req.model),
-      outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
-      systemPrompt: editSystemPrompt(contextBlock),
-      includePartialMessages: true,
-    },
-  });
-
-  let partial = "";
-  for await (const msg of stream) {
-    if (msg.type === "stream_event") {
-      const event = msg.event as { type?: string; delta?: { type?: string; partial_json?: string; text?: string } };
-      if (event.type === "content_block_delta" && event.delta) {
-        const chunk = event.delta.partial_json ?? event.delta.text ?? "";
-        if (chunk.length > 0) {
-          partial += chunk;
-          emitProgress(req.id, partial);
-        }
-      }
-      continue;
-    }
-    if (msg.type !== "result") continue;
-    if (msg.subtype === "success") {
-      const out = msg.structured_output as
-        | { reasoning?: string; updated?: { opening?: string; body?: string } }
-        | undefined;
-      if (!out || !out.updated || typeof out.updated.body !== "string") {
-        return { id: req.id, ok: false, error: "agent sdk returned no updated draft" };
-      }
-      return {
-        id: req.id,
-        ok: true,
-        reasoning: out.reasoning ?? "",
-        updated: {
-          opening: out.updated.opening ?? "",
-          body: out.updated.body,
-        },
-      };
-    }
-    return {
-      id: req.id,
-      ok: false,
-      error: `agent sdk ${msg.subtype}: ${(msg.errors ?? []).join("; ") || "unknown"}`,
-    };
-  }
-  return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
-}
-
-async function runEditApi(req: EditTemplateRequest, contextBlock: string): Promise<Response> {
-  let client: Anthropic;
-  try {
-    client = getApiClient();
-  } catch (err) {
-    return { id: req.id, ok: false, error: (err as Error).message };
-  }
-
-  let msg;
-  try {
-    msg = await client.messages.create({
-      model: resolveModel(req.model),
-      max_tokens: 2048,
-      system: editSystemPrompt(contextBlock),
-      tools: [
-        {
-          name: EDIT_TOOL_NAME,
-          description: "Submit the edited draft and reasoning as structured output.",
-          input_schema: EDIT_SCHEMA as unknown as ApiInputSchema,
-        },
-      ],
-      tool_choice: { type: "tool", name: EDIT_TOOL_NAME },
-      messages: [{ role: "user", content: buildEditPrompt(req) }],
-    });
-  } catch (err) {
-    return { id: req.id, ok: false, error: `anthropic api: ${(err as Error).message}` };
-  }
-
-  const block = msg.content.find((b) => b.type === "tool_use");
-  if (!block || block.type !== "tool_use" || block.name !== EDIT_TOOL_NAME) {
-    return { id: req.id, ok: false, error: "anthropic api returned no tool_use block" };
-  }
-  const out = block.input as { reasoning?: string; updated?: { opening?: string; body?: string } };
-  if (!out || !out.updated || typeof out.updated.body !== "string") {
-    return { id: req.id, ok: false, error: "anthropic api returned no updated draft" };
-  }
-  return {
-    id: req.id,
-    ok: true,
-    reasoning: out.reasoning ?? "",
-    updated: {
-      opening: out.updated.opening ?? "",
-      body: out.updated.body,
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Adapt template (with context pre-fetch)
-// ---------------------------------------------------------------------------
-
-const ADAPT_INSTRUCTIONS = `You adapt a reply-template draft to fit a specific inbound message.
-
-You are given:
-- The current draft (opening + body) — a generic template.
-- The inbound message it should reply to.
-
-Produce a tailored draft that responds directly to the inbound. Preserve the
-template's intent and tone, but make it specific: reference details from the
-inbound where it improves the reply, and drop boilerplate that no longer fits.
-
-Rules:
-- Keep {{variable}} placeholders unless concrete info from the inbound lets
-  you fill them in naturally.
-- "opening" is the greeting line; "body" is everything else.
-- Reasoning (one short paragraph) should explain what you changed and why.`;
-
-function buildAdaptPrompt(req: AdaptTemplateRequest): string {
-  return `INBOUND MESSAGE:
-${req.inbound}
-
-CURRENT DRAFT:
-Opening: ${req.draft.opening}
-Body:
-${req.draft.body}`;
-}
-
-async function fetchContextForAdapt(req: AdaptTemplateRequest): Promise<PickedFile[]> {
-  return await pickRelevantFiles(req.inbound, (q, cs, k) => pickFiles(q, cs, k, req.backend));
-}
-
-function adaptSystemPrompt(contextBlock: string): string {
-  return contextBlock.length > 0 ? `${ADAPT_INSTRUCTIONS}\n\n${contextBlock}` : ADAPT_INSTRUCTIONS;
-}
-
-async function handleAdaptTemplate(req: AdaptTemplateRequest): Promise<Response> {
-  const { picks, pickMs } = await timedPick(() => fetchContextForAdapt(req));
-  const contextBlock = renderContextBlock(picks);
-  const response = req.backend === "api"
-    ? await runAdaptApi(req, contextBlock, picks)
-    : await runAdaptAgent(req, contextBlock, picks);
-  return withPickTiming(response, pickMs);
-}
-
 function pickedFilesPayload(picks: PickedFile[]): Array<{ path: string; summary: string; reason: string }> {
   return picks.map((p) => ({ path: p.path, summary: p.summary, reason: p.reason }));
 }
 
-async function runAdaptAgent(
-  req: AdaptTemplateRequest,
-  contextBlock: string,
-  picks: PickedFile[],
+/** Shared driver for edit + adapt: pre-fetch context, run the structured draft
+ *  call (streaming partial text on the agent backend), shape the response. */
+async function handleDraft(
+  req: EditTemplateRequest | AdaptTemplateRequest,
+  spec: DraftSpec,
 ): Promise<Response> {
-  const stream = query({
-    prompt: buildAdaptPrompt(req),
-    options: {
-      model: resolveModel(req.model),
-      outputFormat: { type: "json_schema" as const, schema: EDIT_SCHEMA },
-      systemPrompt: adaptSystemPrompt(contextBlock),
-      includePartialMessages: true,
-    },
+  const { picks, pickMs } = await timedPick(() =>
+    pickRelevantFiles(spec.contextQuery, (q, cs, k) => pickFiles(q, cs, k, req.backend)),
+  );
+  const contextBlock = renderContextBlock(picks);
+
+  const out = await callStructured<DraftOutput>(req.backend, {
+    prompt: spec.prompt,
+    system: withContextBlock(spec.instructions, contextBlock),
+    schema: EDIT_SCHEMA as unknown as Record<string, unknown>,
+    model: resolveModel(req.model),
+    toolName: EDIT_TOOL_NAME,
+    toolDescription: spec.toolDescription,
+    maxTokens: 2048,
+    onPartial: (text) => emitProgress(req.id, text),
   });
 
-  let partial = "";
-  for await (const msg of stream) {
-    if (msg.type === "stream_event") {
-      const event = msg.event as { type?: string; delta?: { type?: string; partial_json?: string; text?: string } };
-      if (event.type === "content_block_delta" && event.delta) {
-        const chunk = event.delta.partial_json ?? event.delta.text ?? "";
-        if (chunk.length > 0) {
-          partial += chunk;
-          emitProgress(req.id, partial);
-        }
-      }
-      continue;
-    }
-    if (msg.type !== "result") continue;
-    if (msg.subtype === "success") {
-      const out = msg.structured_output as
-        | { reasoning?: string; updated?: { opening?: string; body?: string } }
-        | undefined;
-      if (!out || !out.updated || typeof out.updated.body !== "string") {
-        return { id: req.id, ok: false, error: "agent sdk returned no updated draft" };
-      }
-      return {
-        id: req.id,
-        ok: true,
-        reasoning: out.reasoning ?? "",
-        updated: {
-          opening: out.updated.opening ?? "",
-          body: out.updated.body,
-        },
-        context_used: pickedFilesPayload(picks),
-      };
-    }
-    return {
-      id: req.id,
-      ok: false,
-      error: `agent sdk ${msg.subtype}: ${(msg.errors ?? []).join("; ") || "unknown"}`,
-    };
-  }
-  return { id: req.id, ok: false, error: "agent sdk stream ended without result" };
-}
-
-async function runAdaptApi(
-  req: AdaptTemplateRequest,
-  contextBlock: string,
-  picks: PickedFile[],
-): Promise<Response> {
-  let client: Anthropic;
-  try {
-    client = getApiClient();
-  } catch (err) {
-    return { id: req.id, ok: false, error: (err as Error).message };
-  }
-
-  let msg;
-  try {
-    msg = await client.messages.create({
-      model: resolveModel(req.model),
-      max_tokens: 2048,
-      system: adaptSystemPrompt(contextBlock),
-      tools: [
-        {
-          name: EDIT_TOOL_NAME,
-          description: "Submit the adapted draft and reasoning as structured output.",
-          input_schema: EDIT_SCHEMA as unknown as ApiInputSchema,
-        },
-      ],
-      tool_choice: { type: "tool", name: EDIT_TOOL_NAME },
-      messages: [{ role: "user", content: buildAdaptPrompt(req) }],
-    });
-  } catch (err) {
-    return { id: req.id, ok: false, error: `anthropic api: ${(err as Error).message}` };
-  }
-
-  const block = msg.content.find((b) => b.type === "tool_use");
-  if (!block || block.type !== "tool_use" || block.name !== EDIT_TOOL_NAME) {
-    return { id: req.id, ok: false, error: "anthropic api returned no tool_use block" };
-  }
-  const out = block.input as { reasoning?: string; updated?: { opening?: string; body?: string } };
   if (!out || !out.updated || typeof out.updated.body !== "string") {
-    return { id: req.id, ok: false, error: "anthropic api returned no updated draft" };
+    return { id: req.id, ok: false, error: "model returned no updated draft" };
   }
-  return {
+  const response: Response = {
     id: req.id,
     ok: true,
     reasoning: out.reasoning ?? "",
@@ -897,8 +351,29 @@ async function runAdaptApi(
       opening: out.updated.opening ?? "",
       body: out.updated.body,
     },
-    context_used: pickedFilesPayload(picks),
+    ...(spec.includeContextUsed ? { context_used: pickedFilesPayload(picks) } : {}),
   };
+  return withPickTiming(response, pickMs);
+}
+
+function handleEditTemplate(req: EditTemplateRequest): Promise<Response> {
+  return handleDraft(req, {
+    instructions: EDIT_INSTRUCTIONS,
+    prompt: buildEditPrompt(req.draft, req.history, req.prompt),
+    contextQuery: `${req.prompt}\n\nCurrent draft body:\n${req.draft.body}`,
+    toolDescription: "Submit the edited draft and reasoning as structured output.",
+    includeContextUsed: false,
+  });
+}
+
+function handleAdaptTemplate(req: AdaptTemplateRequest): Promise<Response> {
+  return handleDraft(req, {
+    instructions: ADAPT_INSTRUCTIONS,
+    prompt: buildAdaptPrompt(req.draft, req.inbound),
+    contextQuery: req.inbound,
+    toolDescription: "Submit the adapted draft and reasoning as structured output.",
+    includeContextUsed: true,
+  });
 }
 
 // ---------------------------------------------------------------------------

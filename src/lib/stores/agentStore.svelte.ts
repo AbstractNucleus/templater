@@ -194,7 +194,6 @@ class AgentStore {
     };
     const next = [newTemplate, ...templatesStore.templates];
     await templatesStore.persist(next);
-    templatesStore.selectedTemplateId = newTemplate.id;
     selectionStore.selectedTemplateId = newTemplate.id;
     this.saveAsOpen = false;
     this.exitBaseMode();

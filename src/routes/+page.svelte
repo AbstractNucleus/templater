@@ -8,25 +8,26 @@
   import AgentSidebar from "$lib/components/AgentSidebar.svelte";
   import EditorPane from "$lib/components/EditorPane.svelte";
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import CheatSheet from "$lib/components/CheatSheet.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import ContextPane from "$lib/components/ContextPane.svelte";
   import MemoryCapturePopover from "$lib/components/MemoryCapturePopover.svelte";
-  import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
+  import { readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
   import { searchTemplates } from "$lib/search";
+  import { orderedTagCounts } from "$lib/tags";
+  import { buildContextMenu } from "$lib/contextMenu";
+  import { createGlobalKeydownHandler } from "$lib/keyboard";
   import {
-    rankTemplates,
     getEnvWarnings,
-    explainRankError,
     openDataDir,
     checkForUpdate,
     getAppVersion,
     onSidecarProgress,
     listTemplateBackups,
     setContextSources,
-    type Ranking,
   } from "$lib/api";
   import {
     DEFAULT_COLUMN_WIDTHS,
@@ -40,9 +41,9 @@
   } from "$lib/stores/templatesStore.svelte";
   import { agentStore } from "$lib/stores/agentStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { pasteMatchStore } from "$lib/stores/pasteMatchStore.svelte";
 
   const PASTE_THRESHOLD = 30;
-  const RANK_DEBOUNCE_MS = 600;
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2.0;
@@ -68,91 +69,12 @@
   }
 
   function handleGlobalContextMenu(e: MouseEvent): void {
-    const target = e.target as HTMLElement | null;
-    if (!target) {
-      e.preventDefault();
-      return;
-    }
-    const tag = target.tagName;
-    const isInputLike = tag === "INPUT" || tag === "TEXTAREA";
-
-    if (isInputLike) {
-      e.preventDefault();
-      const input = target as HTMLInputElement | HTMLTextAreaElement;
-      const start = input.selectionStart ?? 0;
-      const end = input.selectionEnd ?? 0;
-      const hasSelection = start !== end;
-      contextMenu = {
-        x: e.clientX,
-        y: e.clientY,
-        items: [
-          {
-            label: "Paste",
-            onClick: async () => {
-              let text: string | null;
-              try {
-                text = await readText();
-              } catch {
-                return;
-              }
-              if (text == null || text.length === 0) return;
-              input.focus();
-              // execCommand("insertText") feeds through the native input
-              // pipeline, preserving the browser undo stack so Ctrl+Z works
-              // afterwards. Falls back to direct mutation if unsupported.
-              const ok = document.execCommand("insertText", false, text);
-              if (!ok) {
-                const s = input.selectionStart ?? input.value.length;
-                const en = input.selectionEnd ?? input.value.length;
-                input.value = input.value.slice(0, s) + text + input.value.slice(en);
-                const caret = s + text.length;
-                input.setSelectionRange(caret, caret);
-                input.dispatchEvent(new Event("input", { bubbles: true }));
-              }
-            },
-          },
-          {
-            label: "Copy",
-            disabled: !hasSelection,
-            onClick: () => {
-              const slice = input.value.slice(start, end);
-              if (slice.length > 0) void writeText(slice);
-            },
-          },
-          {
-            label: "Select all",
-            onClick: () => {
-              input.focus();
-              input.select();
-            },
-          },
-        ],
-      };
-      return;
-    }
-
-    // Outside an input: contenteditable still gets default menu;
-    // otherwise show Copy when there's a text selection, else suppress.
-    if (target.isContentEditable) return;
-
-    const selectedText = window.getSelection()?.toString() ?? "";
-    if (selectedText.length > 0) {
-      e.preventDefault();
-      contextMenu = {
-        x: e.clientX,
-        y: e.clientY,
-        items: [
-          {
-            label: "Copy",
-            onClick: () => {
-              void writeText(selectedText);
-            },
-          },
-        ],
-      };
-      return;
-    }
+    const result = buildContextMenu(e);
+    if (result.action === "default") return;
     e.preventDefault();
+    if (result.action === "menu") {
+      contextMenu = { x: e.clientX, y: e.clientY, items: result.items };
+    }
   }
 
   function setZoom(next: number): void {
@@ -178,154 +100,6 @@
   function copySelected(): void {
     if (selectionStore.selectedTemplateId === null) return;
     copyTrigger++;
-  }
-
-  function handleGlobalKeydown(e: KeyboardEvent): void {
-    if (contextDeleteTarget) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        cancelContextDelete();
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        void confirmContextDelete();
-      }
-      return;
-    }
-    if (settingsOpen) return;
-    // Bulk-action modals + cheat sheet own Escape while open. Returning here
-    // prevents the rest of the handler from running (e.g. arrow keys moving
-    // selection underneath an open dialog).
-    if (bulkDeleteConfirmOpen) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        bulkDeleteConfirmOpen = false;
-      }
-      return;
-    }
-    if (bulkTagPromptOpen) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        bulkTagPromptOpen = false;
-        bulkTagDraft = "";
-      }
-      return;
-    }
-    if (bulkRemoveTagPromptOpen) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        bulkRemoveTagPromptOpen = false;
-        bulkTagDraft = "";
-      }
-      return;
-    }
-    // ? toggles the cheat sheet — runs before the cheatSheetOpen guard so the
-    // same key both opens AND closes. Skip when typing in an input so Shift+/
-    // still types literally.
-    if (e.key === "?" && !isInputFocused()) {
-      e.preventDefault();
-      cheatSheetOpen = !cheatSheetOpen;
-      return;
-    }
-    if (cheatSheetOpen) {
-      // CheatSheet.svelte has its own window listener for Escape — just
-      // suppress global shortcuts so e.g. arrow keys don't move selection.
-      return;
-    }
-    // Capture toggle runs before the captureOpen early-return so the same
-    // chord both opens and closes the popover.
-    if (
-      (e.ctrlKey || e.metaKey) &&
-      e.shiftKey &&
-      !e.altKey &&
-      e.key.toLowerCase() === "m"
-    ) {
-      e.preventDefault();
-      captureOpen = !captureOpen;
-      return;
-    }
-    if (captureOpen) {
-      // MemoryCapturePopover owns Escape via its own listener. Suppress
-      // global shortcuts so Ctrl+F / Ctrl+L / zoom don't steal focus while
-      // the modal popover is showing.
-      return;
-    }
-    const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.altKey;
-    if (ctrlOnly && (e.key === "+" || e.key === "=")) {
-      e.preventDefault();
-      setZoom((templatesStore.settings.zoom ?? 1) + ZOOM_STEP);
-      return;
-    }
-    if (ctrlOnly && (e.key === "-" || e.key === "_")) {
-      e.preventDefault();
-      setZoom((templatesStore.settings.zoom ?? 1) - ZOOM_STEP);
-      return;
-    }
-    if (ctrlOnly && e.key === "0") {
-      e.preventDefault();
-      setZoom(1);
-      return;
-    }
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
-      e.preventDefault();
-      clearSearch();
-      return;
-    }
-    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "f") {
-      // Suppress the webview's default Find dialog — the search input IS our find.
-      e.preventDefault();
-      if (searchInput) {
-        searchInput.focus();
-        searchInput.select();
-      }
-      return;
-    }
-    // Esc in the search box clears it — matches the Gmail/Slack convention.
-    // Scoped to the search input so Esc in other fields keeps native behaviour.
-    if (e.key === "Escape" && document.activeElement === searchInput && searchQuery.length > 0) {
-      e.preventDefault();
-      clearSearch();
-      return;
-    }
-
-    if (agentStore.baseMode || editing) return;
-    const inSearch = document.activeElement === searchInput;
-    if (!inSearch && isInputFocused()) return;
-
-    // Ctrl/Cmd+Z: undo the last template-list mutation. Native text undo wins
-    // inside inputs — including the search box, which we let through the
-    // isInputFocused guard above. Disabled in User mode where mutations can't
-    // happen anyway.
-    if (ctrlOnly && !e.shiftKey && e.key.toLowerCase() === "z" && isEditorMode && !inSearch) {
-      e.preventDefault();
-      void templatesStore.performUndo();
-      return;
-    }
-
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      moveSelection(1);
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      moveSelection(-1);
-      return;
-    }
-    // Enter copies when search is focused OR when no element is focused (body).
-    // Excludes a focused button — that case already gets a native Enter→click,
-    // so firing copySelected() too would double-trigger.
-    const activeIsBody = document.activeElement === document.body;
-    if (
-      e.key === "Enter" &&
-      (inSearch || activeIsBody) &&
-      !e.shiftKey &&
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.metaKey
-    ) {
-      e.preventDefault();
-      copySelected();
-    }
   }
 
   function startResize(target: "tags" | "templates" | "agent" | "context"): (e: PointerEvent) => void {
@@ -404,11 +178,6 @@
   let createBodyUpdate = $state<{ templateId: string | null; body: string; seq: number } | null>(null);
   let settingsOpen = $state(false);
   let cheatSheetOpen = $state(false);
-
-  let rankings = $state<Ranking[] | null>(null);
-  let rankLoading = $state(false);
-  let rankError = $state<string | null>(null);
-  let rankTimer: ReturnType<typeof setTimeout> | null = null;
 
   let copyTrigger = $state(0);
 
@@ -517,23 +286,32 @@
   );
 
   // Tag counts shared between the Tags sidebar UI and the SettingsModal tag
-  // manager. Mirrors the order rule in TagsSidebar (tag_order first, then
-  // count-desc / name-asc).
-  const settingsTagCounts = $derived.by(() => {
-    const counts = new Map<string, number>();
-    for (const t of templates) for (const tag of t.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-    const idx = new Map<string, number>();
-    settings.tag_order.forEach((t, i) => idx.set(t, i));
-    const all = [...counts.entries()];
-    all.sort((a, b) => {
-      const ai = idx.get(a[0]);
-      const bi = idx.get(b[0]);
-      if (ai !== undefined && bi !== undefined) return ai - bi;
-      if (ai !== undefined) return -1;
-      if (bi !== undefined) return 1;
-      return b[1] - a[1] || a[0].localeCompare(b[0]);
-    });
-    return all;
+  // manager.
+  const settingsTagCounts = $derived(orderedTagCounts(templates, settings.tag_order));
+
+  // Props the MainPanel takes identically in all three render modes (create /
+  // edit / browse). Spread at each site with `{...sharedMainPanelProps}`;
+  // per-branch props (template, editing, inboundText, the action callbacks,
+  // aiBodyUpdate, onDraftChange) are passed explicitly alongside the spread.
+  const sharedMainPanelProps = $derived({
+    globalSignature: settings.global_signature,
+    snippets: settings.snippets,
+    canEdit: isEditorMode,
+    availableTags,
+    availableFolders,
+    copyTrigger,
+    savedPlaceholderValues: settings.placeholder_values,
+    includeOpening,
+    includeSignature,
+    adaptBusy: agentStore.adaptBusy,
+    adaptError: agentStore.adaptError,
+    onClearAdaptError: () => (agentStore.adaptError = null),
+    onToggleOpening: (v: boolean) => (includeOpening = v),
+    onToggleSignature: (v: boolean) => (includeSignature = v),
+    onCopySuccess: (id: string) => void templatesStore.recordCopy(id),
+    onPlaceholderValuesChange: (id: string, vals: Record<string, string>) =>
+      void templatesStore.recordPlaceholderValues(id, vals),
+    onRevertHistory: (id: string, idx: number) => void templatesStore.revertHistory(id, idx),
   });
 
   // Ordered IDs the user can step through with ↑/↓. Paste mode follows the
@@ -542,6 +320,7 @@
   // so a deleted template doesn't leave a dead slot.
   const visibleTemplateIds = $derived.by(() => {
     if (inPasteMode) {
+      const rankings = pasteMatchStore.rankings;
       if (!rankings) return [];
       const present = new Set(templates.map((t) => t.id));
       return rankings.map((r) => r.template_id).filter((id) => present.has(id));
@@ -611,50 +390,23 @@
     searchQuery = q;
   }
 
+  // Drive the paste-match store off the search query. The debounce, staleness
+  // guard, API call, and error handling all live in pasteMatchStore; this
+  // effect just feeds it the current query (or clears it below the threshold,
+  // preserving the original clear-and-return behavior).
   $effect(() => {
-    if (rankTimer) {
-      clearTimeout(rankTimer);
-      rankTimer = null;
-    }
     const q = searchQuery;
     if (q.trim().length < PASTE_THRESHOLD) {
-      rankings = null;
-      rankError = null;
-      rankLoading = false;
+      pasteMatchStore.clear();
       return;
     }
-    const catalog = templates;
-    const backend = settings.paste_backend;
-    rankTimer = setTimeout(async () => {
-      rankLoading = true;
-      rankError = null;
-      try {
-        const result = await rankTemplates(q, catalog, backend, settings.models.rank);
-        if (searchQuery === q) rankings = result;
-      } catch (e) {
-        if (searchQuery === q) {
-          rankError = explainRankError(String(e));
-          rankings = null;
-        }
-      } finally {
-        if (searchQuery === q) rankLoading = false;
-      }
-    }, RANK_DEBOUNCE_MS);
+    pasteMatchStore.schedule(q, templates, settings.paste_backend, settings.models.rank);
   });
 
   async function retryRank(): Promise<void> {
-    rankError = null;
     const q = searchQuery;
     if (q.trim().length < PASTE_THRESHOLD) return;
-    rankLoading = true;
-    try {
-      const result = await rankTemplates(q, templates, settings.paste_backend, settings.models.rank);
-      if (searchQuery === q) rankings = result;
-    } catch (e) {
-      if (searchQuery === q) rankError = explainRankError(String(e));
-    } finally {
-      if (searchQuery === q) rankLoading = false;
-    }
+    await pasteMatchStore.retry(q, templates, settings.paste_backend, settings.models.rank);
   }
 
   // The Rust handler emits this when the quick-capture hotkey is pressed.
@@ -990,6 +742,34 @@
       createBodyUpdateSeq = 0;
     }
   });
+
+  // Global keyboard shortcuts. The handler body lives in $lib/keyboard.ts;
+  // these getters/actions are everything it closes over (live reads via
+  // getters so each keystroke sees current state).
+  const handleGlobalKeydown = createGlobalKeydownHandler({
+    isContextDeleteOpen: () => contextDeleteTarget !== null,
+    isSettingsOpen: () => settingsOpen,
+    isBulkDeleteConfirmOpen: () => bulkDeleteConfirmOpen,
+    isBulkTagPromptOpen: () => bulkTagPromptOpen,
+    isBulkRemoveTagPromptOpen: () => bulkRemoveTagPromptOpen,
+    isCheatSheetOpen: () => cheatSheetOpen,
+    setCheatSheetOpen: (v) => (cheatSheetOpen = v),
+    isCaptureOpen: () => captureOpen,
+    setCaptureOpen: (v) => (captureOpen = v),
+    getZoom: () => templatesStore.settings.zoom ?? 1,
+    setZoom,
+    zoomStep: ZOOM_STEP,
+    getSearchInput: () => searchInput,
+    getSearchQuery: () => searchQuery,
+    clearSearch,
+    isBaseMode: () => agentStore.baseMode,
+    isEditing: () => editing,
+    isEditorMode: () => isEditorMode,
+    isInputFocused,
+    moveSelection,
+    copySelected,
+    performUndo: () => void templatesStore.performUndo(),
+  });
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
@@ -1010,7 +790,7 @@
     onClearSearch={clearSearch}
     onSearchInputMount={(el) => (searchInput = el ?? undefined)}
     aiActive={inPasteMode}
-    aiBusy={inPasteMode && rankLoading}
+    aiBusy={inPasteMode && pasteMatchStore.rankLoading}
   />
   <div class="shell">
     {#if !loaded}
@@ -1051,24 +831,11 @@
       ></div>
       {#if agentStore.saveDraft !== null}
         <MainPanel
+          {...sharedMainPanelProps}
           template={null}
           creatingDraft={agentStore.saveDraft}
-          {includeOpening}
-          {includeSignature}
           editing={false}
-          globalSignature={settings.global_signature}
-          snippets={settings.snippets}
-          canEdit={isEditorMode}
-          {availableTags}
-          {availableFolders}
-          {copyTrigger}
-          savedPlaceholderValues={settings.placeholder_values}
           inboundText={null}
-          adaptBusy={agentStore.adaptBusy}
-          adaptError={agentStore.adaptError}
-          onClearAdaptError={() => (agentStore.adaptError = null)}
-          onToggleOpening={(v) => (includeOpening = v)}
-          onToggleSignature={(v) => (includeSignature = v)}
           onEnterEdit={() => {}}
           onCancelEdit={() =>
             agentStore.baseKind === "new"
@@ -1080,9 +847,6 @@
           onDelete={() => {}}
           onBaseOnTemplate={() => {}}
           onAdaptToInbound={() => {}}
-          onCopySuccess={(id) => void templatesStore.recordCopy(id)}
-          onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
-          onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
           aiBodyUpdate={agentStore.baseKind === "new" ? createBodyUpdate : null}
           onDraftChange={agentStore.baseKind === "new" ? handleCreateDraftChange : ignoreDraftChange}
         />
@@ -1120,23 +884,10 @@
         onpointerdown={startResize("agent")}
       ></div>
       <MainPanel
+        {...sharedMainPanelProps}
         template={selectedTemplate}
-        {includeOpening}
-        {includeSignature}
         editing={true}
-        globalSignature={settings.global_signature}
-        snippets={settings.snippets}
-        canEdit={isEditorMode}
-        {availableTags}
-        {availableFolders}
-        {copyTrigger}
-        savedPlaceholderValues={settings.placeholder_values}
         inboundText={null}
-        adaptBusy={agentStore.adaptBusy}
-        adaptError={agentStore.adaptError}
-        onClearAdaptError={() => (agentStore.adaptError = null)}
-        onToggleOpening={(v) => (includeOpening = v)}
-        onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={() => {}}
         onCancelEdit={cancelEditMode}
         onSave={handleSave}
@@ -1144,9 +895,6 @@
         onDelete={() => void deleteSelectedTemplate()}
         onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
         onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
-        onCopySuccess={(id) => void templatesStore.recordCopy(id)}
-        onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
-        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
         aiBodyUpdate={editBodyUpdate}
         onDraftChange={handleEditDraftChange}
       />
@@ -1177,9 +925,9 @@
         selectedTemplateId={selectionStore.selectedTemplateId}
         bulkSelectedIds={selectionStore.bulkSelectedIds}
         {searchQuery}
-        {rankings}
-        {rankLoading}
-        {rankError}
+        rankings={pasteMatchStore.rankings}
+        rankLoading={pasteMatchStore.rankLoading}
+        rankError={pasteMatchStore.rankError}
         pasteThreshold={PASTE_THRESHOLD}
         width={templatesWidth}
         canCreate={isEditorMode}
@@ -1205,23 +953,10 @@
         onpointerdown={startResize("templates")}
       ></div>
       <MainPanel
+        {...sharedMainPanelProps}
         template={selectedTemplate}
-        {includeOpening}
-        {includeSignature}
         {editing}
-        globalSignature={settings.global_signature}
-        snippets={settings.snippets}
-        canEdit={isEditorMode}
-        {availableTags}
-        {availableFolders}
-        {copyTrigger}
-        savedPlaceholderValues={settings.placeholder_values}
         inboundText={inPasteMode ? searchQuery : null}
-        adaptBusy={agentStore.adaptBusy}
-        adaptError={agentStore.adaptError}
-        onClearAdaptError={() => (agentStore.adaptError = null)}
-        onToggleOpening={(v) => (includeOpening = v)}
-        onToggleSignature={(v) => (includeSignature = v)}
         onEnterEdit={enterEditMode}
         onCancelEdit={cancelEditMode}
         onSave={handleSave}
@@ -1229,9 +964,6 @@
         onDelete={() => void deleteSelectedTemplate()}
         onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
         onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
-        onCopySuccess={(id) => void templatesStore.recordCopy(id)}
-        onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
-        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
         aiBodyUpdate={null}
         onDraftChange={ignoreDraftChange}
       />
@@ -1324,122 +1056,52 @@
 {/if}
 
 {#if bulkDeleteConfirmOpen}
-  <div
-    class="confirm-backdrop"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Confirm bulk delete"
-    tabindex="-1"
-    onclick={(e) => e.target === e.currentTarget && (bulkDeleteConfirmOpen = false)}
-    onkeydown={(e) => {
-      if (e.key === "Escape") bulkDeleteConfirmOpen = false;
-      else if (e.key === "Enter") void confirmBulkDelete();
-    }}
-  >
-    <div class="confirm-modal">
-      <h3>Delete {selectionStore.bulkSelectedIds.size} templates?</h3>
-      <p class="confirm-warn">Ctrl+Z will restore them.</p>
-      <div class="confirm-actions">
-        <button class="confirm-btn" onclick={() => (bulkDeleteConfirmOpen = false)}>Cancel</button>
-        <!-- svelte-ignore a11y_autofocus -->
-        <button class="confirm-btn danger" onclick={() => void confirmBulkDelete()} autofocus>
-          Delete {selectionStore.bulkSelectedIds.size}
-        </button>
-      </div>
-    </div>
-  </div>
+  <ConfirmDialog
+    title="Delete {selectionStore.bulkSelectedIds.size} templates?"
+    message="Ctrl+Z will restore them."
+    confirmLabel="Delete {selectionStore.bulkSelectedIds.size}"
+    danger
+    ariaLabel="Confirm bulk delete"
+    onConfirm={() => void confirmBulkDelete()}
+    onCancel={() => (bulkDeleteConfirmOpen = false)}
+  />
 {/if}
 
 {#if bulkTagPromptOpen}
-  <div
-    class="confirm-backdrop"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Bulk add tag"
-    tabindex="-1"
-    onclick={(e) =>
-      e.target === e.currentTarget && (bulkTagPromptOpen = false)}
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
-        bulkTagPromptOpen = false;
-        bulkTagDraft = "";
-      } else if (e.key === "Enter") {
-        void confirmBulkTag();
-      }
+  <ConfirmDialog
+    title="Add tag to {selectionStore.bulkSelectedIds.size} templates"
+    confirmLabel="Add"
+    ariaLabel="Bulk add tag"
+    input
+    bind:inputValue={bulkTagDraft}
+    inputPlaceholder="tag name"
+    confirmDisabled={bulkTagDraft.trim().length === 0}
+    onConfirm={() => void confirmBulkTag()}
+    onCancel={() => {
+      bulkTagPromptOpen = false;
+      bulkTagDraft = "";
     }}
-  >
-    <div class="confirm-modal">
-      <h3>Add tag to {selectionStore.bulkSelectedIds.size} templates</h3>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        class="bulk-tag-input"
-        type="text"
-        placeholder="tag name"
-        bind:value={bulkTagDraft}
-        autofocus
-      />
-      <div class="confirm-actions">
-        <button
-          class="confirm-btn"
-          onclick={() => {
-            bulkTagPromptOpen = false;
-            bulkTagDraft = "";
-          }}>Cancel</button
-        >
-        <button
-          class="confirm-btn"
-          disabled={bulkTagDraft.trim().length === 0}
-          onclick={() => void confirmBulkTag()}
-        >Add</button>
-      </div>
-    </div>
-  </div>
+    onDismiss={() => (bulkTagPromptOpen = false)}
+  />
 {/if}
 
 {#if bulkRemoveTagPromptOpen}
-  <div
-    class="confirm-backdrop"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Bulk remove tag"
-    tabindex="-1"
-    onclick={(e) =>
-      e.target === e.currentTarget && (bulkRemoveTagPromptOpen = false)}
-    onkeydown={(e) => {
-      if (e.key === "Escape") {
-        bulkRemoveTagPromptOpen = false;
-        bulkTagDraft = "";
-      } else if (e.key === "Enter") {
-        void confirmBulkRemoveTag();
-      }
+  <ConfirmDialog
+    title="Remove tag from {selectionStore.bulkSelectedIds.size} templates"
+    confirmLabel="Remove"
+    danger
+    ariaLabel="Bulk remove tag"
+    input
+    bind:inputValue={bulkTagDraft}
+    inputPlaceholder="tag name"
+    confirmDisabled={bulkTagDraft.trim().length === 0}
+    onConfirm={() => void confirmBulkRemoveTag()}
+    onCancel={() => {
+      bulkRemoveTagPromptOpen = false;
+      bulkTagDraft = "";
     }}
-  >
-    <div class="confirm-modal">
-      <h3>Remove tag from {selectionStore.bulkSelectedIds.size} templates</h3>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        class="bulk-tag-input"
-        type="text"
-        placeholder="tag name"
-        bind:value={bulkTagDraft}
-        autofocus
-      />
-      <div class="confirm-actions">
-        <button
-          class="confirm-btn"
-          onclick={() => {
-            bulkRemoveTagPromptOpen = false;
-            bulkTagDraft = "";
-          }}>Cancel</button
-        >
-        <button
-          class="confirm-btn danger"
-          disabled={bulkTagDraft.trim().length === 0}
-          onclick={() => void confirmBulkRemoveTag()}
-        >Remove</button>
-      </div>
-    </div>
-  </div>
+    onDismiss={() => (bulkRemoveTagPromptOpen = false)}
+  />
 {/if}
 
 {#if contextMenu}
@@ -1452,26 +1114,15 @@
 {/if}
 
 {#if contextDeleteTarget}
-  <div
-    class="confirm-backdrop"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="ctx-confirm-title"
-    tabindex="-1"
-    onclick={(e) => e.target === e.currentTarget && cancelContextDelete()}
-    onkeydown={() => {}}
-  >
-    <div class="confirm-modal">
-      <h3 id="ctx-confirm-title">Delete template?</h3>
-      <p class="confirm-name">"{contextDeleteTarget.name}"</p>
-      <p class="confirm-warn">Ctrl+Z will restore it.</p>
-      <div class="confirm-actions">
-        <button class="confirm-btn" onclick={cancelContextDelete}>Cancel</button>
-        <!-- svelte-ignore a11y_autofocus -->
-        <button class="confirm-btn danger" onclick={confirmContextDelete} autofocus>Delete</button>
-      </div>
-    </div>
-  </div>
+  <ConfirmDialog
+    title="Delete template?"
+    name={contextDeleteTarget.name}
+    message="Ctrl+Z will restore it."
+    confirmLabel="Delete"
+    danger
+    onConfirm={() => void confirmContextDelete()}
+    onCancel={cancelContextDelete}
+  />
 {/if}
 
 <style>
@@ -1750,96 +1401,5 @@
     pointer-events: none;
     box-shadow: 0 4px 12px var(--shadow);
     z-index: 200;
-  }
-
-  .confirm-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--backdrop);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 260;
-  }
-
-  .confirm-modal {
-    background: var(--bg-base);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px 22px;
-    width: 360px;
-    max-width: calc(100vw - 48px);
-    color: var(--text);
-    box-shadow: 0 8px 32px var(--shadow);
-  }
-
-  .confirm-modal h3 {
-    margin: 0 0 8px;
-    font-size: 0.95rem;
-    font-weight: 600;
-  }
-
-  .confirm-name {
-    margin: 0 0 4px;
-    font-size: 0.85rem;
-    color: var(--text);
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    word-break: break-word;
-  }
-
-  .confirm-warn {
-    margin: 0 0 18px;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-  }
-
-  .confirm-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-
-  .confirm-btn {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 6px 16px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .confirm-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .confirm-btn.danger {
-    background: var(--accent-danger-bg);
-    border-color: var(--accent-danger-border);
-    color: var(--accent-danger-text);
-  }
-
-  .confirm-btn.danger:hover {
-    background: var(--accent-danger-border);
-  }
-
-  .bulk-tag-input {
-    width: 100%;
-    box-sizing: border-box;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 10px;
-    border-radius: 4px;
-    font: inherit;
-    font-size: 0.9rem;
-    margin: 0 0 18px;
-  }
-
-  .bulk-tag-input:focus {
-    outline: none;
-    border-color: var(--border-focus);
   }
 </style>

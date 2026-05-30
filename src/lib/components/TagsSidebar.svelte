@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { Template } from "$lib/types";
+  import { orderedTagCounts } from "$lib/tags";
+  import { createDragReorder } from "$lib/dragReorder.svelte";
 
   let {
     templates,
@@ -36,25 +38,7 @@
     onContextEmpty(e.clientX, e.clientY);
   }
 
-  const tagCounts = $derived.by(() => {
-    const counts = new Map<string, number>();
-    for (const t of templates) {
-      for (const tag of t.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-    }
-    // Honor persisted order first, then fall back to count-desc / name-asc.
-    const orderIndex = new Map<string, number>();
-    tagOrder.forEach((t, i) => orderIndex.set(t, i));
-    const all = [...counts.entries()];
-    all.sort((a, b) => {
-      const ai = orderIndex.get(a[0]);
-      const bi = orderIndex.get(b[0]);
-      if (ai !== undefined && bi !== undefined) return ai - bi;
-      if (ai !== undefined) return -1;
-      if (bi !== undefined) return 1;
-      return b[1] - a[1] || a[0].localeCompare(b[0]);
-    });
-    return all;
-  });
+  const tagCounts = $derived(orderedTagCounts(templates, tagOrder));
 
   const hasAnyFilter = $derived(selectedTagIds.size > 0 || excludedTagIds.size > 0);
   const showCombinator = $derived(selectedTagIds.size >= 2);
@@ -69,54 +53,11 @@
     onTagExclude(tag);
   }
 
-  let draggingTag = $state<string | null>(null);
-  let dragOverTag = $state<string | null>(null);
-  let dragOverHalf = $state<"top" | "bottom">("top");
-
-  function handleDragStart(e: DragEvent, tag: string): void {
-    draggingTag = tag;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", tag);
-    }
-  }
-
-  function handleDragOver(e: DragEvent, overTag: string): void {
-    if (draggingTag === null) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    dragOverHalf = e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
-    dragOverTag = overTag;
-  }
-
-  function handleDragLeave(overTag: string): void {
-    if (dragOverTag === overTag) dragOverTag = null;
-  }
-
-  function handleDrop(e: DragEvent, overTag: string): void {
-    if (draggingTag === null) return;
-    e.preventDefault();
-    const fromTag = draggingTag;
-    const half = dragOverHalf;
-    draggingTag = null;
-    dragOverTag = null;
-    if (fromTag === overTag) return;
-    const visible = tagCounts.map(([tag]) => tag);
-    const fromIdx = visible.indexOf(fromTag);
-    if (fromIdx < 0) return;
-    visible.splice(fromIdx, 1);
-    let toIdx = visible.indexOf(overTag);
-    if (toIdx < 0) return;
-    if (half === "bottom") toIdx += 1;
-    visible.splice(toIdx, 0, fromTag);
-    onTagReorder(visible);
-  }
-
-  function handleDragEnd(): void {
-    draggingTag = null;
-    dragOverTag = null;
-  }
+  const drag = createDragReorder({
+    enabled: () => true,
+    currentIds: () => tagCounts.map(([tag]) => tag),
+    onReorder: (next) => onTagReorder(next),
+  });
 </script>
 
 <aside class="sidebar" style="width: {width}px" oncontextmenu={handleSidebarContext}>
@@ -148,15 +89,15 @@
           class="tag"
           class:active={selectedTagIds.has(tag)}
           class:excluded={excludedTagIds.has(tag)}
-          class:dragging={draggingTag === tag}
-          class:drag-over-top={dragOverTag === tag && dragOverHalf === "top"}
-          class:drag-over-bottom={dragOverTag === tag && dragOverHalf === "bottom"}
+          class:dragging={drag.draggingId === tag}
+          class:drag-over-top={drag.dragOverId === tag && drag.dragOverHalf === "top"}
+          class:drag-over-bottom={drag.dragOverId === tag && drag.dragOverHalf === "bottom"}
           draggable={true}
-          ondragstart={(e) => handleDragStart(e, tag)}
-          ondragover={(e) => handleDragOver(e, tag)}
-          ondragleave={() => handleDragLeave(tag)}
-          ondrop={(e) => handleDrop(e, tag)}
-          ondragend={handleDragEnd}
+          ondragstart={(e) => drag.handleDragStart(e, tag)}
+          ondragover={(e) => drag.handleDragOver(e, tag)}
+          ondragleave={() => drag.handleDragLeave(tag)}
+          ondrop={(e) => drag.handleDrop(e, tag)}
+          ondragend={drag.handleDragEnd}
           onclick={() => handleTagClick(tag)}
           oncontextmenu={(e) => handleTagContext(e, tag)}
         >
