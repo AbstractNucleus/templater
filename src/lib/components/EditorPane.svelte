@@ -58,10 +58,10 @@
   <div class="header-row">
     <div class="breadcrumb">
       {kind === "new"
-        ? "new template — agent editor"
+        ? "new template — editor"
         : kind === "edit"
-          ? "edit template — agent editor"
-          : "base-on-template — agent editor"}
+          ? "edit template — editor"
+          : "base-on-template — editor"}
     </div>
     <div class="actions">
       <button class="icon-btn" onclick={onCancel}>Cancel</button>

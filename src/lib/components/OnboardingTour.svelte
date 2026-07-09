@@ -1,25 +1,39 @@
 <script lang="ts">
-  let { onDismiss }: { onDismiss: () => void } = $props();
+  let {
+    onDismiss,
+    aiEnabled,
+  }: {
+    onDismiss: () => void;
+    /** False drops the AI steps — no point advertising hidden features. */
+    aiEnabled: boolean;
+  } = $props();
 
   type Step = { title: string; body: string };
 
   // Light-touch tour: 4 modal cards. Step 0 is the welcome; subsequent steps
   // each name one core capability. No DOM anchoring (no spotlight ring) —
   // keeps it forgiving across window sizes and theme changes.
-  const steps: Step[] = [
+  const steps = $derived<Step[]>([
     {
       title: "Welcome to Templater",
       body:
         "A desk-side companion for prose templates — emails, replies, follow-ups. " +
         "Click a template to preview, hit Copy (or press Enter) to put it on the clipboard.",
     },
-    {
-      title: "Search and paste-match",
-      body:
-        "Type a few words to filter literally — matches across name, tags, and body. " +
-        "Paste a longer message (30+ chars) and the app ranks the best-matching templates " +
-        "with Claude. Use “Adapt to inbound” to tailor a draft to the pasted message.",
-    },
+    aiEnabled
+      ? {
+          title: "Search and paste-match",
+          body:
+            "Type a few words to filter literally — matches across name, tags, and body. " +
+            "Paste a longer message (30+ chars) and the app ranks the best-matching templates " +
+            "with Claude. Use “Adapt to inbound” to tailor a draft to the pasted message.",
+        }
+      : {
+          title: "Search",
+          body:
+            "Type a few words to filter literally — matches across name, tags, and body. " +
+            "Enter copies the selected template straight to the clipboard.",
+        },
     {
       title: "Edit and organise",
       body:
@@ -27,22 +41,27 @@
         "Drag templates and tags to reorder when sort is set to Manual. Ctrl-click to " +
         "select multiple for bulk actions.",
     },
-    {
-      title: "Bring your own context",
-      body:
-        "Click the book icon in the title bar to add folders of markdown, PDF, or Excel — " +
-        "the AI consults them when adapting or editing templates. " +
-        "Ctrl+Shift+M opens a capture popover: paste a Slack thread or email and Haiku " +
-        "distills the durable signal into your memory file.",
-    },
+    ...(aiEnabled
+      ? [
+          {
+            title: "Bring your own context",
+            body:
+              "Click the book icon in the title bar to add folders of markdown, PDF, or Excel — " +
+              "the AI consults them when adapting or editing templates. " +
+              "Ctrl+Shift+M opens a capture popover: paste a Slack thread or email and Haiku " +
+              "distills the durable signal into your memory file.",
+          },
+        ]
+      : []),
     {
       title: "Stay handy",
       body:
         "Closing the window minimises to tray — quit from the tray icon. " +
-        "Press ? any time for the full shortcut list. Settings has paste-match auth, " +
+        "Press ? any time for the full shortcut list. Settings has " +
+        (aiEnabled ? "paste-match auth, " : "") +
         "tag management, backups, and diagnostics.",
     },
-  ];
+  ]);
 
   let stepIndex = $state(0);
   const isLast = $derived(stepIndex === steps.length - 1);

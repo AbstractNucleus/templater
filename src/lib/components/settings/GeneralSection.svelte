@@ -16,6 +16,10 @@
   function setMode(next: Mode): void {
     onUpdate({ ...settings, mode: next });
   }
+
+  function setAiEnabled(next: boolean): void {
+    onUpdate({ ...settings, ai_enabled: next });
+  }
 </script>
 
 <section>
@@ -42,6 +46,35 @@
     {:else}
       Read-only. Browse, "Base on template" to draft a message, and copy the result —
       but no catalog changes.
+    {/if}
+  </div>
+</section>
+
+<section>
+  <div class="section-label">AI features</div>
+  <div class="seg-toggle">
+    <button
+      class="seg-btn"
+      class:active={!settings.ai_enabled}
+      onclick={() => setAiEnabled(false)}
+    >
+      Off
+    </button>
+    <button
+      class="seg-btn"
+      class:active={settings.ai_enabled}
+      onclick={() => setAiEnabled(true)}
+    >
+      On
+    </button>
+  </div>
+  <div class="hint">
+    {#if settings.ai_enabled}
+      Claude-powered features are on: paste-match ranking, the agent editor,
+      "Adapt to inbound", context sources, and memory capture.
+    {:else}
+      All AI features are hidden. Turn on to rank pasted messages, draft and
+      adapt templates with Claude, and use context sources.
     {/if}
   </div>
 </section>

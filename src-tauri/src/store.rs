@@ -160,6 +160,10 @@ pub struct Settings {
     pub zoom: f32,
     #[serde(default)]
     pub column_widths: ColumnWidths,
+    /// Master switch for every Claude-powered feature. Off (the default)
+    /// hides all AI surfaces in the UI.
+    #[serde(default)]
+    pub ai_enabled: bool,
     #[serde(default = "default_paste_backend")]
     pub paste_backend: String,
     #[serde(default = "default_models")]
@@ -218,6 +222,7 @@ impl Default for Settings {
             mode: default_mode(),
             zoom: default_zoom(),
             column_widths: ColumnWidths::default(),
+            ai_enabled: false,
             paste_backend: default_paste_backend(),
             models: ModelSettings::default(),
             placeholder_values: HashMap::new(),

@@ -16,6 +16,8 @@ export interface GlobalKeydownDeps {
   setCheatSheetOpen: (v: boolean) => void;
   isCaptureOpen: () => boolean;
   setCaptureOpen: (v: boolean) => void;
+  // Master AI switch — gates the Ctrl+Shift+M capture chord.
+  isAiEnabled: () => boolean;
   // Zoom: current effective zoom (already defaulted), the setter, and the step.
   getZoom: () => number;
   setZoom: (next: number) => void;
@@ -65,8 +67,10 @@ export function createGlobalKeydownHandler(
       return;
     }
     // Capture toggle runs before the captureOpen early-return so the same
-    // chord both opens and closes the popover.
+    // chord both opens and closes the popover. Skipped entirely when AI
+    // features are off — the popover doesn't exist then.
     if (
+      deps.isAiEnabled() &&
       (e.ctrlKey || e.metaKey) &&
       e.shiftKey &&
       !e.altKey &&

@@ -104,6 +104,10 @@ export interface Settings {
   mode: Mode;
   zoom: number;
   column_widths: ColumnWidths;
+  /** Master switch for every Claude-powered feature. When false, no AI
+   *  surface renders: paste-match ranking, agent sidebar, adapt, context
+   *  sources, and memory capture are all hidden. */
+  ai_enabled: boolean;
   paste_backend: PasteBackend;
   /** Per-task Claude model tier (resolved to a concrete id in the sidecar). */
   models: ModelSettings;
@@ -151,6 +155,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: "editor",
   zoom: 1,
   column_widths: DEFAULT_COLUMN_WIDTHS,
+  ai_enabled: false,
   paste_backend: "agent",
   models: DEFAULT_MODEL_SETTINGS,
   placeholder_values: {},

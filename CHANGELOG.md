@@ -4,6 +4,32 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-07-09
+
+### Added
+
+- **AI features master toggle.** New **Settings → General → "AI
+  features"** switch, **off by default**. While off, no AI surface
+  renders: paste-match ranking (long pastes stay a literal search — no
+  AI chip, no ranked list, no "Adapt to inbound"), the agent chat
+  sidebar in create/edit modes, the title-bar memory-capture and
+  context-pane buttons, the Ctrl+Shift+M capture chord, the Settings
+  **AI** and **Context** tabs, and the sidecar Diagnostics section
+  under About. The Node sidecar is never woken while the toggle is off.
+  Stored as `ai_enabled` in settings.json (`serde(default)`, so
+  existing files load cleanly).
+
+### Changed
+
+- **AI is now opt-in for everyone, including existing installs.** The
+  new flag defaults to off, so AI features are hidden after updating
+  until re-enabled in Settings → General.
+- Manual template creation and editing work unchanged with AI off; the
+  editor pane and "Base on template" flow lose their AI branding
+  ("agent editor" → "editor").
+- The onboarding tour and shortcut cheat sheet drop their AI steps and
+  sections while the toggle is off.
+
 ## [0.6.0] — 2026-05-28
 
 ### Changed

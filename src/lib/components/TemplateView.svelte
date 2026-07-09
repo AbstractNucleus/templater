@@ -364,7 +364,7 @@
       {adaptBusy ? "Adapting…" : "Adapt to inbound"}
     </button>
   {/if}
-  <button class="base-btn" onclick={onBaseOnTemplate} title="Open this template in the agent editor">
+  <button class="base-btn" onclick={onBaseOnTemplate} title="Start a new draft based on this template">
     Base on template
   </button>
   <button class="copy" class:ok={copyState === "ok"} class:err={copyState === "error"} onclick={copyToClipboard}>

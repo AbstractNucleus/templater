@@ -92,6 +92,14 @@
     ],
   ];
 
+  // AI + Context tabs only exist while AI features are enabled; empty groups
+  // collapse so the divider doesn't render around nothing.
+  const visibleTabGroups = $derived(
+    TAB_GROUPS.map((group) =>
+      group.filter((t) => settings.ai_enabled || (t.id !== "ai" && t.id !== "context")),
+    ).filter((group) => group.length > 0),
+  );
+
   const TAB_TITLES: Record<TabId, string> = {
     general: "General",
     shortcuts: "Shortcuts",
@@ -219,7 +227,7 @@
         <span class="sidebar-title">Settings</span>
       </div>
       <nav class="sidebar-nav">
-        {#each TAB_GROUPS as group, gi (gi)}
+        {#each visibleTabGroups as group, gi (gi)}
           {#if gi > 0}
             <div class="sidebar-divider" aria-hidden="true"></div>
           {/if}
@@ -305,7 +313,9 @@
 
         {#if activeTab === "about"}
           <UpdatesSection {currentVersion} {onCheckUpdate} />
-          <DiagnosticsSection />
+          {#if settings.ai_enabled}
+            <DiagnosticsSection />
+          {/if}
         {/if}
       </div>
     </div>

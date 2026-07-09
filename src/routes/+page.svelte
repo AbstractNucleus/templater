@@ -272,7 +272,12 @@
     return [...pinned, ...others];
   });
 
-  const inPasteMode = $derived(searchQuery.trim().length >= PASTE_THRESHOLD);
+  // Paste-match is an AI feature — with AI off, any query length is a plain
+  // literal search and none of the paste-mode UI (ranked list, AI chip,
+  // adapt button) can appear.
+  const inPasteMode = $derived(
+    settings.ai_enabled && searchQuery.trim().length >= PASTE_THRESHOLD,
+  );
 
   // Drag-reorder is only safe when the visible order IS the underlying array
   // order. Any filter, search, or paste-mode ranking breaks that invariant.
@@ -396,7 +401,7 @@
   // preserving the original clear-and-return behavior).
   $effect(() => {
     const q = searchQuery;
-    if (q.trim().length < PASTE_THRESHOLD) {
+    if (!settings.ai_enabled || q.trim().length < PASTE_THRESHOLD) {
       pasteMatchStore.clear();
       return;
     }
@@ -670,7 +675,7 @@
   let lastForwardedBackend: typeof settings.paste_backend | null = null;
   let lastForwardedModel: typeof settings.models.context | null = null;
   $effect(() => {
-    if (!loaded) return;
+    if (!loaded || !settings.ai_enabled) return;
     const sources = settings.context_sources;
     const backend = settings.paste_backend;
     const model = settings.models.context;
@@ -719,6 +724,7 @@
       lastForwardedSourcesJson = "";
       lastForwardedBackend = null;
       lastForwardedModel = null;
+      if (!templatesStore.settings.ai_enabled) return;
       void setContextSources(settings.context_sources, settings.paste_backend, settings.models.context).catch(() => {});
     });
     return () => {
@@ -756,6 +762,7 @@
     setCheatSheetOpen: (v) => (cheatSheetOpen = v),
     isCaptureOpen: () => captureOpen,
     setCaptureOpen: (v) => (captureOpen = v),
+    isAiEnabled: () => settings.ai_enabled,
     getZoom: () => templatesStore.settings.zoom ?? 1,
     setZoom,
     zoomStep: ZOOM_STEP,
@@ -784,6 +791,7 @@
     {contextOpen}
     onToggleCapture={() => (captureOpen = !captureOpen)}
     {captureOpen}
+    aiEnabled={settings.ai_enabled}
     showSearch={!agentStore.baseMode && !editing}
     {searchQuery}
     onSearchChange={handleSearchChange}
@@ -810,25 +818,27 @@
         <div class="skel-block"></div>
       </section>
     {:else if agentStore.baseMode}
-      <AgentSidebar
-        kind={agentStore.baseKind}
-        messages={agentStore.agentMessages}
-        busy={agentStore.agentBusy}
-        error={agentStore.agentError}
-        progress={agentStore.agentProgress}
-        sourceName={agentStore.baseSourceName}
-        width={agentSidebarWidth}
-        onSubmit={(p) =>
-          agentStore.baseKind === "new"
-            ? void handleCreateAgentPrompt(p)
-            : agentStore.handleAgentPrompt(p)}
-      />
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="col-resize"
-        title="Drag to resize"
-        onpointerdown={startResize("agent")}
-      ></div>
+      {#if settings.ai_enabled}
+        <AgentSidebar
+          kind={agentStore.baseKind}
+          messages={agentStore.agentMessages}
+          busy={agentStore.agentBusy}
+          error={agentStore.agentError}
+          progress={agentStore.agentProgress}
+          sourceName={agentStore.baseSourceName}
+          width={agentSidebarWidth}
+          onSubmit={(p) =>
+            agentStore.baseKind === "new"
+              ? void handleCreateAgentPrompt(p)
+              : agentStore.handleAgentPrompt(p)}
+        />
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="col-resize"
+          title="Drag to resize"
+          onpointerdown={startResize("agent")}
+        ></div>
+      {/if}
       {#if agentStore.saveDraft !== null}
         <MainPanel
           {...sharedMainPanelProps}
@@ -867,22 +877,24 @@
         />
       {/if}
     {:else if editing}
-      <AgentSidebar
-        kind="edit"
-        messages={agentStore.agentMessages}
-        busy={agentStore.agentBusy}
-        error={agentStore.agentError}
-        progress={agentStore.agentProgress}
-        sourceName={selectedTemplate?.name ?? agentStore.baseSourceName}
-        width={agentSidebarWidth}
-        onSubmit={(p) => void handleEditAgentPrompt(p)}
-      />
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="col-resize"
-        title="Drag to resize"
-        onpointerdown={startResize("agent")}
-      ></div>
+      {#if settings.ai_enabled}
+        <AgentSidebar
+          kind="edit"
+          messages={agentStore.agentMessages}
+          busy={agentStore.agentBusy}
+          error={agentStore.agentError}
+          progress={agentStore.agentProgress}
+          sourceName={selectedTemplate?.name ?? agentStore.baseSourceName}
+          width={agentSidebarWidth}
+          onSubmit={(p) => void handleEditAgentPrompt(p)}
+        />
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="col-resize"
+          title="Drag to resize"
+          onpointerdown={startResize("agent")}
+        ></div>
+      {/if}
       <MainPanel
         {...sharedMainPanelProps}
         template={selectedTemplate}
@@ -924,11 +936,10 @@
         {templates}
         selectedTemplateId={selectionStore.selectedTemplateId}
         bulkSelectedIds={selectionStore.bulkSelectedIds}
-        {searchQuery}
+        {inPasteMode}
         rankings={pasteMatchStore.rankings}
         rankLoading={pasteMatchStore.rankLoading}
         rankError={pasteMatchStore.rankError}
-        pasteThreshold={PASTE_THRESHOLD}
         width={templatesWidth}
         canCreate={isEditorMode}
         canReorder={canReorderTemplates}
@@ -968,7 +979,7 @@
         onDraftChange={ignoreDraftChange}
       />
     {/if}
-    {#if contextOpen && loaded}
+    {#if contextOpen && loaded && settings.ai_enabled}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="col-resize"
@@ -1025,11 +1036,12 @@
 {#if cheatSheetOpen}
   <CheatSheet
     globalHotkey={settings.global_hotkey}
+    aiEnabled={settings.ai_enabled}
     onClose={() => (cheatSheetOpen = false)}
   />
 {/if}
 
-{#if captureOpen && loaded}
+{#if captureOpen && loaded && settings.ai_enabled}
   <MemoryCapturePopover
     sources={settings.context_sources}
     backend={settings.paste_backend}
@@ -1045,6 +1057,7 @@
 
 {#if loaded && !settings.onboarding_complete}
   <OnboardingTour
+    aiEnabled={settings.ai_enabled}
     onDismiss={() => {
       void templatesStore.persist(templatesStore.templates, {
         ...templatesStore.settings,

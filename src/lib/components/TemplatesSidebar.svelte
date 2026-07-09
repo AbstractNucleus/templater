@@ -12,11 +12,10 @@
     searchResults,
     selectedTemplateId,
     bulkSelectedIds,
-    searchQuery,
+    inPasteMode,
     rankings,
     rankLoading,
     rankError,
-    pasteThreshold,
     width,
     canCreate,
     canReorder,
@@ -38,11 +37,13 @@
     searchResults: SearchHit[];
     selectedTemplateId: string | null;
     bulkSelectedIds: Set<string>;
-    searchQuery: string;
+    /** True when the page is in AI paste-match mode — the list shows ranked
+     *  matches instead of literal search results. Computed by the parent so
+     *  the AI master switch gates it in one place. */
+    inPasteMode: boolean;
     rankings: Ranking[] | null;
     rankLoading: boolean;
     rankError: string | null;
-    pasteThreshold: number;
     width: number;
     canCreate: boolean;
     /** True only when the visible order matches the underlying array order
@@ -81,8 +82,6 @@
     for (const t of templates) map.set(t.id, t);
     return map;
   });
-
-  const inPasteMode = $derived(searchQuery.trim().length >= pasteThreshold);
 
   // True when at least one template carries a folder. Groups render only when
   // the catalog uses folders — otherwise it's a flat list, just like before.
