@@ -4,6 +4,23 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-07-09
+
+### Fixed
+
+- **Runaway auto-copy loop.** Toggling "Include opening" / "Include
+  signature" (or any state change that rebuilt the main panel's shared
+  props) could fire a copy without the Copy button being pressed, and
+  the first copy then re-triggered itself forever: the Enter-to-copy
+  `$effect` picked up `template` and the composed text as reactive
+  dependencies through `copyToClipboard`'s synchronous prelude, and
+  every successful copy replaces the template object (`recordCopy`
+  bumps `copy_count`/`last_used_at`), re-firing the effect. The effect
+  now tracks only the `copyTrigger` counter: it copies solely when the
+  counter increments, runs the copy inside `untrack()`, and seeds from
+  the mount-time value so remounts are inert. Introduced by the
+  main-panel props refactor that first shipped in 0.7.0.
+
 ## [0.8.0] — 2026-07-09
 
 ### Added

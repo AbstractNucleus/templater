@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
   import { composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
@@ -197,17 +198,21 @@
   }
 
   // Bumping `copyTrigger` from the parent runs the same copy flow as the
-  // Copy button — keeps the "Copied"/"Copy failed" feedback shared. Skips the
-  // mount run so the initial render doesn't fire a stray copy.
-  let skipInitialCopy = true;
+  // Copy button — keeps the "Copied"/"Copy failed" feedback shared.
+  //
+  // Copy ONLY when the counter actually increments. The effect must not pick
+  // up any other dependency: copyToClipboard reads `template` and
+  // `composedFilled` synchronously, and recordCopy replaces the template
+  // object after every copy — tracked, that re-fires the effect and copies
+  // forever. `untrack` keeps the dep set to {copyTrigger}; the equality guard
+  // ignores spurious re-runs (e.g. sibling fields of the parent's spread
+  // props changing); seeding from the current value makes remounts inert.
+  let lastCopyTrigger = untrack(() => copyTrigger);
   $effect(() => {
-    // Read so the effect tracks the prop.
-    void copyTrigger;
-    if (skipInitialCopy) {
-      skipInitialCopy = false;
-      return;
-    }
-    void copyToClipboard();
+    const t = copyTrigger;
+    if (t === lastCopyTrigger) return;
+    lastCopyTrigger = t;
+    untrack(() => void copyToClipboard());
   });
 
   let confirmingDelete = $state(false);
