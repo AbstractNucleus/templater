@@ -947,6 +947,10 @@
         onTemplateSelect={handleTemplateSelect}
         onNew={() => agentStore.handleNew()}
         onRetryRank={retryRank}
+        onClearFilters={() => {
+          selectionStore.clearTags();
+          clearSearch();
+        }}
         onContextTemplate={openContextForTemplate}
         onContextEmpty={openContextForEmpty}
         onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
@@ -1271,6 +1275,25 @@
 
   :global(::-webkit-scrollbar-corner) {
     background: transparent;
+  }
+
+  /* One keyboard-focus ring for every control that doesn't define its own
+     focus treatment (text inputs override this with a border + soft glow).
+     Pointer interaction doesn't trigger :focus-visible, so mouse flows are
+     unaffected. */
+  :global(:focus-visible) {
+    outline: 2px solid var(--accent-brand);
+    outline-offset: 1px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(*),
+    :global(*::before),
+    :global(*::after) {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 
   .frame {

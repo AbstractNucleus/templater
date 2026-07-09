@@ -154,7 +154,7 @@
   }
 
   .empty {
-    color: var(--text-placeholder);
+    color: var(--text-muted);
     font-size: 0.9rem;
     margin: auto;
     text-align: center;

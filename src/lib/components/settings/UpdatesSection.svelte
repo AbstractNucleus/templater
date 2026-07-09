@@ -97,6 +97,23 @@
         {formatBytes(updateState.received)}
       {/if}
     </div>
+    <div
+      class="progress-track"
+      class:indeterminate={!updateState.total}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={updateState.total
+        ? Math.round((updateState.received / updateState.total) * 100)
+        : undefined}
+    >
+      <div
+        class="progress-fill"
+        style={updateState.total
+          ? `width: ${Math.min(100, (updateState.received / updateState.total) * 100)}%`
+          : ""}
+      ></div>
+    </div>
   {:else if updateState.kind === "installing"}
     <div class="hint">Installing… the app will restart momentarily.</div>
   {:else if updateState.kind === "error"}
@@ -111,6 +128,36 @@
 <style>
   /* section / label / hint / code / port-btn / port-row / port-message /
      capture-error inherited from .pane-body. */
+
+  .progress-track {
+    height: 6px;
+    margin-top: 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--accent-brand);
+    border-radius: 2px;
+    transition: width 200ms ease-out;
+  }
+
+  .progress-track.indeterminate .progress-fill {
+    width: 35%;
+    animation: progress-slide 1.1s ease-in-out infinite;
+  }
+
+  @keyframes progress-slide {
+    0% {
+      margin-left: -35%;
+    }
+    100% {
+      margin-left: 100%;
+    }
+  }
 
   .release-notes {
     background: var(--bg-input);

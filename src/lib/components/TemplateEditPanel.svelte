@@ -183,12 +183,14 @@
   }
 
   .icon-btn.primary {
-    background: var(--accent-positive-bg);
-    border-color: var(--accent-positive-border);
-    color: var(--accent-positive-text);
+    background: var(--accent-brand);
+    border-color: var(--accent-brand);
+    color: #fff;
+    font-weight: 600;
   }
 
   .icon-btn.primary:hover {
-    background: var(--accent-positive-hover);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
   }
 </style>

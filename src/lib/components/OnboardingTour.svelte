@@ -93,8 +93,12 @@
 
 <div class="backdrop" role="dialog" aria-modal="true" aria-label="Welcome">
   <div class="card">
-    <h2>{steps[stepIndex].title}</h2>
-    <p>{steps[stepIndex].body}</p>
+    {#key stepIndex}
+      <div class="step">
+        <h2>{steps[stepIndex].title}</h2>
+        <p>{steps[stepIndex].body}</p>
+      </div>
+    {/key}
     <div class="footer">
       <div class="dots" aria-hidden="true">
         {#each steps as _, i (i)}
@@ -135,6 +139,33 @@
     max-width: calc(100vw - 48px);
     color: var(--text);
     box-shadow: 0 12px 40px var(--shadow);
+    animation: card-in 160ms ease-out;
+  }
+
+  @keyframes card-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985) translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  .step {
+    animation: step-in 160ms ease-out;
+  }
+
+  @keyframes step-in {
+    from {
+      opacity: 0;
+      transform: translateX(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
   }
 
   h2 {
@@ -200,12 +231,14 @@
   }
 
   .next {
-    background: var(--accent-positive-bg);
-    border-color: var(--accent-positive-border);
-    color: var(--accent-positive-text);
+    background: var(--accent-brand);
+    border-color: var(--accent-brand);
+    color: #fff;
+    font-weight: 600;
   }
 
   .next:hover {
-    background: var(--accent-positive-hover);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
   }
 </style>

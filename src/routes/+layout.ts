@@ -3,3 +3,14 @@
 // See: https://svelte.dev/docs/kit/single-page-apps
 // See: https://v2.tauri.app/start/frontend/sveltekit/ for more info
 export const ssr = false;
+
+// In a plain browser (vite dev without the Tauri shell) install the IPC mock
+// so the full UI is explorable. `import.meta.env.DEV` is statically false in
+// builds, so the mock never ships; in the real webview __TAURI_INTERNALS__
+// already exists and the branch is skipped.
+export async function load(): Promise<void> {
+  if (import.meta.env.DEV && typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
+    const { installDevMocks } = await import("$lib/devMocks");
+    installDevMocks();
+  }
+}

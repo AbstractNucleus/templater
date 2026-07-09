@@ -41,6 +41,49 @@
 
   const titleId = "confirm-dialog-title";
   const dismiss = $derived(onDismiss ?? onCancel);
+
+  let modalEl = $state<HTMLDivElement | undefined>();
+
+  // Captured at init — before the dialog's own autofocus moves focus — so
+  // close can hand focus back to whatever opened the dialog.
+  const previouslyFocused = typeof document !== "undefined" ? document.activeElement : null;
+
+  $effect(() => {
+    return () => {
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
+  });
+
+  function handleKeydown(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+      return;
+    }
+    if (e.key === "Enter") {
+      // A focused button activates natively — hijacking here would turn
+      // Enter-on-Cancel into a confirm.
+      if (e.target instanceof HTMLButtonElement) return;
+      e.preventDefault();
+      if (!confirmDisabled) onConfirm();
+      return;
+    }
+    if (e.key === "Tab") {
+      // Minimal focus trap: cycle within the dialog's controls.
+      const nodes = modalEl?.querySelectorAll<HTMLElement>("button:not(:disabled), input");
+      if (!nodes || nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === modalEl)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -52,17 +95,9 @@
   aria-labelledby={ariaLabel === null ? titleId : undefined}
   tabindex="-1"
   onclick={(e) => e.target === e.currentTarget && dismiss()}
-  onkeydown={(e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onCancel();
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      onConfirm();
-    }
-  }}
+  onkeydown={handleKeydown}
 >
-  <div class="confirm-modal">
+  <div class="confirm-modal" bind:this={modalEl}>
     <h3 id={titleId}>{title}</h3>
     {#if name !== null}
       <p class="confirm-name">"{name}"</p>
@@ -81,7 +116,8 @@
       <p class="confirm-warn">{message}</p>
     {/if}
     <div class="confirm-actions">
-      <button class="confirm-btn" onclick={onCancel}>Cancel</button>
+      <!-- svelte-ignore a11y_autofocus -->
+      <button class="confirm-btn" onclick={onCancel} autofocus={!input && danger}>Cancel</button>
       {#if input}
         <button
           class="confirm-btn"
@@ -91,7 +127,7 @@
         >{confirmLabel}</button>
       {:else}
         <!-- svelte-ignore a11y_autofocus -->
-        <button class="confirm-btn" class:danger onclick={onConfirm} autofocus
+        <button class="confirm-btn" class:danger onclick={onConfirm} autofocus={!danger}
           >{confirmLabel}</button
         >
       {/if}
@@ -188,6 +224,7 @@
 
   .bulk-tag-input:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 </style>

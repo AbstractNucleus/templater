@@ -22,10 +22,10 @@
 ## Architecture & maintainability
 
 - [ ] Decompose the 1696-line `+page.svelte` — extract a hotkeys module + a workspace wrapper. (src/routes/+page.svelte)
-- [ ] Reusable `ConfirmDialog` with focus trap + restore; collapse the ~5 duplicated modals. (src/routes/+page.svelte, src/lib/components/MainPanel.svelte)
+- [x] Reusable `ConfirmDialog` with focus trap + restore; collapse the ~5 duplicated modals. (src/routes/+page.svelte, src/lib/components/MainPanel.svelte)
 - [ ] Reduce MainPanel prop-drilling (~24 props repeated 3×) — read stores directly / pass a config object. (src/routes/+page.svelte)
 - [ ] Make the global keyboard handler table-driven + testable. (src/routes/+page.svelte:183)
-- [ ] Add ARIA listbox semantics (`role="listbox"`/`option`, `aria-selected`) to arrow-key lists. (src/lib/components/TemplatesSidebar.svelte)
+- [x] Add ARIA listbox semantics (`role="listbox"`/`option`, `aria-selected`) to arrow-key lists. (src/lib/components/TemplatesSidebar.svelte)
 
 ## Product features
 

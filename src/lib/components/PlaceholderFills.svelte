@@ -25,6 +25,7 @@
           value={values[p.key] ?? ""}
           onchange={(e) => onSetValue(p.key, e.currentTarget.value)}
           title={p.label}
+          aria-label={`Choose ${p.label}`}
         >
           <option value="">{`{{${p.key}}}`}</option>
           {#each p.kind.options as opt}
@@ -39,6 +40,8 @@
           placeholder={`{{${p.key}}}`}
           value={values[p.key] ?? ""}
           oninput={(e) => onSetValue(p.key, e.currentTarget.value)}
+          title={`Fill in ${p.label}`}
+          aria-label={`Fill in ${p.label}`}
         />
       {/if}
     {/each}
@@ -87,7 +90,8 @@
   }
 
   .placeholder-input:focus {
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .placeholder-select {

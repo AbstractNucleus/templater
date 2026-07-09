@@ -100,6 +100,8 @@
           ondragend={drag.handleDragEnd}
           onclick={() => handleTagClick(tag)}
           oncontextmenu={(e) => handleTagContext(e, tag)}
+          title="Click to filter · right-click to exclude · drag to reorder"
+          aria-pressed={selectedTagIds.has(tag)}
         >
           <span class="tag-name">{tag}</span>
           <span class="tag-count">{count}</span>
@@ -156,19 +158,21 @@
   .clear {
     background: transparent;
     border: 1px solid var(--border);
-    color: var(--text-subtle);
+    color: var(--text-muted);
     font: inherit;
-    font-size: 0.65rem;
+    font-size: 0.68rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    padding: 2px 6px;
-    border-radius: 3px;
+    padding: 0 7px;
+    height: 20px;
+    border-radius: 4px;
     cursor: pointer;
-    line-height: 1.2;
+    line-height: 1;
   }
 
   .combinator:hover,
   .clear:hover {
+    background: var(--bg-hover);
     border-color: var(--border-strong);
     color: var(--text);
   }
@@ -227,8 +231,11 @@
     pointer-events: auto;
   }
 
-  .tag-row:hover .tag-count {
-    opacity: 0;
+  /* Slide the count left on hover so the exclude button lands beside it
+     instead of covering it. */
+  .tag-row:hover .tag-count,
+  .tag-row:focus-within .tag-count {
+    margin-right: 22px;
   }
 
   .tag-exclude:hover {
@@ -257,6 +264,7 @@
   .tag-count {
     color: var(--text-subtle);
     font-size: 0.75rem;
+    transition: margin 100ms ease-out;
   }
 
   .tag:hover {

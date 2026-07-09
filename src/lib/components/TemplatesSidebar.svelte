@@ -23,6 +23,7 @@
     onTemplateSelect,
     onNew,
     onRetryRank,
+    onClearFilters,
     onContextTemplate,
     onContextEmpty,
     onReorder,
@@ -54,6 +55,9 @@
     onTemplateSelect: (id: string, modifier: SelectModifier) => void;
     onNew: () => void;
     onRetryRank: () => void;
+    /** Clears the search box and any tag filters — offered from the
+     *  "No matches" empty state. */
+    onClearFilters: () => void;
     onContextTemplate: (id: string, x: number, y: number) => void;
     onContextEmpty: (x: number, y: number) => void;
     onReorder: (newOrderIds: string[]) => void;
@@ -218,10 +222,20 @@
     {/if}
   </div>
 
+  {#snippet rankSkeleton()}
+    <li class="rank-status" aria-live="polite">Ranking with Claude…</li>
+    {#each Array(4) as _, i (i)}
+      <li class="rank-skel" style="animation-delay: {i * 90}ms" aria-hidden="true">
+        <div class="rank-skel-name"></div>
+        <div class="rank-skel-excerpt"></div>
+      </li>
+    {/each}
+  {/snippet}
+
   {#if inPasteMode}
-    <ul class="template-list">
+    <ul class="template-list" role="listbox" aria-label="Ranked matches">
       {#if rankLoading}
-        <li class="status">Ranking via Haiku…</li>
+        {@render rankSkeleton()}
       {:else if rankError}
         <li class="rank-error">
           <div class="error-text">{rankError}</div>
@@ -234,7 +248,7 @@
           {@const tpl = templateById.get(r.template_id)}
           {#if tpl}
             {@const rankedHit = { template: tpl, score: 0, matchedWords: 0, nameHits: [], tagHits: [], bodyHit: null } satisfies SearchHit}
-            <li>
+            <li role="presentation">
               <TemplateRow
                 hit={rankedHit}
                 selected={selectedTemplateId === tpl.id}
@@ -246,12 +260,12 @@
           {/if}
         {/each}
       {:else}
-        <li class="status">…</li>
+        {@render rankSkeleton()}
       {/if}
     </ul>
   {:else}
     {#snippet templateRow(hit: SearchHit, indent: boolean = false)}
-      <li class:in-folder={indent}>
+      <li class:in-folder={indent} role="presentation">
         <TemplateRow
           {hit}
           selected={selectedTemplateId === hit.template.id}
@@ -278,16 +292,20 @@
             No templates yet{canCreate ? " — hit + to create one" : ""}.
           </li>
         {:else}
-          <li class="empty">No matches</li>
+          <li class="empty no-matches">
+            <span>No matches</span>
+            <button class="clear-filters-btn" onclick={onClearFilters}>Clear search & filters</button>
+          </li>
         {/if}
       </ul>
     {:else if hasFolders}
-      <ul class="template-list">
+      <ul class="template-list" role="listbox" aria-label="Templates">
         {#each groupedSearchResults as group (group.folder ?? "__ungrouped__")}
           {@const label = group.folder ?? "Ungrouped"}
           {@const collapsed = collapsedFolders.has(label)}
           <li
             class="folder-header"
+            role="presentation"
             class:drag-over={dragOverFolder === (group.folder ?? "__ungrouped__")}
             ondragover={(e) => handleFolderDragOver(e, group.folder)}
             ondragleave={() => (dragOverFolder = null)}
@@ -311,7 +329,7 @@
         {/each}
       </ul>
     {:else}
-      <ul class="template-list">
+      <ul class="template-list" role="listbox" aria-label="Templates">
         {#each searchResults as hit (hit.template.id)}
           {@render templateRow(hit)}
         {/each}
@@ -407,6 +425,18 @@
     border-radius: 4px;
     font-size: 0.72rem;
     color: var(--accent-info-text);
+    animation: bulk-in 120ms ease-out;
+  }
+
+  @keyframes bulk-in {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .bulk-count {
@@ -506,8 +536,7 @@
     font-size: 0.65rem;
   }
 
-  .empty,
-  .status {
+  .empty {
     color: var(--text-subtle);
     font-size: 0.8rem;
     padding: 4px 6px;
@@ -517,6 +546,70 @@
   .empty.first-run {
     line-height: 1.4;
     padding: 8px 8px;
+  }
+
+  .empty.no-matches {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .clear-filters-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-style: normal;
+    font-size: 0.72rem;
+  }
+
+  .clear-filters-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .rank-status {
+    color: var(--text-subtle);
+    font-size: 0.72rem;
+    padding: 4px 6px 6px;
+    font-style: italic;
+  }
+
+  .rank-skel {
+    padding: 4px 6px;
+    animation: rank-skel-pulse 1.4s ease-in-out infinite;
+  }
+
+  .rank-skel-name,
+  .rank-skel-excerpt {
+    background: var(--bg-hover);
+    border-radius: 3px;
+    height: 12px;
+  }
+
+  .rank-skel-name {
+    width: 70%;
+    margin-bottom: 5px;
+  }
+
+  .rank-skel-excerpt {
+    width: 92%;
+    height: 9px;
+  }
+
+  @keyframes rank-skel-pulse {
+    0%, 100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 0.9;
+    }
   }
 
   .rank-error {

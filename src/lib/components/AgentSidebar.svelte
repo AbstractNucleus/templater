@@ -67,6 +67,10 @@
       submit();
     }
   }
+
+  function roleLabel(role: string): string {
+    return role === "user" ? "You" : role === "assistant" ? "Claude" : "Error";
+  }
 </script>
 
 <aside class="agent" style="width: {width}px">
@@ -94,23 +98,23 @@
     {/if}
     {#each messages as msg, i (i)}
       <div class="msg" class:user={msg.role === "user"} class:assistant={msg.role === "assistant"}>
-        <div class="role">{msg.role}</div>
+        <div class="role">{roleLabel(msg.role)}</div>
         <div class="content">{msg.content}</div>
       </div>
     {/each}
     {#if busy}
       <div class="msg assistant">
-        <div class="role">assistant</div>
+        <div class="role">Claude</div>
         {#if progress.length > 0}
           <div class="content streaming">{progress}</div>
         {:else}
-          <div class="content thinking">Thinking…</div>
+          <div class="content thinking">Thinking<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></div>
         {/if}
       </div>
     {/if}
     {#if error}
       <div class="msg error">
-        <div class="role">error</div>
+        <div class="role">Error</div>
         <div class="content">{error}</div>
       </div>
     {/if}
@@ -258,6 +262,27 @@
     font-style: italic;
   }
 
+  .dots span {
+    animation: dot-pulse 1.2s infinite;
+  }
+
+  .dots span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .dots span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  @keyframes dot-pulse {
+    0%, 60%, 100% {
+      opacity: 0.25;
+    }
+    30% {
+      opacity: 1;
+    }
+  }
+
   .content.streaming {
     color: var(--text-muted);
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -292,7 +317,8 @@
 
   .prompt-row textarea:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .prompt-row textarea:disabled {
@@ -302,18 +328,20 @@
 
   .send {
     align-self: flex-end;
-    background: var(--accent-positive-bg);
-    color: var(--accent-positive-text);
-    border: 1px solid var(--accent-positive-border);
+    background: var(--accent-brand);
+    color: #fff;
+    border: 1px solid var(--accent-brand);
     padding: 6px 18px;
     border-radius: 6px;
     cursor: pointer;
     font: inherit;
     font-size: 0.82rem;
+    font-weight: 600;
   }
 
   .send:hover:not(:disabled) {
-    background: var(--accent-positive-hover);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
   }
 
   .send:disabled {

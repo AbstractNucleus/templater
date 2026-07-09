@@ -4,6 +4,75 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-07-09
+
+### Added
+
+- **Keyboard navigation in the tag/folder pickers.** ↑/↓ move a
+  highlight through the dropdown (mouse hover syncs it), Enter picks
+  the highlighted entry — previously Enter always took the first
+  candidate, leaving later options unreachable without the mouse. The
+  picker exposes proper combobox/listbox ARIA.
+- **"Clear search & filters" action** on the templates sidebar's
+  "No matches" empty state.
+- **Skeleton rows while Claude ranks paste-match results**, replacing
+  the bare "…" placeholder, plus a "Ranking with Claude…" status line.
+- **Progress bar for update downloads** (determinate with a known
+  size, indeterminate sweep otherwise) alongside the existing byte
+  counter.
+- **Global keyboard-focus ring.** Every control without a custom focus
+  style gets a consistent 2 px brand `:focus-visible` outline; all
+  animations and transitions are disabled under
+  `prefers-reduced-motion`.
+- **Listbox semantics for the template lists** (`role="listbox"` /
+  `role="option"`, `aria-selected`) and aria-labels on placeholder
+  fill-in inputs.
+- **Browser dev harness.** `npm run dev` + a plain browser now runs
+  the complete UI against a dev-only Tauri IPC mock
+  (`src/lib/devMocks.ts`): seeded catalog, fake ranking/edit streams,
+  context corpus, dialogs, updater. `?fresh=1` simulates a first run.
+  Guarded by `import.meta.env.DEV` — never ships in builds.
+
+### Changed
+
+- **One primary-action color.** Save, Send, Capture, Add source, and
+  the onboarding Next button now use the brand accent (white text,
+  weight 600); the positive green is reserved for success feedback
+  like the "Copied" flash. The Copy button is a shared component
+  (`CopyButton.svelte`) so browse and editor modes render the exact
+  same affordance — the editor's copy gains the success animation and
+  a disabled state when the composed text is empty.
+- **One input-focus treatment.** Every text input, textarea, select,
+  and the picker chips-row shares the brand border + soft glow that
+  the title-bar search already had.
+- **Settings dialog:** tabs expose real tab ARIA, the active tab gets
+  a 3 px brand accent bar, the dialog animates in, traps Tab, and
+  restores focus on close.
+- **Smaller polish:** capture popover gets a dimmed backdrop and
+  pop-in; onboarding steps fade between cards and its card animates
+  in; agent chat roles read "You"/"Claude" (was raw "user"/
+  "assistant") with animated thinking dots; tag counts slide aside on
+  hover instead of vanishing under the exclude button; tag rows carry
+  a click/right-click/drag tooltip; cheat-sheet key chips wrap instead
+  of overflowing; bulk bar and adapt-error banners ease in; checkboxes
+  use the brand accent; editor breadcrumbs match across AI and non-AI
+  modes; the webview title is "Templater" (was Tauri boilerplate).
+
+### Fixed
+
+- **ConfirmDialog Enter handling.** Enter no longer fires the confirm
+  action when the confirm button is disabled (e.g. empty bulk-tag
+  input) or when Cancel has focus; danger dialogs autofocus Cancel
+  instead of the destructive button; Tab is trapped inside the dialog
+  and focus returns to whatever opened it.
+- **Escape during hotkey capture** in Settings cancelled the capture
+  *and* closed the whole modal; it now only cancels the capture.
+- **TemplateView's hand-rolled delete modal** (duplicated markup, own
+  z-index, window-level key handling) replaced with the shared
+  `ConfirmDialog`.
+- **Context pane no longer flashes "No matching files"** before the
+  first file listing arrives.
+
 ## [0.7.0] — 2026-07-09
 
 ### Added

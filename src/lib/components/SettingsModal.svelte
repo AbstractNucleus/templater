@@ -139,6 +139,38 @@
     if (e.target === e.currentTarget) onClose();
   }
 
+  let modalEl = $state<HTMLDivElement | undefined>();
+
+  // Restore focus to the control that opened Settings once it closes.
+  $effect(() => {
+    const prev = document.activeElement;
+    modalEl?.querySelector<HTMLElement>(".sidebar-tab.active")?.focus();
+    return () => {
+      if (prev instanceof HTMLElement) prev.focus();
+    };
+  });
+
+  // Minimal focus trap. Escape is handled by the window-level
+  // handleCaptureKeydown, which drains nested states (hotkey capture, tag
+  // rename/delete) before closing — so the backdrop must NOT close on Escape
+  // itself or it would slam the modal shut mid-capture.
+  function trapTab(e: KeyboardEvent): void {
+    if (e.key !== "Tab" || !modalEl) return;
+    const nodes = modalEl.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    );
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
   const MODIFIER_PREFIXES = ["Control", "Shift", "Alt", "Meta", "OS"];
 
   function isModifierKey(code: string): boolean {
@@ -219,14 +251,14 @@
   aria-label="Settings"
   tabindex="-1"
   onclick={handleBackdrop}
-  onkeydown={(e) => e.key === "Escape" && onClose()}
+  onkeydown={trapTab}
 >
-  <div class="modal">
+  <div class="modal" bind:this={modalEl}>
     <aside class="sidebar" aria-label="Settings sections">
       <div class="sidebar-header">
         <span class="sidebar-title">Settings</span>
       </div>
-      <nav class="sidebar-nav">
+      <div class="sidebar-nav" role="tablist" aria-orientation="vertical">
         {#each visibleTabGroups as group, gi (gi)}
           {#if gi > 0}
             <div class="sidebar-divider" aria-hidden="true"></div>
@@ -235,16 +267,18 @@
             <button
               class="sidebar-tab"
               class:active={activeTab === tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
               onclick={() => (activeTab = tab.id)}
             >
               {tab.label}
             </button>
           {/each}
         {/each}
-      </nav>
+      </div>
     </aside>
 
-    <div class="pane">
+    <div class="pane" role="tabpanel">
       <header class="pane-header">
         <h2>{TAB_TITLES[activeTab]}</h2>
         <button class="close" onclick={onClose} aria-label="Close">×</button>
@@ -331,6 +365,7 @@
     align-items: center;
     justify-content: center;
     z-index: 100;
+    animation: backdrop-in 120ms ease-out;
   }
 
   .modal {
@@ -344,6 +379,27 @@
     box-shadow: 0 24px 60px var(--shadow);
     color: var(--text);
     overflow: hidden;
+    animation: modal-in 140ms ease-out;
+  }
+
+  @keyframes backdrop-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes modal-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985) translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
   }
 
   /* Sidebar */
@@ -404,6 +460,17 @@
   .sidebar-tab.active {
     background: var(--bg-active);
     color: var(--text-strong);
+  }
+
+  .sidebar-tab.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--accent-brand);
   }
 
   /* Right pane */
@@ -521,7 +588,7 @@
 
   :global(.pane-body .port-btn:disabled) {
     opacity: 0.5;
-    cursor: wait;
+    cursor: default;
   }
 
   :global(.pane-body .port-message) {

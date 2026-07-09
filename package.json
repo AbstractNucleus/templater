@@ -1,6 +1,6 @@
 {
   "name": "templater",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Templater — personal desk-side app for prose templating with semantic paste-to-match via the Claude Agent SDK.",
   "type": "module",
   "scripts": {

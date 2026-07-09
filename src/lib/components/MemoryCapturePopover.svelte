@@ -216,6 +216,8 @@
     position: fixed;
     inset: 0;
     z-index: 240;
+    background: var(--backdrop);
+    animation: mc-fade 120ms ease-out;
   }
 
   .popover {
@@ -231,6 +233,28 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    animation: mc-pop 120ms ease-out;
+    transform-origin: top right;
+  }
+
+  @keyframes mc-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes mc-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
   }
 
   .hdr {
@@ -300,7 +324,8 @@
 
   .input:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .row {
@@ -322,24 +347,26 @@
 
   .select:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .primary {
-    background: var(--bg-input);
-    border: 1px solid var(--border-strong);
-    color: var(--text);
+    background: var(--accent-brand);
+    border: 1px solid var(--accent-brand);
+    color: #fff;
     padding: 6px 12px;
     border-radius: 4px;
     cursor: pointer;
     font: inherit;
     font-size: 0.78rem;
+    font-weight: 600;
     flex-shrink: 0;
   }
 
   .primary:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-focus);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
   }
 
   .primary:disabled {
@@ -350,7 +377,7 @@
   .chord {
     margin-left: 6px;
     font-size: 0.72rem;
-    color: var(--text-muted);
+    color: rgba(255, 255, 255, 0.75);
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   }
 

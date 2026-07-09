@@ -150,6 +150,18 @@
     overflow-y: auto;
     color: var(--text);
     box-shadow: 0 8px 32px var(--shadow);
+    animation: sheet-in 140ms ease-out;
+  }
+
+  @keyframes sheet-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985) translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
   }
 
   header {
@@ -212,7 +224,7 @@
 
   li {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     font-size: 0.82rem;
     color: var(--text);
@@ -227,8 +239,11 @@
     font-size: 0.78rem;
     color: var(--text);
     min-width: 120px;
+    max-width: 180px;
+    box-sizing: border-box;
     text-align: center;
     flex-shrink: 0;
+    word-break: break-word;
   }
 
   .desc {

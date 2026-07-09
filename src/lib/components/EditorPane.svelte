@@ -1,5 +1,6 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+  import CopyButton from "./CopyButton.svelte";
 
   let {
     kind,
@@ -57,11 +58,7 @@
 <section class="pane">
   <div class="header-row">
     <div class="breadcrumb">
-      {kind === "new"
-        ? "new template — editor"
-        : kind === "edit"
-          ? "edit template — editor"
-          : "base-on-template — editor"}
+      {kind === "new" ? "new template" : kind === "edit" ? "editing" : "based on template"}
     </div>
     <div class="actions">
       <button class="icon-btn" onclick={onCancel}>Cancel</button>
@@ -102,15 +99,11 @@
   </div>
 
   <div class="footer">
-    <button class="copy" onclick={copyToClipboard}>
-      {#if copyState === "ok"}
-        Copied
-      {:else if copyState === "error"}
-        Copy failed
-      {:else}
-        Copy
-      {/if}
-    </button>
+    <CopyButton
+      {copyState}
+      disabled={composed.trim().length === 0}
+      onclick={() => void copyToClipboard()}
+    />
   </div>
 </section>
 
@@ -162,13 +155,15 @@
   }
 
   .icon-btn.primary {
-    background: var(--accent-positive-bg);
-    border-color: var(--accent-positive-border);
-    color: var(--accent-positive-text);
+    background: var(--accent-brand);
+    border-color: var(--accent-brand);
+    color: #fff;
+    font-weight: 600;
   }
 
   .icon-btn.primary:hover {
-    background: var(--accent-positive-hover);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
   }
 
   .field {
@@ -207,7 +202,8 @@
 
   .field textarea:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .toggles {
@@ -231,27 +227,11 @@
   }
 
   .toggles input[type="checkbox"] {
-    accent-color: var(--text-muted);
+    accent-color: var(--accent-brand);
   }
 
   .footer {
     display: flex;
     justify-content: flex-end;
-  }
-
-  .copy {
-    background: var(--bg-active);
-    color: var(--text);
-    border: 1px solid var(--border-strong);
-    padding: 6px 16px;
-    border-radius: 6px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .copy:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-focus);
   }
 </style>

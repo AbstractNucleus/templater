@@ -142,6 +142,7 @@
   .field input:focus,
   .field textarea:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 </style>

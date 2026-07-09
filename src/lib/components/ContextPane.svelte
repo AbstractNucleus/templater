@@ -35,6 +35,9 @@
   let searchResults = $state<ContextSearchHit[] | null>(null);
   let searchQuery = $state("");
   let loading = $state(false);
+  // False until the first refresh resolves — gates the Files empty state so
+  // it can't flash "No matching files" while the initial list is in flight.
+  let initialLoaded = $state(false);
   let errorBanner = $state<string | null>(null);
 
   let preview = $state<{ path: string; text: string; truncated: boolean } | null>(null);
@@ -51,6 +54,7 @@
       errorBanner = `Context unavailable: ${e}`;
     } finally {
       loading = false;
+      initialLoaded = true;
     }
   }
 
@@ -245,7 +249,9 @@
         value={searchQuery}
         oninput={(e) => onSearchInput(e.currentTarget.value)}
       />
-      {#if visibleFiles.length === 0}
+      {#if !initialLoaded && sources.length > 0}
+        <p class="empty">Loading files…</p>
+      {:else if visibleFiles.length === 0}
         <p class="empty">
           {sources.length === 0 ? "Add a source to begin indexing." : "No matching files."}
         </p>
@@ -497,19 +503,20 @@
   }
 
   .primary {
-    background: var(--bg-input);
-    border: 1px solid var(--border-strong);
-    color: var(--text);
+    background: var(--accent-brand);
+    border: 1px solid var(--accent-brand);
+    color: #fff;
     padding: 6px 12px;
     border-radius: 4px;
     cursor: pointer;
     font: inherit;
     font-size: 0.78rem;
+    font-weight: 600;
   }
 
   .primary:hover:not(:disabled) {
-    background: var(--bg-hover);
-    border-color: var(--border-focus);
+    background: var(--accent-brand-hover);
+    border-color: var(--accent-brand-hover);
   }
 
   .primary:disabled {
@@ -532,7 +539,8 @@
 
   .search:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .file-list {

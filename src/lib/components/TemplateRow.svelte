@@ -57,6 +57,8 @@
     class="template-item"
     class:active={selected}
     data-id={hit.template.id}
+    role="option"
+    aria-selected={selected}
     onclick={(e) => onSelect(modifierOf(e))}
     oncontextmenu={onContext}
   >
@@ -75,6 +77,8 @@
     class:drag-over-top={dragOverTop}
     class:drag-over-bottom={dragOverBottom}
     data-id={hit.template.id}
+    role="option"
+    aria-selected={selected}
     {draggable}
     ondragstart={onDragStart}
     ondragover={onDragOver}

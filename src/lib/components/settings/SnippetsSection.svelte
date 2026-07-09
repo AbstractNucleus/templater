@@ -15,13 +15,12 @@
 
   // Snippet management. The persisted shape is Record<string, string>, but
   // rendering needs a stable order — turn it into [key, value] tuples and
-  // commit a Record back on every edit. A blank trailing row appears so the
-  // user always has somewhere to type the next snippet.
+  // commit a Record back on every edit. "+ Add snippet" appends a blank row;
+  // rows with an empty key are dropped from the persisted record.
   let snippetRows = $state<Array<{ key: string; value: string }>>([]);
 
   // Sync local draft to settings whenever the props change (open / load /
-  // remote update). Drops empties on the way in so the UI shows exactly what's
-  // persisted; a single blank row is appended below.
+  // remote update). Blank-key rows exist only in the local draft.
   $effect(() => {
     const persisted = settings.snippets ?? {};
     snippetRows = Object.entries(persisted).map(([key, value]) => ({ key, value }));
@@ -134,7 +133,8 @@
 
   .field-textarea:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .snippet-list {
@@ -165,7 +165,8 @@
 
   .snippet-input:focus {
     outline: none;
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .snippet-key {

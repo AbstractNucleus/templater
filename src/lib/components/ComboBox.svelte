@@ -31,6 +31,7 @@
   let open = $state(false);
   let root: HTMLDivElement | undefined = $state();
   let inputEl: HTMLInputElement | undefined = $state();
+  const listboxId = `combo-list-${Math.random().toString(36).slice(2, 8)}`;
 
   const query = $derived(normalize(input));
   const selectedLower = $derived(new Set(selected.map((v) => v.toLowerCase())));
@@ -50,6 +51,30 @@
       !selectedHas(query) &&
       !available.some((o) => o.toLowerCase() === query.toLowerCase()),
   );
+
+  // Flat pickable list: existing candidates followed by the create entry.
+  // Arrow keys move `highlightIdx` through this list; Enter picks it.
+  const options = $derived.by(() => {
+    const opts: { kind: "existing" | "create"; value: string }[] = candidates.map((c) => ({
+      kind: "existing" as const,
+      value: c,
+    }));
+    if (canCreate) opts.push({ kind: "create", value: query });
+    return opts;
+  });
+
+  let highlightIdx = $state(0);
+  // The option list shrinks/grows as the user types — clamp instead of
+  // resetting so the highlight doesn't jump around mid-keystroke.
+  const activeIdx = $derived(options.length === 0 ? -1 : Math.min(highlightIdx, options.length - 1));
+
+  function moveHighlight(delta: number): void {
+    if (options.length === 0) return;
+    highlightIdx = Math.max(0, Math.min(activeIdx + delta, options.length - 1));
+    queueMicrotask(() => {
+      root?.querySelector(".opt.active")?.scrollIntoView({ block: "nearest" });
+    });
+  }
 
   function add(item: string): void {
     const norm = normalize(item);
@@ -73,8 +98,16 @@
   }
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (e.key === "Enter") {
-      const candidate = candidates[0] ?? (canCreate ? query : null);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!open) {
+        open = true;
+        return;
+      }
+      moveHighlight(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Enter") {
+      const candidate = activeIdx >= 0 ? options[activeIdx].value : null;
       if (candidate !== null) {
         e.preventDefault();
         e.stopPropagation();
@@ -129,22 +162,31 @@
       bind:this={inputEl}
       bind:value={input}
       class="picker-input"
+      role="combobox"
+      aria-expanded={open}
+      aria-controls={listboxId}
+      aria-autocomplete="list"
       placeholder={selected.length === 0 ? placeholder : ""}
       onfocus={() => (open = true)}
+      oninput={() => (highlightIdx = 0)}
       onkeydown={handleKeydown}
     />
   </div>
   {#if open}
-    <div class="dropdown">
-      {#each candidates as opt (opt)}
-        <button type="button" class="opt" onclick={() => add(opt)}>{opt}</button>
+    <div class="dropdown" role="listbox" id={listboxId}>
+      {#each options as opt, i (opt.kind + opt.value)}
+        <button
+          type="button"
+          class="opt"
+          class:create={opt.kind === "create"}
+          class:active={i === activeIdx}
+          role="option"
+          aria-selected={i === activeIdx}
+          onmouseenter={() => (highlightIdx = i)}
+          onclick={() => add(opt.value)}
+        >{opt.kind === "create" ? `+ Create "${opt.value}"` : opt.value}</button>
       {/each}
-      {#if canCreate}
-        <button type="button" class="opt create" onclick={() => add(query)}>
-          + Create "{query}"
-        </button>
-      {/if}
-      {#if candidates.length === 0 && !canCreate}
+      {#if options.length === 0}
         <div class="dropdown-empty">
           {available.length === 0
             ? `No ${noun}s yet — type to create one.`
@@ -174,7 +216,8 @@
   }
 
   .chips-row:focus-within {
-    border-color: var(--border-focus);
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 2px var(--accent-brand-soft);
   }
 
   .chip {
@@ -258,7 +301,7 @@
     font-size: 0.82rem;
   }
 
-  .opt:hover {
+  .opt.active {
     background: var(--bg-hover);
   }
 
@@ -268,7 +311,7 @@
     font-style: italic;
   }
 
-  .opt.create:hover {
+  .opt.create.active {
     background: var(--accent-info-bg);
   }
 

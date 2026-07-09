@@ -2,6 +2,8 @@
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
   import { composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import CopyButton from "./CopyButton.svelte";
   import HistoryPanel from "./HistoryPanel.svelte";
   import PlaceholderFills from "./PlaceholderFills.svelte";
 
@@ -174,7 +176,7 @@
   }
 
   async function copyToClipboard(): Promise<void> {
-    if (!template) return;
+    if (!template || composedFilled.trim().length === 0) return;
     const id = template.id;
     try {
       await writeText(composedFilled);
@@ -223,20 +225,7 @@
   function cancelDelete(): void {
     confirmingDelete = false;
   }
-
-  function handleConfirmKey(e: KeyboardEvent): void {
-    if (!confirmingDelete) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      cancelDelete();
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      confirmDelete();
-    }
-  }
 </script>
-
-<svelte:window onkeydown={handleConfirmKey} />
 
 <div class="header-row">
   <div class="title-block">
@@ -367,39 +356,24 @@
   <button class="base-btn" onclick={onBaseOnTemplate} title="Start a new draft based on this template">
     Base on template
   </button>
-  <button class="copy" class:ok={copyState === "ok"} class:err={copyState === "error"} onclick={copyToClipboard}>
-    {#if copyState === "ok"}
-      <span class="copy-label">Copied</span>
-    {:else if copyState === "error"}
-      <span class="copy-label">Copy failed</span>
-    {:else}
-      <span class="copy-label">Copy</span>
-      <kbd class="copy-kbd">⏎</kbd>
-    {/if}
-  </button>
+  <CopyButton
+    {copyState}
+    showKbd
+    disabled={composedFilled.trim().length === 0}
+    onclick={() => void copyToClipboard()}
+  />
 </div>
 
 {#if confirmingDelete && template}
-  <div
-    class="confirm-backdrop"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="confirm-title"
-    tabindex="-1"
-    onclick={(e) => e.target === e.currentTarget && cancelDelete()}
-    onkeydown={() => {}}
-  >
-    <div class="confirm-modal">
-      <h3 id="confirm-title">Delete template?</h3>
-      <p class="confirm-name">"{template.name}"</p>
-      <p class="confirm-warn">Ctrl+Z will restore it.</p>
-      <div class="confirm-actions">
-        <button class="confirm-btn" onclick={cancelDelete}>Cancel</button>
-        <!-- svelte-ignore a11y_autofocus -->
-        <button class="confirm-btn danger" onclick={confirmDelete} autofocus>Delete</button>
-      </div>
-    </div>
-  </div>
+  <ConfirmDialog
+    title="Delete template?"
+    name={template.name}
+    message="Ctrl+Z will restore it."
+    confirmLabel="Delete"
+    danger
+    onConfirm={confirmDelete}
+    onCancel={cancelDelete}
+  />
 {/if}
 
 <style>
@@ -493,7 +467,7 @@
 
   .meta {
     font-size: 0.72rem;
-    color: var(--text-subtle);
+    color: var(--text-muted);
     white-space: nowrap;
   }
 
@@ -550,7 +524,7 @@
   }
 
   .toggles input[type="checkbox"] {
-    accent-color: var(--text-muted);
+    accent-color: var(--accent-brand);
   }
 
   .preview {
@@ -615,6 +589,18 @@
     border-radius: 6px;
     font-size: 0.78rem;
     margin-bottom: 8px;
+    animation: banner-in 140ms ease-out;
+  }
+
+  @keyframes banner-in {
+    from {
+      opacity: 0;
+      transform: translateY(3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .adapt-error-text {
@@ -669,142 +655,4 @@
     color: var(--accent-info-text);
   }
 
-  .copy {
-    background: var(--accent-brand);
-    color: #fff;
-    border: 1px solid var(--accent-brand);
-    padding: 7px 14px 7px 16px;
-    border-radius: 6px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.18);
-    transition: background 120ms, transform 80ms;
-  }
-
-  .copy:hover {
-    background: var(--accent-brand-hover);
-    border-color: var(--accent-brand-hover);
-  }
-
-  .copy:active {
-    transform: translateY(1px);
-  }
-
-  .copy.ok {
-    background: var(--accent-positive-border);
-    border-color: var(--accent-positive-border);
-    color: var(--accent-positive-text);
-    animation: copy-success 380ms ease-out;
-  }
-
-  @keyframes copy-success {
-    0% {
-      transform: scale(1);
-      box-shadow: 0 0 0 0 var(--accent-positive-border);
-    }
-    35% {
-      transform: scale(1.035);
-      box-shadow: 0 0 0 4px rgba(136, 200, 150, 0.35);
-    }
-    100% {
-      transform: scale(1);
-      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.18);
-    }
-  }
-
-  .copy.err {
-    background: var(--accent-danger-bg);
-    border-color: var(--accent-danger-border);
-    color: var(--accent-danger-text);
-  }
-
-  .copy-kbd {
-    font-family: inherit;
-    font-size: 0.72rem;
-    line-height: 1;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: rgba(0, 0, 0, 0.22);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    color: rgba(255, 255, 255, 0.92);
-  }
-
-  .confirm-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--backdrop);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 200;
-  }
-
-  .confirm-modal {
-    background: var(--bg-base);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px 22px;
-    width: 360px;
-    max-width: calc(100vw - 48px);
-    color: var(--text);
-    box-shadow: 0 8px 32px var(--shadow);
-  }
-
-  .confirm-modal h3 {
-    margin: 0 0 8px;
-    font-size: 0.95rem;
-    font-weight: 600;
-  }
-
-  .confirm-name {
-    margin: 0 0 4px;
-    font-size: 0.85rem;
-    color: var(--text);
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    word-break: break-word;
-  }
-
-  .confirm-warn {
-    margin: 0 0 18px;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-  }
-
-  .confirm-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-
-  .confirm-btn {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 6px 16px;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .confirm-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-strong);
-  }
-
-  .confirm-btn.danger {
-    background: var(--accent-danger-bg);
-    border-color: var(--accent-danger-border);
-    color: var(--accent-danger-text);
-  }
-
-  .confirm-btn.danger:hover {
-    background: var(--accent-danger-border);
-    color: var(--accent-danger-text);
-  }
 </style>
