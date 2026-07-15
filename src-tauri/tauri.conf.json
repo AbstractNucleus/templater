@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Templater",
+  "version": "0.9.0",
+  "identifier": "com.noel.templatewidget",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/AbstractNucleus/templater-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCRTVGQjA0MEY0N0M3OTEKUldTUngwY1BCUHZsdTlYN3hPMFJYc1R1YmR4NERtSU0wT2dpSVFWc1ovZzk1YnVIbkxhUElKU1IK"
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Templater",
+        "width": 800,
+        "height": 600,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "minWidth": 480,
+        "minHeight": 360,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "app", "dmg"],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
