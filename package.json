@@ -1,16 +1,11 @@
 {
   "name": "templater",
   "version": "0.8.1",
-  "description": "Templater — personal desk-side app for prose templating with semantic paste-to-match via the Claude Agent SDK.",
+  "description": "Templater — personal desk-side app for prose templating.",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "build:sidecar": "cd sidecar && npm run build",
-    "build:sidecar:prod": "node scripts/build-sidecar-prod.mjs",
-    "fetch:node": "node scripts/fetch-node-binary.mjs",
-    "build:bundle": "npm run fetch:node && npm run build && npm run build:sidecar:prod",
-    "release:manifest": "node scripts/make-release-manifest.mjs",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

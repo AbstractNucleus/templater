@@ -42,7 +42,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             package-lock.json
-            sidecar/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -54,9 +53,6 @@ jobs:
           key: ${{ matrix.target }}
 
       - run: npm ci
-
-      - run: npm ci
-        working-directory: sidecar
 
       - name: Build app
         env:

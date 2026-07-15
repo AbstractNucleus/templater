@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { Template, SortMode } from "$lib/types";
-  import type { Ranking } from "$lib/api";
   import type { SearchHit } from "$lib/search";
   import { createDragReorder } from "$lib/dragReorder.svelte";
   import TemplateRow from "./TemplateRow.svelte";
@@ -12,17 +11,12 @@
     searchResults,
     selectedTemplateId,
     bulkSelectedIds,
-    inPasteMode,
-    rankings,
-    rankLoading,
-    rankError,
     width,
     canCreate,
     canReorder,
     sortMode,
     onTemplateSelect,
     onNew,
-    onRetryRank,
     onClearFilters,
     onContextTemplate,
     onContextEmpty,
@@ -38,13 +32,6 @@
     searchResults: SearchHit[];
     selectedTemplateId: string | null;
     bulkSelectedIds: Set<string>;
-    /** True when the page is in AI paste-match mode — the list shows ranked
-     *  matches instead of literal search results. Computed by the parent so
-     *  the AI master switch gates it in one place. */
-    inPasteMode: boolean;
-    rankings: Ranking[] | null;
-    rankLoading: boolean;
-    rankError: string | null;
     width: number;
     canCreate: boolean;
     /** True only when the visible order matches the underlying array order
@@ -54,7 +41,6 @@
     sortMode: SortMode;
     onTemplateSelect: (id: string, modifier: SelectModifier) => void;
     onNew: () => void;
-    onRetryRank: () => void;
     /** Clears the search box and any tag filters — offered from the
      *  "No matches" empty state. */
     onClearFilters: () => void;
@@ -177,28 +163,24 @@
 <aside bind:this={sidebarEl} class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
   <div class="sticky-header">
     <div class="section-row">
-      <div class="section-label">
-        {inPasteMode ? "Ranked matches" : "Templates"}
-      </div>
+      <div class="section-label">Templates</div>
       <div class="header-controls">
-        {#if !inPasteMode}
-          <button
-            class="sort-btn"
-            title={sortMode === "manual"
-              ? "Manual order. Drag templates to reorder. Click → recent."
-              : sortMode === "recent"
-                ? "Sorted by most recently copied. Click → most used."
-                : sortMode === "most_used"
-                  ? "Sorted by lifetime copy count. Click → never used."
-                  : "Sorted by never used first. Click → manual."}
-            onclick={onSortModeToggle}
-          >{
-            sortMode === "manual" ? "Manual ↕"
-            : sortMode === "recent" ? "Recent ↓"
-            : sortMode === "most_used" ? "Most used ★"
-            : "Never used 0"
-          }</button>
-        {/if}
+        <button
+          class="sort-btn"
+          title={sortMode === "manual"
+            ? "Manual order. Drag templates to reorder. Click → recent."
+            : sortMode === "recent"
+              ? "Sorted by most recently copied. Click → most used."
+              : sortMode === "most_used"
+                ? "Sorted by lifetime copy count. Click → never used."
+                : "Sorted by never used first. Click → manual."}
+          onclick={onSortModeToggle}
+        >{
+          sortMode === "manual" ? "Manual ↕"
+          : sortMode === "recent" ? "Recent ↓"
+          : sortMode === "most_used" ? "Most used ★"
+          : "Never used 0"
+        }</button>
         {#if canCreate}
           <button class="new-btn" title="New template" onclick={onNew}>+</button>
         {/if}
@@ -222,119 +204,76 @@
     {/if}
   </div>
 
-  {#snippet rankSkeleton()}
-    <li class="rank-status" aria-live="polite">Ranking with Claude…</li>
-    {#each Array(4) as _, i (i)}
-      <li class="rank-skel" style="animation-delay: {i * 90}ms" aria-hidden="true">
-        <div class="rank-skel-name"></div>
-        <div class="rank-skel-excerpt"></div>
-      </li>
-    {/each}
+  {#snippet templateRow(hit: SearchHit, indent: boolean = false)}
+    <li class:in-folder={indent} role="presentation">
+      <TemplateRow
+        {hit}
+        selected={selectedTemplateId === hit.template.id}
+        bulkSelected={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
+        draggable={canReorder}
+        dragging={drag.draggingId === hit.template.id}
+        dragOverTop={drag.dragOverId === hit.template.id && drag.dragOverHalf === "top"}
+        dragOverBottom={drag.dragOverId === hit.template.id && drag.dragOverHalf === "bottom"}
+        onSelect={(m) => onTemplateSelect(hit.template.id, m)}
+        onContext={(e) => handleTemplateContext(e, hit.template.id)}
+        onDragStart={(e) => drag.handleDragStart(e, hit.template.id)}
+        onDragOver={(e) => drag.handleDragOver(e, hit.template.id)}
+        onDragLeave={() => drag.handleDragLeave(hit.template.id)}
+        onDrop={(e) => drag.handleDrop(e, hit.template.id)}
+        onDragEnd={handleDragEnd}
+      />
+    </li>
   {/snippet}
 
-  {#if inPasteMode}
-    <ul class="template-list" role="listbox" aria-label="Ranked matches">
-      {#if rankLoading}
-        {@render rankSkeleton()}
-      {:else if rankError}
-        <li class="rank-error">
-          <div class="error-text">{rankError}</div>
-          <button class="retry-btn" onclick={onRetryRank}>Retry</button>
+  {#if searchResults.length === 0}
+    <ul class="template-list">
+      {#if templates.length === 0}
+        <li class="empty first-run">
+          No templates yet{canCreate ? " — hit + to create one" : ""}.
         </li>
-      {:else if rankings && rankings.length === 0}
-        <li class="empty">No strong matches</li>
-      {:else if rankings}
-        {#each rankings as r (r.template_id)}
-          {@const tpl = templateById.get(r.template_id)}
-          {#if tpl}
-            {@const rankedHit = { template: tpl, score: 0, matchedWords: 0, nameHits: [], tagHits: [], bodyHit: null } satisfies SearchHit}
-            <li role="presentation">
-              <TemplateRow
-                hit={rankedHit}
-                selected={selectedTemplateId === tpl.id}
-                plainExcerpt={tpl.body.trim()}
-                onSelect={(m) => onTemplateSelect(tpl.id, m)}
-                onContext={(e) => handleTemplateContext(e, tpl.id)}
-              />
-            </li>
-          {/if}
-        {/each}
       {:else}
-        {@render rankSkeleton()}
+        <li class="empty no-matches">
+          <span>No matches</span>
+          <button class="clear-filters-btn" onclick={onClearFilters}>Clear search & filters</button>
+        </li>
       {/if}
     </ul>
-  {:else}
-    {#snippet templateRow(hit: SearchHit, indent: boolean = false)}
-      <li class:in-folder={indent} role="presentation">
-        <TemplateRow
-          {hit}
-          selected={selectedTemplateId === hit.template.id}
-          bulkSelected={bulkSelectedIds.has(hit.template.id) && bulkSelectedIds.size > 1}
-          draggable={canReorder}
-          dragging={drag.draggingId === hit.template.id}
-          dragOverTop={drag.dragOverId === hit.template.id && drag.dragOverHalf === "top"}
-          dragOverBottom={drag.dragOverId === hit.template.id && drag.dragOverHalf === "bottom"}
-          onSelect={(m) => onTemplateSelect(hit.template.id, m)}
-          onContext={(e) => handleTemplateContext(e, hit.template.id)}
-          onDragStart={(e) => drag.handleDragStart(e, hit.template.id)}
-          onDragOver={(e) => drag.handleDragOver(e, hit.template.id)}
-          onDragLeave={() => drag.handleDragLeave(hit.template.id)}
-          onDrop={(e) => drag.handleDrop(e, hit.template.id)}
-          onDragEnd={handleDragEnd}
-        />
-      </li>
-    {/snippet}
-
-    {#if searchResults.length === 0}
-      <ul class="template-list">
-        {#if templates.length === 0}
-          <li class="empty first-run">
-            No templates yet{canCreate ? " — hit + to create one" : ""}.
-          </li>
-        {:else}
-          <li class="empty no-matches">
-            <span>No matches</span>
-            <button class="clear-filters-btn" onclick={onClearFilters}>Clear search & filters</button>
-          </li>
-        {/if}
-      </ul>
-    {:else if hasFolders}
-      <ul class="template-list" role="listbox" aria-label="Templates">
-        {#each groupedSearchResults as group (group.folder ?? "__ungrouped__")}
-          {@const label = group.folder ?? "Ungrouped"}
-          {@const collapsed = collapsedFolders.has(label)}
-          <li
-            class="folder-header"
-            role="presentation"
-            class:drag-over={dragOverFolder === (group.folder ?? "__ungrouped__")}
-            ondragover={(e) => handleFolderDragOver(e, group.folder)}
-            ondragleave={() => (dragOverFolder = null)}
-            ondrop={(e) => handleFolderDrop(e, group.folder)}
+  {:else if hasFolders}
+    <ul class="template-list" role="listbox" aria-label="Templates">
+      {#each groupedSearchResults as group (group.folder ?? "__ungrouped__")}
+        {@const label = group.folder ?? "Ungrouped"}
+        {@const collapsed = collapsedFolders.has(label)}
+        <li
+          class="folder-header"
+          role="presentation"
+          class:drag-over={dragOverFolder === (group.folder ?? "__ungrouped__")}
+          ondragover={(e) => handleFolderDragOver(e, group.folder)}
+          ondragleave={() => (dragOverFolder = null)}
+          ondrop={(e) => handleFolderDrop(e, group.folder)}
+        >
+          <button
+            class="folder-toggle"
+            onclick={() => toggleFolder(label)}
+            title={collapsed ? "Expand, or drop templates here to move them" : "Collapse, or drop templates here to move them"}
           >
-            <button
-              class="folder-toggle"
-              onclick={() => toggleFolder(label)}
-              title={collapsed ? "Expand, or drop templates here to move them" : "Collapse, or drop templates here to move them"}
-            >
-              <span class="folder-chevron">{collapsed ? "▸" : "▾"}</span>
-              <span class="folder-name">{label}</span>
-              <span class="folder-count">{group.hits.length}</span>
-            </button>
-          </li>
-          {#if !collapsed}
-            {#each group.hits as hit (hit.template.id)}
-              {@render templateRow(hit, true)}
-            {/each}
-          {/if}
-        {/each}
-      </ul>
-    {:else}
-      <ul class="template-list" role="listbox" aria-label="Templates">
-        {#each searchResults as hit (hit.template.id)}
-          {@render templateRow(hit)}
-        {/each}
-      </ul>
-    {/if}
+            <span class="folder-chevron">{collapsed ? "▸" : "▾"}</span>
+            <span class="folder-name">{label}</span>
+            <span class="folder-count">{group.hits.length}</span>
+          </button>
+        </li>
+        {#if !collapsed}
+          {#each group.hits as hit (hit.template.id)}
+            {@render templateRow(hit, true)}
+          {/each}
+        {/if}
+      {/each}
+    </ul>
+  {:else}
+    <ul class="template-list" role="listbox" aria-label="Templates">
+      {#each searchResults as hit (hit.template.id)}
+        {@render templateRow(hit)}
+      {/each}
+    </ul>
   {/if}
 </aside>
 
@@ -572,77 +511,5 @@
     background: var(--bg-hover);
     border-color: var(--border-strong);
     color: var(--text);
-  }
-
-  .rank-status {
-    color: var(--text-subtle);
-    font-size: 0.72rem;
-    padding: 4px 6px 6px;
-    font-style: italic;
-  }
-
-  .rank-skel {
-    padding: 4px 6px;
-    animation: rank-skel-pulse 1.4s ease-in-out infinite;
-  }
-
-  .rank-skel-name,
-  .rank-skel-excerpt {
-    background: var(--bg-hover);
-    border-radius: 3px;
-    height: 12px;
-  }
-
-  .rank-skel-name {
-    width: 70%;
-    margin-bottom: 5px;
-  }
-
-  .rank-skel-excerpt {
-    width: 92%;
-    height: 9px;
-  }
-
-  @keyframes rank-skel-pulse {
-    0%, 100% {
-      opacity: 0.45;
-    }
-    50% {
-      opacity: 0.9;
-    }
-  }
-
-  .rank-error {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 6px;
-    margin: 4px 0;
-    background: var(--rank-error-bg);
-    border: 1px solid var(--accent-danger-border);
-    border-radius: 4px;
-  }
-
-  .error-text {
-    color: var(--accent-danger-text);
-    font-size: 0.75rem;
-    line-height: 1.3;
-    word-break: break-word;
-  }
-
-  .retry-btn {
-    align-self: flex-start;
-    background: transparent;
-    border: 1px solid var(--accent-danger-border);
-    color: var(--accent-danger-text);
-    padding: 2px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.75rem;
-  }
-
-  .retry-btn:hover {
-    background: var(--accent-danger-bg);
   }
 </style>

@@ -5,7 +5,7 @@
 //!
 //! The in-memory shape exposed to callers is the merged [`AppData`]
 //! (`version`, `templates`, `settings`). The split exists so the templates
-//! file is portable on its own — it round-trips through the import/export
+//! file is portable on its own — it rounds-trips through the import/export
 //! flow with no machine-specific noise.
 //!
 //! Migration from the legacy unified format (everything in `templates.json`,
@@ -79,13 +79,6 @@ pub struct WindowGeometry {
 pub struct ColumnWidths {
     pub tags: u32,
     pub templates: u32,
-    pub agent: u32,
-    #[serde(default = "default_context_width")]
-    pub context: u32,
-}
-
-fn default_context_width() -> u32 {
-    360
 }
 
 impl Default for ColumnWidths {
@@ -93,51 +86,8 @@ impl Default for ColumnWidths {
         Self {
             tags: 180,
             templates: 260,
-            agent: 340,
-            context: 360,
         }
     }
-}
-
-/// Per-task model tier ("haiku" | "sonnet" | "opus"). Stored as plain strings
-/// and forwarded to the sidecar untouched, where they resolve to concrete model
-/// ids. `context` covers both ingest summaries and the relevance picker.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelSettings {
-    #[serde(default = "default_model_haiku")]
-    pub rank: String,
-    #[serde(default = "default_model_haiku")]
-    pub edit: String,
-    #[serde(default = "default_model_sonnet")]
-    pub adapt: String,
-    #[serde(default = "default_model_haiku")]
-    pub memory: String,
-    #[serde(default = "default_model_haiku")]
-    pub context: String,
-}
-
-fn default_model_haiku() -> String {
-    "haiku".to_string()
-}
-
-fn default_model_sonnet() -> String {
-    "sonnet".to_string()
-}
-
-impl Default for ModelSettings {
-    fn default() -> Self {
-        Self {
-            rank: default_model_haiku(),
-            edit: default_model_haiku(),
-            adapt: default_model_sonnet(),
-            memory: default_model_haiku(),
-            context: default_model_haiku(),
-        }
-    }
-}
-
-fn default_models() -> ModelSettings {
-    ModelSettings::default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,14 +110,6 @@ pub struct Settings {
     pub zoom: f32,
     #[serde(default)]
     pub column_widths: ColumnWidths,
-    /// Master switch for every Claude-powered feature. Off (the default)
-    /// hides all AI surfaces in the UI.
-    #[serde(default)]
-    pub ai_enabled: bool,
-    #[serde(default = "default_paste_backend")]
-    pub paste_backend: String,
-    #[serde(default = "default_models")]
-    pub models: ModelSettings,
     #[serde(default)]
     pub placeholder_values: HashMap<String, HashMap<String, String>>,
     #[serde(default = "default_sort_mode")]
@@ -176,17 +118,8 @@ pub struct Settings {
     pub tag_order: Vec<String>,
     #[serde(default)]
     pub onboarding_complete: bool,
-    /// Absolute paths to folders the AI may consult during adapt + edit calls.
-    /// Persisted in settings.json; mirrored to the sidecar via
-    /// `context-set-sources` on startup and whenever the list changes.
-    #[serde(default)]
-    pub context_sources: Vec<String>,
-    #[serde(default)]
-    pub context_open: bool,
     #[serde(default)]
     pub snippets: HashMap<String, String>,
-    #[serde(default)]
-    pub quick_capture_hotkey: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -199,10 +132,6 @@ fn default_mode() -> String {
 
 fn default_zoom() -> f32 {
     1.0
-}
-
-fn default_paste_backend() -> String {
-    "agent".to_string()
 }
 
 fn default_sort_mode() -> String {
@@ -222,17 +151,11 @@ impl Default for Settings {
             mode: default_mode(),
             zoom: default_zoom(),
             column_widths: ColumnWidths::default(),
-            ai_enabled: false,
-            paste_backend: default_paste_backend(),
-            models: ModelSettings::default(),
             placeholder_values: HashMap::new(),
             sort_mode: default_sort_mode(),
             tag_order: Vec::new(),
             onboarding_complete: false,
-            context_sources: Vec::new(),
-            context_open: false,
             snippets: HashMap::new(),
-            quick_capture_hotkey: None,
         }
     }
 }

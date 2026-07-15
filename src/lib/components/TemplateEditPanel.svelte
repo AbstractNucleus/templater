@@ -2,12 +2,6 @@
   import type { Template, TemplateDraft } from "$lib/types";
   import TemplateForm from "./TemplateForm.svelte";
 
-  type DraftContent = { opening: string; body: string };
-  /** `templateId` is null in the create-new-template flow (no template yet);
-   *  in edit mode it's the edited template's id so a stale signal from a
-   *  prior selection can be rejected. */
-  type BodyUpdate = { templateId: string | null; body: string; seq: number };
-
   const EMPTY_DRAFT: TemplateDraft = {
     name: "",
     tags: [],
@@ -26,8 +20,6 @@
     onCancelEdit,
     onSave,
     onCreate = () => {},
-    aiBodyUpdate = null,
-    onDraftChange = () => {},
   }: {
     template: Template | null;
     editing: boolean;
@@ -41,13 +33,10 @@
     onCancelEdit: () => void;
     onSave: (t: Template) => void;
     onCreate?: (draft: TemplateDraft) => void;
-    aiBodyUpdate?: BodyUpdate | null;
-    onDraftChange?: (draft: DraftContent) => void;
   } = $props();
 
   // Draft state — used by both edit and create flows.
   let draft = $state<TemplateDraft>({ ...EMPTY_DRAFT });
-  let lastAiBodyUpdateSeq = $state(0);
 
   // Seed draft whenever we enter edit/create mode or switch templates.
   // Reference identity on `template` and `creatingDraft` keeps this stable
@@ -67,25 +56,6 @@
         folder: template.folder,
       };
     }
-  });
-
-  $effect(() => {
-    if (!creatingDraft && (!editing || !template)) return;
-    onDraftChange({ opening: draft.opening, body: draft.body });
-  });
-
-  $effect(() => {
-    if (aiBodyUpdate === null) return;
-    if (creatingDraft) {
-      if (aiBodyUpdate.seq === lastAiBodyUpdateSeq) return;
-      lastAiBodyUpdateSeq = aiBodyUpdate.seq;
-      draft = { ...draft, body: aiBodyUpdate.body };
-      return;
-    }
-    if (!editing || !template) return;
-    if (aiBodyUpdate.templateId !== template.id || aiBodyUpdate.seq === lastAiBodyUpdateSeq) return;
-    lastAiBodyUpdateSeq = aiBodyUpdate.seq;
-    draft = { ...draft, body: aiBodyUpdate.body };
   });
 
   function handleSave(): void {

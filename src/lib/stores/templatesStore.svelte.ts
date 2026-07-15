@@ -119,8 +119,6 @@ class TemplatesStore {
       column_widths: {
         tags: Math.round(cw.tags),
         templates: Math.round(cw.templates),
-        agent: Math.round(cw.agent),
-        context: Math.round(cw.context),
       },
     };
     this.templates = nextTemplates;

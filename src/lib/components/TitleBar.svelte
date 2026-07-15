@@ -3,38 +3,20 @@
 
   let {
     onOpenSettings,
-    onToggleContext,
-    contextOpen,
-    onToggleCapture,
-    captureOpen,
-    aiEnabled,
     showSearch,
     searchQuery = "",
     onSearchChange = () => {},
     onClearSearch = () => {},
     onSearchInputMount = () => {},
-    aiActive = false,
-    aiBusy = false,
   }: {
     onOpenSettings: () => void;
-    onToggleContext: () => void;
-    contextOpen: boolean;
-    onToggleCapture: () => void;
-    captureOpen: boolean;
-    /** Master AI switch. False hides the capture + context buttons and the
-     *  paste-match mention in the search placeholder. */
-    aiEnabled: boolean;
-    /** Show the search omnibar slot. False in edit/agent modes — slot becomes a drag region. */
+    /** Show the search omnibar slot. */
     showSearch: boolean;
     searchQuery?: string;
     onSearchChange?: (q: string) => void;
     onClearSearch?: () => void;
     /** Fired with the live <input> element so the page's Ctrl+F handler can focus it. */
     onSearchInputMount?: (el: HTMLInputElement | null) => void;
-    /** True when the search query has crossed paste-mode threshold and we're using the AI ranker. */
-    aiActive?: boolean;
-    /** True while the ranker request is in flight — chip pulses. */
-    aiBusy?: boolean;
   } = $props();
 
   let pinned = $state(false);
@@ -98,20 +80,10 @@
           bind:this={searchEl}
           class="search"
           type="text"
-          placeholder={aiEnabled
-            ? "Search or paste a message to find matching templates…"
-            : "Search templates…"}
+          placeholder="Search templates…"
           value={searchQuery}
           oninput={(e) => onSearchChange(e.currentTarget.value)}
         />
-        {#if aiActive}
-          <span
-            class="ai-chip"
-            class:busy={aiBusy}
-            title={aiBusy ? "Ranking matches with Claude Haiku…" : "Ranked by Claude Haiku (paste-match mode)"}
-            aria-label={aiBusy ? "AI ranking in progress" : "AI ranking active"}
-          >AI</span>
-        {/if}
         {#if searchQuery.length > 0}
           <button
             class="clear-btn"
@@ -125,22 +97,6 @@
   {/if}
   <div class="drag-spacer" data-tauri-drag-region></div>
   <div class="actions">
-    {#if aiEnabled}
-      <button
-        class="btn"
-        class:active={captureOpen}
-        title={captureOpen ? "Close memory capture (Ctrl+Shift+M)" : "Capture memory (Ctrl+Shift+M)"}
-        aria-pressed={captureOpen}
-        aria-label="Capture memory"
-        onclick={onToggleCapture}
-      >
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          <path d="M9 10h6" />
-          <path d="M12 7v6" />
-        </svg>
-      </button>
-    {/if}
     <button
       class="btn"
       class:active={pinned}
@@ -153,21 +109,6 @@
         <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
       </svg>
     </button>
-    {#if aiEnabled}
-      <button
-        class="btn"
-        class:active={contextOpen}
-        title={contextOpen ? "Hide context" : "Show context"}
-        aria-pressed={contextOpen}
-        aria-label="Toggle context panel"
-        onclick={onToggleContext}
-      >
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <path d="M15 4v16" />
-        </svg>
-      </button>
-    {/if}
     <button class="btn" title="Settings" onclick={onOpenSettings} aria-label="Settings">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
@@ -264,31 +205,6 @@
 
   .search::placeholder {
     color: var(--text-placeholder);
-  }
-
-  .ai-chip {
-    position: absolute;
-    right: 30px;
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: var(--accent-brand-soft);
-    color: var(--accent-brand-text);
-    pointer-events: auto;
-    cursor: help;
-    line-height: 1;
-    user-select: none;
-  }
-
-  .ai-chip.busy {
-    animation: ai-chip-pulse 1.2s ease-in-out infinite;
-  }
-
-  @keyframes ai-chip-pulse {
-    0%, 100% { opacity: 0.55; }
-    50% { opacity: 1; }
   }
 
   .clear-btn {

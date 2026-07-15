@@ -10,14 +10,9 @@ export interface GlobalKeydownDeps {
   isBulkDeleteConfirmOpen: () => boolean;
   isBulkTagPromptOpen: () => boolean;
   isBulkRemoveTagPromptOpen: () => boolean;
-  // Cheat sheet + capture popover: read state to toggle, and to suppress
-  // shortcuts while open.
+  // Cheat sheet: read state to toggle, and to suppress shortcuts while open.
   isCheatSheetOpen: () => boolean;
   setCheatSheetOpen: (v: boolean) => void;
-  isCaptureOpen: () => boolean;
-  setCaptureOpen: (v: boolean) => void;
-  // Master AI switch — gates the Ctrl+Shift+M capture chord.
-  isAiEnabled: () => boolean;
   // Zoom: current effective zoom (already defaulted), the setter, and the step.
   getZoom: () => number;
   setZoom: (next: number) => void;
@@ -27,7 +22,6 @@ export interface GlobalKeydownDeps {
   getSearchQuery: () => string;
   clearSearch: () => void;
   // Mode flags.
-  isBaseMode: () => boolean;
   isEditing: () => boolean;
   isEditorMode: () => boolean;
   // Focus probe + selection/clipboard/undo actions.
@@ -64,26 +58,6 @@ export function createGlobalKeydownHandler(
     if (deps.isCheatSheetOpen()) {
       // CheatSheet.svelte has its own window listener for Escape — just
       // suppress global shortcuts so e.g. arrow keys don't move selection.
-      return;
-    }
-    // Capture toggle runs before the captureOpen early-return so the same
-    // chord both opens and closes the popover. Skipped entirely when AI
-    // features are off — the popover doesn't exist then.
-    if (
-      deps.isAiEnabled() &&
-      (e.ctrlKey || e.metaKey) &&
-      e.shiftKey &&
-      !e.altKey &&
-      e.key.toLowerCase() === "m"
-    ) {
-      e.preventDefault();
-      deps.setCaptureOpen(!deps.isCaptureOpen());
-      return;
-    }
-    if (deps.isCaptureOpen()) {
-      // MemoryCapturePopover owns Escape via its own listener. Suppress
-      // global shortcuts so Ctrl+F / Ctrl+L / zoom don't steal focus while
-      // the modal popover is showing.
       return;
     }
     const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.altKey;
@@ -125,7 +99,7 @@ export function createGlobalKeydownHandler(
       return;
     }
 
-    if (deps.isBaseMode() || deps.isEditing()) return;
+    if (deps.isEditing()) return;
     const inSearch = document.activeElement === deps.getSearchInput();
     if (!inSearch && deps.isInputFocused()) return;
 

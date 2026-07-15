@@ -1,7 +1,7 @@
 name: CI
 
-# Runs cargo check, svelte-check, vitest, and sidecar TS build on every push
-# and PR to main. Platform installer builds live in release.yml (tag-driven).
+# Runs cargo check, svelte-check, and vitest on every push and PR to main.
+# Platform installer builds live in release.yml (tag-driven).
 
 on:
   push:
@@ -21,7 +21,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: |
             package-lock.json
-            sidecar/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -43,20 +42,6 @@ jobs:
             libxdo-dev \
             libssl-dev \
             build-essential
-
-      # Tauri's externalBin and bundle.resources are validated at build-script
-      # time, even for a plain cargo check. We need both the per-target node
-      # binary and the sidecar prod-bundle (dist + node_modules + package.json)
-      # in place before invoking cargo.
-      - name: Fetch sidecar node binary
-        run: node scripts/fetch-node-binary.mjs
-
-      - name: npm ci (sidecar)
-        run: npm ci
-        working-directory: sidecar
-
-      - name: Build sidecar prod bundle
-        run: node scripts/build-sidecar-prod.mjs
 
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml

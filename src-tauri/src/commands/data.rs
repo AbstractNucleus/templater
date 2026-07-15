@@ -1,7 +1,7 @@
 //! Data-layer and misc system `#[tauri::command]`s: load/save, templates
-//! import/export, bulk edits, backups, and a few small OS shims (open paths,
-//! launch `claude login`, report env warnings). The mutating template
-//! commands route their read-modify-write-save through [`Store::mutate`].
+//! import/export, bulk edits, backups, and a few small OS shims (open paths).
+//! The mutating template commands route their read-modify-write-save through
+//! [`Store::mutate`].
 
 use crate::store::{AppData, BackupEntry, Store, Template, TemplateVersion, DATA_VERSION};
 use chrono::Utc;
@@ -247,18 +247,6 @@ pub fn import_templates(
     })
 }
 
-#[derive(serde::Serialize)]
-pub struct EnvWarnings {
-    api_key_override: bool,
-}
-
-#[tauri::command]
-pub fn get_env_warnings() -> EnvWarnings {
-    EnvWarnings {
-        api_key_override: std::env::var_os("ANTHROPIC_API_KEY").is_some(),
-    }
-}
-
 #[tauri::command]
 pub fn list_template_backups(store: tauri::State<'_, Store>) -> Result<Vec<BackupEntry>, String> {
     store.list_template_backups()
@@ -291,42 +279,4 @@ pub fn open_path(path: String, app: tauri::AppHandle) -> Result<(), String> {
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|e| format!("open: {e}"))
-}
-
-/// Spawn `claude login` in a new terminal window. The user completes the
-/// device-flow in the terminal; on success the Agent SDK picks up the new
-/// session on its next call (no app restart needed). We don't try to capture
-/// or report progress — the terminal is the source of truth, and forcing
-/// users into a hidden subprocess hides the auth code prompt.
-#[tauri::command]
-pub fn open_claude_login() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        // `cmd /c start "" cmd /k claude login` opens a new console window
-        // that stays open after `claude login` exits so the user can read
-        // any error output.
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", "cmd", "/k", "claude", "login"])
-            .spawn()
-            .map_err(|e| format!("spawn cmd: {e}"))?;
-        return Ok(());
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // AppleScript opens Terminal.app and runs the command inside a fresh tab.
-        std::process::Command::new("osascript")
-            .args([
-                "-e",
-                "tell application \"Terminal\" to do script \"claude login\"",
-                "-e",
-                "tell application \"Terminal\" to activate",
-            ])
-            .spawn()
-            .map_err(|e| format!("spawn osascript: {e}"))?;
-        return Ok(());
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        Err("claude login launcher not implemented for this platform".to_string())
-    }
 }

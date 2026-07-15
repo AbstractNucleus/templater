@@ -1,17 +1,13 @@
 <script lang="ts">
-  import { type ModelSettings, type PasteBackend, type Settings } from "$lib/types";
-  import { setHotkey, setQuickCaptureHotkey, type BackupEntry } from "$lib/api";
-  import BackendSection from "./settings/BackendSection.svelte";
-  import ModelsSection from "./settings/ModelsSection.svelte";
+  import type { Settings } from "$lib/types";
+  import { setHotkey, type BackupEntry } from "$lib/api";
   import TagsSection from "./settings/TagsSection.svelte";
   import BackupsSection from "./settings/BackupsSection.svelte";
   import WindowSection from "./settings/WindowSection.svelte";
   import HotkeySection from "./settings/HotkeySection.svelte";
-  import DiagnosticsSection from "./settings/DiagnosticsSection.svelte";
   import UpdatesSection from "./settings/UpdatesSection.svelte";
   import GeneralSection from "./settings/GeneralSection.svelte";
   import SnippetsSection from "./settings/SnippetsSection.svelte";
-  import ContextSection from "./settings/ContextSection.svelte";
   import ImportExportSection from "./settings/ImportExportSection.svelte";
 
   type PortResult =
@@ -29,15 +25,12 @@
   type TabId =
     | "general"
     | "shortcuts"
-    | "ai"
     | "snippets"
-    | "context"
     | "templates"
     | "about";
 
   let {
     settings,
-    envApiKeyOverride,
     currentVersion,
     tagCounts,
     onClose,
@@ -52,7 +45,6 @@
     onOpenCheatSheet,
   }: {
     settings: Settings;
-    envApiKeyOverride: boolean;
     currentVersion: string;
     /** Tag name → number of templates using it, sorted by display order. */
     tagCounts: [string, number][];
@@ -72,17 +64,14 @@
 
   let activeTab = $state<TabId>("general");
 
-  // Sidebar groups: visual divider between groups, no labels — 7 items don't
-  // need headings, but app vs. writing vs. data is a useful eye anchor.
+  // Sidebar groups: visual divider between groups, no labels.
   const TAB_GROUPS: { id: TabId; label: string }[][] = [
     [
       { id: "general", label: "General" },
       { id: "shortcuts", label: "Shortcuts" },
     ],
     [
-      { id: "ai", label: "AI" },
       { id: "snippets", label: "Snippets" },
-      { id: "context", label: "Context" },
     ],
     [
       { id: "templates", label: "Templates" },
@@ -92,20 +81,10 @@
     ],
   ];
 
-  // AI + Context tabs only exist while AI features are enabled; empty groups
-  // collapse so the divider doesn't render around nothing.
-  const visibleTabGroups = $derived(
-    TAB_GROUPS.map((group) =>
-      group.filter((t) => settings.ai_enabled || (t.id !== "ai" && t.id !== "context")),
-    ).filter((group) => group.length > 0),
-  );
-
   const TAB_TITLES: Record<TabId, string> = {
     general: "General",
     shortcuts: "Shortcuts",
-    ai: "AI",
     snippets: "Signature & snippets",
-    context: "Context sources",
     templates: "Templates",
     about: "About",
   };
@@ -116,16 +95,8 @@
   let capturing = $state(false);
   let captureError = $state<string | null>(null);
   // Distinct from `capturing` so the two rebinders don't interfere with each
-  // other when both are exposed in the modal.
-  let captureCapturing = $state<"none" | "main" | "quick">("none");
-
-  function setPasteBackend(next: PasteBackend): void {
-    onUpdate({ ...settings, paste_backend: next });
-  }
-
-  function setModels(next: ModelSettings): void {
-    onUpdate({ ...settings, models: next });
-  }
+  // other when both are exposed in the modal (only "main" remains without AI).
+  let captureCapturing = $state<"none" | "main">("none");
 
   // Tag management state owned here so the Escape handler can drain it before
   // closing the modal. The TagsSection child binds to these via $bindable.
@@ -177,9 +148,9 @@
     return MODIFIER_PREFIXES.some((p) => code.startsWith(p));
   }
 
-  function startCapture(target: "main" | "quick" = "main"): void {
-    captureCapturing = target;
-    capturing = target === "main";
+  function startCapture(): void {
+    captureCapturing = "main";
+    capturing = true;
     captureError = null;
   }
 
@@ -225,13 +196,8 @@
     const accelerator = parts.join("+");
 
     try {
-      if (captureCapturing === "quick") {
-        await setQuickCaptureHotkey(accelerator);
-        onUpdate({ ...settings, quick_capture_hotkey: accelerator });
-      } else {
-        await setHotkey(accelerator);
-        onUpdate({ ...settings, global_hotkey: accelerator });
-      }
+      await setHotkey(accelerator);
+      onUpdate({ ...settings, global_hotkey: accelerator });
       captureError = null;
     } catch (err) {
       captureError = String(err);
@@ -259,7 +225,7 @@
         <span class="sidebar-title">Settings</span>
       </div>
       <div class="sidebar-nav" role="tablist" aria-orientation="vertical">
-        {#each visibleTabGroups as group, gi (gi)}
+        {#each TAB_GROUPS as group, gi (gi)}
           {#if gi > 0}
             <div class="sidebar-divider" aria-hidden="true"></div>
           {/if}
@@ -308,21 +274,8 @@
           </section>
         {/if}
 
-        {#if activeTab === "ai"}
-          <BackendSection
-            backend={settings.paste_backend}
-            {envApiKeyOverride}
-            onChange={setPasteBackend}
-          />
-          <ModelsSection models={settings.models} onChange={setModels} />
-        {/if}
-
         {#if activeTab === "snippets"}
           <SnippetsSection {settings} {onUpdate} />
-        {/if}
-
-        {#if activeTab === "context"}
-          <ContextSection {settings} />
         {/if}
 
         {#if activeTab === "templates"}
@@ -347,9 +300,6 @@
 
         {#if activeTab === "about"}
           <UpdatesSection {currentVersion} {onCheckUpdate} />
-          {#if settings.ai_enabled}
-            <DiagnosticsSection />
-          {/if}
         {/if}
       </div>
     </div>
@@ -601,9 +551,7 @@
     margin-bottom: 6px;
   }
 
-  /* Segmented toggle — used for binary choices (Editor/User, Dark/Light,
-     Agent/API). Active state uses the brand color so the selection reads as
-     identity, not status. */
+  /* Segmented toggle — used for binary choices (Editor/User, Dark/Light). */
   :global(.pane-body .seg-toggle) {
     display: inline-flex;
     background: var(--bg-input);

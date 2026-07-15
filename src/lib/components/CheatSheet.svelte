@@ -2,13 +2,9 @@
   let {
     onClose,
     globalHotkey,
-    aiEnabled,
   }: {
     onClose: () => void;
     globalHotkey: string;
-    /** False hides the capture-popover section — the feature doesn't exist
-     *  while AI is off. */
-    aiEnabled: boolean;
   } = $props();
 
   function handleBackdrop(e: MouseEvent): void {
@@ -57,18 +53,6 @@
         { keys: "{{meeting_time}}", desc: "Text placeholder unless you define a matching snippet" },
       ],
     },
-    ...(aiEnabled
-      ? [
-          {
-            label: "Capture popover",
-            rows: [
-              { keys: "Ctrl+Shift+M", desc: "Open or close the memory capture popover" },
-              { keys: "Ctrl+Enter", desc: "Submit the captured snippet" },
-              { keys: "Esc", desc: "Close the popover" },
-            ],
-          },
-        ]
-      : []),
     {
       label: "Selection",
       rows: [

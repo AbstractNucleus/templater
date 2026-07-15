@@ -3,12 +3,6 @@
   import TemplateView from "./TemplateView.svelte";
   import TemplateEditPanel from "./TemplateEditPanel.svelte";
 
-  type DraftContent = { opening: string; body: string };
-  /** `templateId` is null in the create-new-template flow (no template yet);
-   *  in edit mode it's the edited template's id so a stale signal from a
-   *  prior selection can be rejected. */
-  type BodyUpdate = { templateId: string | null; body: string; seq: number };
-
   let {
     template,
     includeOpening,
@@ -21,10 +15,6 @@
     availableFolders,
     copyTrigger,
     savedPlaceholderValues,
-    inboundText,
-    adaptBusy,
-    adaptError,
-    creatingDraft = null,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
@@ -33,14 +23,10 @@
     onCreate = () => {},
     onDuplicate,
     onDelete,
-    onBaseOnTemplate,
-    onAdaptToInbound,
-    onClearAdaptError,
     onCopySuccess,
     onPlaceholderValuesChange,
     onRevertHistory,
-    aiBodyUpdate = null,
-    onDraftChange = () => {},
+    creatingDraft = null,
   }: {
     template: Template | null;
     includeOpening: boolean;
@@ -54,16 +40,6 @@
     copyTrigger: number;
     /** Persisted per-template fill-ins. Outer key: template id. */
     savedPlaceholderValues: Record<string, Record<string, string>>;
-    /** The pasted inbound message in paste-match mode. null/empty disables Adapt. */
-    inboundText: string | null;
-    /** True while an adapt-to-inbound request is in flight. */
-    adaptBusy: boolean;
-    /** Last adapt-to-inbound error message. Null when no error or after retry. */
-    adaptError: string | null;
-    /** When non-null, the panel renders the new-template form seeded from this
-     *  draft (instead of an existing template). Parent must hold a stable
-     *  reference for the form's lifetime. */
-    creatingDraft?: TemplateDraft | null;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
@@ -72,14 +48,10 @@
     onCreate?: (draft: TemplateDraft) => void;
     onDuplicate: () => void;
     onDelete: () => void;
-    onBaseOnTemplate: () => void;
-    onAdaptToInbound: () => void;
-    onClearAdaptError: () => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
     onRevertHistory: (templateId: string, versionIdx: number) => void;
-    aiBodyUpdate?: BodyUpdate | null;
-    onDraftChange?: (draft: DraftContent) => void;
+    creatingDraft?: TemplateDraft | null;
   } = $props();
 </script>
 
@@ -110,8 +82,6 @@
       {onCancelEdit}
       {onSave}
       {onCreate}
-      {aiBodyUpdate}
-      {onDraftChange}
     />
   {:else if template}
     <TemplateView
@@ -123,18 +93,12 @@
       {canEdit}
       {copyTrigger}
       {savedPlaceholderValues}
-      {inboundText}
-      {adaptBusy}
-      {adaptError}
       {onToggleOpening}
       {onToggleSignature}
       {onEnterEdit}
       {onSave}
       {onDuplicate}
       {onDelete}
-      {onBaseOnTemplate}
-      {onAdaptToInbound}
-      {onClearAdaptError}
       {onCopySuccess}
       {onPlaceholderValuesChange}
       {onRevertHistory}

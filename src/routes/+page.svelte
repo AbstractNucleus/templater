@@ -5,45 +5,35 @@
   import TitleBar from "$lib/components/TitleBar.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
-  import AgentSidebar from "$lib/components/AgentSidebar.svelte";
-  import EditorPane from "$lib/components/EditorPane.svelte";
   import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import CheatSheet from "$lib/components/CheatSheet.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
-  import ContextPane from "$lib/components/ContextPane.svelte";
-  import MemoryCapturePopover from "$lib/components/MemoryCapturePopover.svelte";
   import { readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
   import { searchTemplates } from "$lib/search";
   import { orderedTagCounts } from "$lib/tags";
   import { buildContextMenu } from "$lib/contextMenu";
-  import { createGlobalKeydownHandler } from "$lib/keyboard";
   import {
-    getEnvWarnings,
+    getAppVersion,
     openDataDir,
     checkForUpdate,
-    getAppVersion,
-    onSidecarProgress,
     listTemplateBackups,
-    setContextSources,
   } from "$lib/api";
   import {
     DEFAULT_COLUMN_WIDTHS,
     type Settings,
     type Template,
+    type TemplateDraft,
   } from "$lib/types";
   import {
     templatesStore,
     handleExportTemplates,
     handleImportTemplates,
   } from "$lib/stores/templatesStore.svelte";
-  import { agentStore } from "$lib/stores/agentStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
-  import { pasteMatchStore } from "$lib/stores/pasteMatchStore.svelte";
-
-  const PASTE_THRESHOLD = 30;
+  import { createGlobalKeydownHandler } from "$lib/keyboard";
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2.0;
@@ -53,15 +43,13 @@
   const TAGS_MAX = 400;
   const TEMPLATES_MIN = 160;
   const TEMPLATES_MAX = 500;
-  const CONTEXT_MIN = 280;
-  const CONTEXT_MAX = 600;
 
   let tagsWidth = $state(DEFAULT_COLUMN_WIDTHS.tags);
   let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
-  let contextWidth = $state(DEFAULT_COLUMN_WIDTHS.context);
-  let contextOpen = $state(false);
-  let captureOpen = $state(false);
   let searchInput: HTMLInputElement | undefined = $state();
+
+  // New-template flow state. When non-null, the template form opens for creation.
+  let creatingDraft = $state<TemplateDraft | null>(null);
 
   function clearSearch(): void {
     searchQuery = "";
@@ -102,42 +90,29 @@
     copyTrigger++;
   }
 
-  function startResize(target: "tags" | "templates" | "agent" | "context"): (e: PointerEvent) => void {
+  function startResize(target: "tags" | "templates"): (e: PointerEvent) => void {
     return (e) => {
       e.preventDefault();
       const handle = e.currentTarget as HTMLElement;
       const startX = e.clientX;
       const widthOf = (t: typeof target): number =>
-        t === "tags" ? tagsWidth : t === "templates" ? templatesWidth : t === "agent" ? agentSidebarWidth : contextWidth;
+        t === "tags" ? tagsWidth : templatesWidth;
       const startWidth = widthOf(target);
       const min =
         target === "tags"
           ? TAGS_MIN
-          : target === "templates"
-            ? TEMPLATES_MIN
-            : target === "agent"
-              ? AGENT_MIN
-              : CONTEXT_MIN;
+          : TEMPLATES_MIN;
       const max =
         target === "tags"
           ? TAGS_MAX
-          : target === "templates"
-            ? TEMPLATES_MAX
-            : target === "agent"
-              ? AGENT_MAX
-              : CONTEXT_MAX;
-      // Context pane sits on the RIGHT; dragging its handle left should grow
-      // the pane, which means inverting the X delta.
-      const sign = target === "context" ? -1 : 1;
+          : TEMPLATES_MAX;
       handle.setPointerCapture(e.pointerId);
       handle.classList.add("dragging");
 
       function onMove(ev: PointerEvent): void {
-        const next = Math.round(Math.max(min, Math.min(max, startWidth + sign * (ev.clientX - startX))));
+        const next = Math.round(Math.max(min, Math.min(max, startWidth + (ev.clientX - startX))));
         if (target === "tags") tagsWidth = next;
-        else if (target === "templates") templatesWidth = next;
-        else if (target === "agent") agentSidebarWidth = next;
-        else contextWidth = next;
+        else templatesWidth = next;
       }
 
       function onUp(): void {
@@ -161,31 +136,19 @@
     };
   }
 
-  let envApiKeyOverride = $state(false);
   let appVersion = $state("0.0.0");
 
   let searchQuery = $state("");
   let includeOpening = $state(true);
   let includeSignature = $state(true);
   let editing = $state(false);
-  let editAgentDraft = $state<{ opening: string; body: string }>({ opening: "", body: "" });
-  let editBodyUpdateSeq = $state(0);
-  let editBodyUpdate = $state<{ templateId: string; body: string; seq: number } | null>(null);
-  // Agent → form body sync for the new-template flow. Mirrors editBodyUpdate
-  // but uses templateId=null since no template exists yet. The form's
-  // current body lives in agentStore.baseDraft (synced via onDraftChange).
-  let createBodyUpdateSeq = $state(0);
-  let createBodyUpdate = $state<{ templateId: string | null; body: string; seq: number } | null>(null);
   let settingsOpen = $state(false);
   let cheatSheetOpen = $state(false);
 
   let copyTrigger = $state(0);
 
-  let agentSidebarWidth = $state(DEFAULT_COLUMN_WIDTHS.agent);
   let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   let contextDeleteTarget = $state<Template | null>(null);
-  const AGENT_MIN = 240;
-  const AGENT_MAX = 600;
 
   // Read-only aliases keep template + derivation code readable. Mutations go
   // directly through the stores so reactivity propagates back.
@@ -272,18 +235,10 @@
     return [...pinned, ...others];
   });
 
-  // Paste-match is an AI feature — with AI off, any query length is a plain
-  // literal search and none of the paste-mode UI (ranked list, AI chip,
-  // adapt button) can appear.
-  const inPasteMode = $derived(
-    settings.ai_enabled && searchQuery.trim().length >= PASTE_THRESHOLD,
-  );
-
   // Drag-reorder is only safe when the visible order IS the underlying array
   // order. Any filter, search, or paste-mode ranking breaks that invariant.
   const canReorderTemplates = $derived(
     isEditorMode &&
-      !inPasteMode &&
       searchQuery.trim().length === 0 &&
       selectionStore.selectedTagIds.size === 0 &&
       selectionStore.excludedTagIds.size === 0 &&
@@ -296,8 +251,8 @@
 
   // Props the MainPanel takes identically in all three render modes (create /
   // edit / browse). Spread at each site with `{...sharedMainPanelProps}`;
-  // per-branch props (template, editing, inboundText, the action callbacks,
-  // aiBodyUpdate, onDraftChange) are passed explicitly alongside the spread.
+  // per-branch props (template, editing, creatingDraft, action callbacks) are
+  // passed explicitly alongside the spread.
   const sharedMainPanelProps = $derived({
     globalSignature: settings.global_signature,
     snippets: settings.snippets,
@@ -308,9 +263,6 @@
     savedPlaceholderValues: settings.placeholder_values,
     includeOpening,
     includeSignature,
-    adaptBusy: agentStore.adaptBusy,
-    adaptError: agentStore.adaptError,
-    onClearAdaptError: () => (agentStore.adaptError = null),
     onToggleOpening: (v: boolean) => (includeOpening = v),
     onToggleSignature: (v: boolean) => (includeSignature = v),
     onCopySuccess: (id: string) => void templatesStore.recordCopy(id),
@@ -319,45 +271,31 @@
     onRevertHistory: (id: string, idx: number) => void templatesStore.revertHistory(id, idx),
   });
 
-  // Ordered IDs the user can step through with ↑/↓. Paste mode follows the
-  // ranked list; browse mode follows literal search results (which already
-  // honour tag filters via `tagFiltered`). Stale ranking IDs are filtered out
-  // so a deleted template doesn't leave a dead slot.
-  const visibleTemplateIds = $derived.by(() => {
-    if (inPasteMode) {
-      const rankings = pasteMatchStore.rankings;
-      if (!rankings) return [];
-      const present = new Set(templates.map((t) => t.id));
-      return rankings.map((r) => r.template_id).filter((id) => present.has(id));
-    }
-    return searchResults.map((h) => h.template.id);
-  });
+  // Ordered IDs the user can step through with ↑/↓. Only browse search results.
+  const visibleTemplateIds = $derived(
+    searchResults.map((h) => h.template.id),
+  );
 
   // Snap selection to the first visible row when the current pick drops out
   // of the result set (e.g. user typed and the previous selection no longer
-  // matches). Skips during baseMode/editing where the selection is locked.
+  // matches). Skip during editing where the selection is locked.
   $effect(() => {
-    if (agentStore.baseMode || editing) return;
+    if (editing || creatingDraft) return;
     selectionStore.ensureSelection(visibleTemplateIds);
   });
 
   $effect(() => {
     void (async () => {
       try {
-        const [env, version] = await Promise.all([
-          getEnvWarnings(),
+        const [version] = await Promise.all([
           getAppVersion().catch(() => "0.0.0"),
         ]);
-        envApiKeyOverride = env.api_key_override;
         appVersion = version;
         await templatesStore.load();
         selectionStore.selectInitial(templatesStore.templates);
         const s = templatesStore.settings;
         tagsWidth = s.column_widths.tags;
         templatesWidth = s.column_widths.templates;
-        agentSidebarWidth = s.column_widths.agent;
-        contextWidth = s.column_widths.context ?? DEFAULT_COLUMN_WIDTHS.context;
-        contextOpen = s.context_open;
       } catch (e) {
         // Surface the error and leave templates empty — DON'T fall back to
         // starter templates here. Any subsequent persist would overwrite the
@@ -386,32 +324,12 @@
   function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
     if (editing) {
       editing = false;
-      agentStore.exitEditMode();
     }
     selectionStore.selectTemplate(id, visibleTemplateIds, modifier);
   }
 
   function handleSearchChange(q: string): void {
     searchQuery = q;
-  }
-
-  // Drive the paste-match store off the search query. The debounce, staleness
-  // guard, API call, and error handling all live in pasteMatchStore; this
-  // effect just feeds it the current query (or clears it below the threshold,
-  // preserving the original clear-and-return behavior).
-  $effect(() => {
-    const q = searchQuery;
-    if (!settings.ai_enabled || q.trim().length < PASTE_THRESHOLD) {
-      pasteMatchStore.clear();
-      return;
-    }
-    pasteMatchStore.schedule(q, templates, settings.paste_backend, settings.models.rank);
-  });
-
-  async function retryRank(): Promise<void> {
-    const q = searchQuery;
-    if (q.trim().length < PASTE_THRESHOLD) return;
-    await pasteMatchStore.retry(q, templates, settings.paste_backend, settings.models.rank);
   }
 
   // The Rust handler emits this when the quick-capture hotkey is pressed.
@@ -426,7 +344,7 @@
       } catch {
         text = "";
       }
-      agentStore.handleNew(text);
+      handleNew(text);
     });
     return () => {
       void unlisten.then((u) => u());
@@ -436,53 +354,58 @@
   async function handleSave(updated: Template): Promise<void> {
     await templatesStore.handleSave(updated);
     editing = false;
-    agentStore.exitEditMode();
   }
 
   function enterEditMode(): void {
     if (!selectedTemplate) return;
     editing = true;
-    editAgentDraft = { opening: selectedTemplate.opening, body: selectedTemplate.body };
-    editBodyUpdate = null;
-    agentStore.enterEditMode(selectedTemplate);
   }
 
   function cancelEditMode(): void {
     editing = false;
-    editBodyUpdate = null;
-    agentStore.exitEditMode();
   }
 
-  async function handleEditAgentPrompt(prompt: string): Promise<void> {
-    const target = selectedTemplate;
-    if (!target) return;
-    const draft = editAgentDraft;
-    await agentStore.handleEditAgentPrompt(draft, prompt, (updated) => {
-      editAgentDraft = { ...draft, body: updated.body };
-      editBodyUpdateSeq += 1;
-      editBodyUpdate = { templateId: target.id, body: updated.body, seq: editBodyUpdateSeq };
-    });
+  async function handleNew(prefilledBody: string = ""): Promise<void> {
+    if (!isEditorMode) return;
+    creatingDraft = {
+      name: "",
+      tags: [],
+      opening: "Hello,",
+      body: prefilledBody,
+      folder: null,
+    };
   }
 
-  function handleEditDraftChange(draft: { opening: string; body: string }): void {
-    editAgentDraft = draft;
+  async function handleCreateDraft(draft: TemplateDraft): Promise<void> {
+    if (!isEditorMode) return;
+    templatesStore.pushUndo("create");
+    const now = new Date().toISOString();
+    const folder = draft.folder !== null && draft.folder.trim().length > 0
+      ? draft.folder.trim()
+      : null;
+    const newTemplate: Template = {
+      id: crypto.randomUUID(),
+      name: draft.name.trim() || "Untitled",
+      tags: draft.tags,
+      opening: draft.opening,
+      body: draft.body,
+      created_at: now,
+      updated_at: now,
+      pinned: false,
+      last_used_at: null,
+      copy_count: 0,
+      folder,
+      history: [],
+    };
+    const next = [newTemplate, ...templatesStore.templates];
+    await templatesStore.persist(next);
+    selectionStore.selectedTemplateId = newTemplate.id;
+    creatingDraft = null;
   }
 
-  // Parallels handleEditAgentPrompt for the new-template flow. The shared
-  // draft is agentStore.baseDraft (kept current by handleCreateDraftChange
-  // below), so the agent sees the user's latest in-form edits as context.
-  async function handleCreateAgentPrompt(prompt: string): Promise<void> {
-    await agentStore.handleEditAgentPrompt(agentStore.baseDraft, prompt, (updated) => {
-      createBodyUpdateSeq += 1;
-      createBodyUpdate = { templateId: null, body: updated.body, seq: createBodyUpdateSeq };
-    });
+  function cancelCreateDraft(): void {
+    creatingDraft = null;
   }
-
-  function handleCreateDraftChange(draft: { opening: string; body: string }): void {
-    agentStore.baseDraft = draft;
-  }
-
-  function ignoreDraftChange(): void {}
 
   async function duplicateSelectedTemplate(): Promise<void> {
     if (!selectedTemplate) return;
@@ -644,60 +567,10 @@
     contextDeleteTarget = null;
   }
 
-  // Subscribe to streaming partials from the sidecar. The event fires for
-  // any agent edit in flight; since the UI only allows one at a time
-  // (agentBusy gate) we don't need to correlate by id.
-  $effect(() => {
-    const unlistenPromise = onSidecarProgress((text) => {
-      if (agentStore.agentBusy) agentStore.agentProgress = text;
-    });
-    return () => {
-      void unlistenPromise.then((u) => u());
-    };
-  });
-
   $effect(() => {
     if (typeof document !== "undefined") {
       document.documentElement.dataset.theme = settings.theme;
     }
-  });
-
-  // Keep the sidecar's source list in sync with persisted settings. The effect
-  // re-fires on any settings reassignment, so we dedupe against the last
-  // forwarded value — otherwise unrelated changes (context_open toggle, theme,
-  // column widths) would trigger a redundant chokidar restart on the sidecar.
-  //
-  // Lazy-sidecar interplay: when both the prior and current source lists are
-  // empty we skip the call entirely, so a browse-and-copy session never wakes
-  // the Node process. Once the user adds or removes a source we sync as
-  // before (including pushing `[]` to clear).
-  let lastForwardedSourcesJson = "";
-  let lastForwardedBackend: typeof settings.paste_backend | null = null;
-  let lastForwardedModel: typeof settings.models.context | null = null;
-  $effect(() => {
-    if (!loaded || !settings.ai_enabled) return;
-    const sources = settings.context_sources;
-    const backend = settings.paste_backend;
-    const model = settings.models.context;
-    const sourcesJson = JSON.stringify(sources);
-    if (
-      sourcesJson === lastForwardedSourcesJson &&
-      backend === lastForwardedBackend &&
-      model === lastForwardedModel
-    )
-      return;
-    const skip =
-      lastForwardedSourcesJson === "" &&
-      lastForwardedBackend === null &&
-      lastForwardedModel === null &&
-      sources.length === 0;
-    lastForwardedSourcesJson = sourcesJson;
-    lastForwardedBackend = backend;
-    lastForwardedModel = model;
-    if (skip) return;
-    void setContextSources(sources, backend, model).catch(() => {
-      /* sidecar may be down; pane will surface the error */
-    });
   });
 
   $effect(() => {
@@ -717,38 +590,6 @@
     };
   });
 
-  // The new sidecar process has empty in-memory state — re-push the source
-  // list so the Context pane and adapt/edit calls stay consistent.
-  $effect(() => {
-    const unlisten = listen("sidecar-respawned", () => {
-      lastForwardedSourcesJson = "";
-      lastForwardedBackend = null;
-      lastForwardedModel = null;
-      if (!templatesStore.settings.ai_enabled) return;
-      void setContextSources(settings.context_sources, settings.paste_backend, settings.models.context).catch(() => {});
-    });
-    return () => {
-      void unlisten.then((u) => u());
-    };
-  });
-
-  // An adapt error refers to a specific inbound message. Once that message is
-  // gone (search cleared or shortened below the threshold) the Retry button
-  // would silently no-op — drop the stale error instead.
-  $effect(() => {
-    if (!inPasteMode && agentStore.adaptError !== null) agentStore.adaptError = null;
-  });
-
-  // Drop the agent → form body signal when the new-template flow exits.
-  // Unlike edit mode (which dedupes by templateId), create mode uses
-  // templateId=null, so a stale signal would re-apply on next mount.
-  $effect(() => {
-    if (!agentStore.baseMode && createBodyUpdate !== null) {
-      createBodyUpdate = null;
-      createBodyUpdateSeq = 0;
-    }
-  });
-
   // Global keyboard shortcuts. The handler body lives in $lib/keyboard.ts;
   // these getters/actions are everything it closes over (live reads via
   // getters so each keystroke sees current state).
@@ -760,23 +601,20 @@
     isBulkRemoveTagPromptOpen: () => bulkRemoveTagPromptOpen,
     isCheatSheetOpen: () => cheatSheetOpen,
     setCheatSheetOpen: (v) => (cheatSheetOpen = v),
-    isCaptureOpen: () => captureOpen,
-    setCaptureOpen: (v) => (captureOpen = v),
-    isAiEnabled: () => settings.ai_enabled,
     getZoom: () => templatesStore.settings.zoom ?? 1,
     setZoom,
     zoomStep: ZOOM_STEP,
     getSearchInput: () => searchInput,
     getSearchQuery: () => searchQuery,
     clearSearch,
-    isBaseMode: () => agentStore.baseMode,
-    isEditing: () => editing,
+    isEditing: () => editing || creatingDraft !== null,
     isEditorMode: () => isEditorMode,
     isInputFocused,
     moveSelection,
     copySelected,
     performUndo: () => void templatesStore.performUndo(),
   });
+
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
@@ -784,21 +622,11 @@
 <div class="frame">
   <TitleBar
     onOpenSettings={() => (settingsOpen = true)}
-    onToggleContext={() => {
-      contextOpen = !contextOpen;
-      void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_open: contextOpen });
-    }}
-    {contextOpen}
-    onToggleCapture={() => (captureOpen = !captureOpen)}
-    {captureOpen}
-    aiEnabled={settings.ai_enabled}
-    showSearch={!agentStore.baseMode && !editing}
+    showSearch={!editing && creatingDraft === null}
     {searchQuery}
     onSearchChange={handleSearchChange}
     onClearSearch={clearSearch}
     onSearchInputMount={(el) => (searchInput = el ?? undefined)}
-    aiActive={inPasteMode}
-    aiBusy={inPasteMode && pasteMatchStore.rankLoading}
   />
   <div class="shell">
     {#if !loaded}
@@ -817,98 +645,29 @@
         <div class="skel-line"></div>
         <div class="skel-block"></div>
       </section>
-    {:else if agentStore.baseMode}
-      {#if settings.ai_enabled}
-        <AgentSidebar
-          kind={agentStore.baseKind}
-          messages={agentStore.agentMessages}
-          busy={agentStore.agentBusy}
-          error={agentStore.agentError}
-          progress={agentStore.agentProgress}
-          sourceName={agentStore.baseSourceName}
-          width={agentSidebarWidth}
-          onSubmit={(p) =>
-            agentStore.baseKind === "new"
-              ? void handleCreateAgentPrompt(p)
-              : agentStore.handleAgentPrompt(p)}
-        />
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="col-resize"
-          title="Drag to resize"
-          onpointerdown={startResize("agent")}
-        ></div>
-      {/if}
-      {#if agentStore.saveDraft !== null}
-        <MainPanel
-          {...sharedMainPanelProps}
-          template={null}
-          creatingDraft={agentStore.saveDraft}
-          editing={false}
-          inboundText={null}
-          onEnterEdit={() => {}}
-          onCancelEdit={() =>
-            agentStore.baseKind === "new"
-              ? agentStore.exitBaseMode()
-              : agentStore.closeSaveAs()}
-          onSave={() => {}}
-          onCreate={(d) => void agentStore.commitNewTemplate(d)}
-          onDuplicate={() => {}}
-          onDelete={() => {}}
-          onBaseOnTemplate={() => {}}
-          onAdaptToInbound={() => {}}
-          aiBodyUpdate={agentStore.baseKind === "new" ? createBodyUpdate : null}
-          onDraftChange={agentStore.baseKind === "new" ? handleCreateDraftChange : ignoreDraftChange}
-        />
-      {:else}
-        <EditorPane
-          kind={agentStore.baseKind}
-          opening={agentStore.baseDraft.opening}
-          body={agentStore.baseDraft.body}
-          globalSignature={settings.global_signature}
-          {includeOpening}
-          {includeSignature}
-          canSave={isEditorMode}
-          onUpdate={(next) => (agentStore.baseDraft = next)}
-          onToggleOpening={(v) => (includeOpening = v)}
-          onToggleSignature={(v) => (includeSignature = v)}
-          onSave={() => agentStore.openSaveAs()}
-          onCancel={() => agentStore.exitBaseMode()}
-        />
-      {/if}
+    {:else if creatingDraft !== null}
+      <MainPanel
+        {...sharedMainPanelProps}
+        template={null}
+        {creatingDraft}
+        editing={false}
+        onEnterEdit={() => {}}
+        onCancelEdit={cancelCreateDraft}
+        onSave={() => {}}
+        onCreate={handleCreateDraft}
+        onDuplicate={() => {}}
+        onDelete={() => {}}
+      />
     {:else if editing}
-      {#if settings.ai_enabled}
-        <AgentSidebar
-          kind="edit"
-          messages={agentStore.agentMessages}
-          busy={agentStore.agentBusy}
-          error={agentStore.agentError}
-          progress={agentStore.agentProgress}
-          sourceName={selectedTemplate?.name ?? agentStore.baseSourceName}
-          width={agentSidebarWidth}
-          onSubmit={(p) => void handleEditAgentPrompt(p)}
-        />
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="col-resize"
-          title="Drag to resize"
-          onpointerdown={startResize("agent")}
-        ></div>
-      {/if}
       <MainPanel
         {...sharedMainPanelProps}
         template={selectedTemplate}
         editing={true}
-        inboundText={null}
         onEnterEdit={() => {}}
         onCancelEdit={cancelEditMode}
         onSave={handleSave}
         onDuplicate={() => void duplicateSelectedTemplate()}
         onDelete={() => void deleteSelectedTemplate()}
-        onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
-        onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
-        aiBodyUpdate={editBodyUpdate}
-        onDraftChange={handleEditDraftChange}
       />
     {:else}
       <TagsSidebar
@@ -936,17 +695,12 @@
         {templates}
         selectedTemplateId={selectionStore.selectedTemplateId}
         bulkSelectedIds={selectionStore.bulkSelectedIds}
-        {inPasteMode}
-        rankings={pasteMatchStore.rankings}
-        rankLoading={pasteMatchStore.rankLoading}
-        rankError={pasteMatchStore.rankError}
         width={templatesWidth}
         canCreate={isEditorMode}
         canReorder={canReorderTemplates}
         sortMode={settings.sort_mode}
         onTemplateSelect={handleTemplateSelect}
-        onNew={() => agentStore.handleNew()}
-        onRetryRank={retryRank}
+        onNew={() => void handleNew()}
         onClearFilters={() => {
           selectionStore.clearTags();
           clearSearch();
@@ -970,35 +724,12 @@
       <MainPanel
         {...sharedMainPanelProps}
         template={selectedTemplate}
-        {editing}
-        inboundText={inPasteMode ? searchQuery : null}
+        editing={false}
         onEnterEdit={enterEditMode}
         onCancelEdit={cancelEditMode}
         onSave={handleSave}
         onDuplicate={() => void duplicateSelectedTemplate()}
         onDelete={() => void deleteSelectedTemplate()}
-        onBaseOnTemplate={() => agentStore.enterBaseMode(selectedTemplate)}
-        onAdaptToInbound={() => void agentStore.adaptToInbound(selectedTemplate, searchQuery, PASTE_THRESHOLD)}
-        aiBodyUpdate={null}
-        onDraftChange={ignoreDraftChange}
-      />
-    {/if}
-    {#if contextOpen && loaded && settings.ai_enabled}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="col-resize"
-        title="Drag to resize"
-        onpointerdown={startResize("context")}
-      ></div>
-      <ContextPane
-        width={contextWidth}
-        sources={settings.context_sources}
-        backend={settings.paste_backend}
-        model={settings.models.context}
-        onClose={() => (contextOpen = false)}
-        onSourcesChange={async (next) => {
-          await templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_sources: next });
-        }}
       />
     {/if}
     {#if templatesStore.loadError}
@@ -1018,7 +749,6 @@
 {#if settingsOpen}
   <SettingsModal
     {settings}
-    {envApiKeyOverride}
     currentVersion={appVersion}
     tagCounts={settingsTagCounts}
     onClose={() => (settingsOpen = false)}
@@ -1040,28 +770,12 @@
 {#if cheatSheetOpen}
   <CheatSheet
     globalHotkey={settings.global_hotkey}
-    aiEnabled={settings.ai_enabled}
     onClose={() => (cheatSheetOpen = false)}
-  />
-{/if}
-
-{#if captureOpen && loaded && settings.ai_enabled}
-  <MemoryCapturePopover
-    sources={settings.context_sources}
-    backend={settings.paste_backend}
-    model={settings.models.memory}
-    onClose={() => (captureOpen = false)}
-    onAddSource={() => {
-      captureOpen = false;
-      contextOpen = true;
-      void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, context_open: true });
-    }}
   />
 {/if}
 
 {#if loaded && !settings.onboarding_complete}
   <OnboardingTour
-    aiEnabled={settings.ai_enabled}
     onDismiss={() => {
       void templatesStore.persist(templatesStore.templates, {
         ...templatesStore.settings,
@@ -1179,7 +893,6 @@
     --accent-info-bg: #1a2a3a;
     --accent-info-border: #2a4a6a;
     --accent-info-text: #a8c8e8;
-    --rank-error-bg: #2a1a1a;
   }
 
   :global([data-theme="light"]) {
@@ -1218,7 +931,6 @@
     --accent-info-bg: #dde8f4;
     --accent-info-border: #a0b8d0;
     --accent-info-text: #2a4a6a;
-    --rank-error-bg: #fbe2e2;
   }
 
   :global(html) {
@@ -1277,10 +989,6 @@
     background: transparent;
   }
 
-  /* One keyboard-focus ring for every control that doesn't define its own
-     focus treatment (text inputs override this with a border + soft glow).
-     Pointer interaction doesn't trigger :focus-visible, so mouse flows are
-     unaffected. */
   :global(:focus-visible) {
     outline: 2px solid var(--accent-brand);
     outline-offset: 1px;

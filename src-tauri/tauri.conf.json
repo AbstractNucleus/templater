@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build:bundle",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../build"
   },
   "plugins": {
@@ -51,14 +51,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": [
-      "../sidecar/prod-bundle/dist",
-      "../sidecar/prod-bundle/node_modules",
-      "../sidecar/prod-bundle/package.json"
-    ],
-    "externalBin": [
-      "binaries/node"
     ]
   }
 }

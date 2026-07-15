@@ -17,18 +17,12 @@
     canEdit,
     copyTrigger,
     savedPlaceholderValues,
-    inboundText,
-    adaptBusy,
-    adaptError,
     onToggleOpening,
     onToggleSignature,
     onEnterEdit,
     onSave,
     onDuplicate,
     onDelete,
-    onBaseOnTemplate,
-    onAdaptToInbound,
-    onClearAdaptError,
     onCopySuccess,
     onPlaceholderValuesChange,
     onRevertHistory,
@@ -42,21 +36,12 @@
     copyTrigger: number;
     /** Persisted per-template fill-ins. Outer key: template id. */
     savedPlaceholderValues: Record<string, Record<string, string>>;
-    /** The pasted inbound message in paste-match mode. null/empty disables Adapt. */
-    inboundText: string | null;
-    /** True while an adapt-to-inbound request is in flight. */
-    adaptBusy: boolean;
-    /** Last adapt-to-inbound error message. Null when no error or after retry. */
-    adaptError: string | null;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
     onEnterEdit: () => void;
     onSave: (t: Template) => void;
     onDuplicate: () => void;
     onDelete: () => void;
-    onBaseOnTemplate: () => void;
-    onAdaptToInbound: () => void;
-    onClearAdaptError: () => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
     onRevertHistory: (templateId: string, versionIdx: number) => void;
@@ -163,7 +148,6 @@
   // parse and one `now`, so the clipboard output can't drift from what's shown.
   const composedFilled = $derived(previewSegments.map((s) => s.text).join(""));
   const placeholders = $derived(template ? extractPlaceholders(composed, snippets) : []);
-  const canAdapt = $derived(inboundText != null && inboundText.trim().length > 0);
 
   function compactDate(iso: string): string {
     const d = new Date(iso);
@@ -329,14 +313,6 @@
   <HistoryPanel {template} open={historyOpen} {onRevertHistory} />
 {/if}
 
-{#if adaptError}
-  <div class="adapt-error">
-    <span class="adapt-error-text">{adaptError}</span>
-    <button class="adapt-retry" onclick={onAdaptToInbound} disabled={adaptBusy}>Retry</button>
-    <button class="adapt-dismiss" aria-label="Dismiss" onclick={onClearAdaptError}>×</button>
-  </div>
-{/if}
-
 <div class="footer">
   {#if canEdit && template.history.length > 0}
     <button
@@ -348,19 +324,6 @@
     </button>
   {/if}
   <div class="footer-spacer"></div>
-  {#if canAdapt}
-    <button
-      class="base-btn"
-      onclick={onAdaptToInbound}
-      disabled={adaptBusy}
-      title="Adapt this draft to fit the pasted inbound message (uses Sonnet)"
-    >
-      {adaptBusy ? "Adapting…" : "Adapt to inbound"}
-    </button>
-  {/if}
-  <button class="base-btn" onclick={onBaseOnTemplate} title="Start a new draft based on this template">
-    Base on template
-  </button>
   <CopyButton
     {copyState}
     showKbd
@@ -582,82 +545,4 @@
   .footer-spacer {
     flex: 1;
   }
-
-  .adapt-error {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--accent-danger-bg);
-    border: 1px solid var(--accent-danger-border);
-    color: var(--accent-danger-text);
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 0.78rem;
-    margin-bottom: 8px;
-    animation: banner-in 140ms ease-out;
-  }
-
-  @keyframes banner-in {
-    from {
-      opacity: 0;
-      transform: translateY(3px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .adapt-error-text {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .adapt-retry,
-  .adapt-dismiss {
-    background: transparent;
-    border: 1px solid var(--accent-danger-border);
-    color: var(--accent-danger-text);
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.78rem;
-    padding: 2px 10px;
-    border-radius: 4px;
-    flex-shrink: 0;
-  }
-
-  .adapt-retry:hover:not(:disabled),
-  .adapt-dismiss:hover {
-    background: var(--accent-danger-border);
-    color: var(--bg-base);
-  }
-
-  .adapt-retry:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .adapt-dismiss {
-    padding: 2px 8px;
-    font-size: 1rem;
-    line-height: 1;
-  }
-
-  .base-btn {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 6px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-
-  .base-btn:hover {
-    background: var(--accent-info-bg);
-    border-color: var(--accent-info-border);
-    color: var(--accent-info-text);
-  }
-
 </style>

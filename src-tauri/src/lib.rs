@@ -1,26 +1,18 @@
 mod commands;
 mod hotkey;
-mod sidecar;
 mod store;
 mod tray;
 mod windows_snap;
 
-use sidecar::Sidecar;
 use store::{Store, WindowGeometry};
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
+use tauri::{Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 
 use commands::data::{
     bulk_add_template_tag, bulk_delete_templates, bulk_remove_template_tag, export_template,
-    export_templates, export_templates_subset, get_env_warnings, import_templates, list_template_backups,
-    load_app_data, open_claude_login, open_data_dir, open_path, restore_template_backup,
-    save_app_data,
+    export_templates, export_templates_subset, import_templates, list_template_backups,
+    load_app_data, open_data_dir, open_path, restore_template_backup, save_app_data,
 };
-use commands::sidecar::{
-    adapt_template, context_capture_memory, context_list_files, context_read_file, context_rescan,
-    context_search, context_set_sources, context_status, edit_template, get_sidecar_diagnostics,
-    ping_sidecar, rank_templates,
-};
-use hotkey::{set_hotkey, set_quick_capture_hotkey};
+use hotkey::set_hotkey;
 
 #[tauri::command]
 fn reset_window_position(
@@ -116,26 +108,10 @@ pub fn run() {
     {
         use tauri_plugin_global_shortcut::ShortcutState;
 
-        // We register up to two shortcuts: the window toggle and an optional
-        // quick-capture. Compare the fired shortcut against the live state
-        // values to decide which flow to run.
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, shortcut, event| {
+                .with_handler(move |app, _shortcut, event| {
                     if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
-                    let capture_match = app
-                        .try_state::<hotkey::CaptureHotkey>()
-                        .and_then(|c| c.0.lock().ok().and_then(|g| *g))
-                        .map(|s| s == *shortcut)
-                        .unwrap_or(false);
-                    if capture_match {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                        let _ = app.emit("quick-capture", ());
                         return;
                     }
                     toggle_main_window(app);
@@ -153,10 +129,6 @@ pub fn run() {
             std::fs::create_dir_all(&dir).map_err(|e| -> Box<dyn std::error::Error> {
                 format!("mkdir {}: {e}", dir.display()).into()
             })?;
-
-            // Sidecar needs the data dir so it can place context.db next to
-            // templates.json / settings.json.
-            app.manage(Sidecar::start(&app.handle(), dir.clone()));
 
             let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
 
@@ -186,38 +158,6 @@ pub fn run() {
             }
             app.manage(store);
 
-            // Push the persisted source list to the sidecar so the watcher
-            // and SQLite index come up before the user touches anything.
-            // Skipped when no sources are configured — keeps the sidecar
-            // lazy so a browse-and-copy session never spawns the Node
-            // process. Non-blocking when it does run: ingest summaries
-            // happen in the background.
-            if let Some(settings) = &loaded_settings {
-                if !settings.context_sources.is_empty() {
-                    let sources = settings.context_sources.clone();
-                    let backend = if settings.paste_backend.is_empty() {
-                        "agent".to_string()
-                    } else {
-                        settings.paste_backend.clone()
-                    };
-                    let handle = app.handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        let sidecar = handle.state::<Sidecar>();
-                        if let Err(e) = sidecar
-                            .request(&serde_json::json!({
-                                "id": "context-init",
-                                "op": "context-set-sources",
-                                "sources": sources,
-                                "backend": backend,
-                            }))
-                            .await
-                        {
-                            eprintln!("initial context source sync failed: {e}");
-                        }
-                    });
-                }
-            }
-
             #[cfg(desktop)]
             hotkey::register_startup(app, loaded_settings.as_ref());
 
@@ -235,12 +175,6 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            ping_sidecar,
-            rank_templates,
-            edit_template,
-            adapt_template,
-            get_sidecar_diagnostics,
-            open_claude_login,
             load_app_data,
             save_app_data,
             export_templates,
@@ -252,19 +186,10 @@ pub fn run() {
             import_templates,
             list_template_backups,
             restore_template_backup,
-            get_env_warnings,
             set_hotkey,
-            set_quick_capture_hotkey,
             open_data_dir,
             open_path,
             reset_window_position,
-            context_set_sources,
-            context_status,
-            context_list_files,
-            context_rescan,
-            context_read_file,
-            context_search,
-            context_capture_memory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

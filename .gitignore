@@ -12,10 +12,6 @@ vite.config.ts.timestamp-*
 # Rust — keep Cargo.lock since this is an application, not a library
 /src-tauri/target/
 
-# Sidecar build output
-/sidecar/dist/
-/sidecar/prod-bundle/
-
 # Bundled Node binary (downloaded by scripts/fetch-node-binary.ts)
 /src-tauri/binaries/
 

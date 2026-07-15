@@ -8,12 +8,8 @@
 // `?fresh=1` simulates a first run: load_app_data returns null, so the app
 // seeds starter templates and shows the onboarding tour.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { emit } from "@tauri-apps/api/event";
 import { mockTemplates } from "./mocks";
 import { DEFAULT_SETTINGS, type AppData, type Template } from "./types";
-
-const DELAY_RANK_MS = 900;
-const DELAY_EDIT_MS = 1400;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -62,144 +58,12 @@ function seedData(): AppData {
     templates,
     settings: {
       ...DEFAULT_SETTINGS,
-      ai_enabled: true,
       onboarding_complete: true,
       close_hint_shown: true,
       global_signature: "Best regards,\nNoel",
       snippets: { me_name: "Noel" },
-      context_sources: ["C:\\dev-mock\\notes"],
     },
   };
-}
-
-interface ContextFileSeed {
-  name: string;
-  ext: string;
-  summary: string;
-  tags: string[];
-  status: "ingested" | "failed" | "pending";
-  error: string | null;
-}
-
-const CONTEXT_FILES: ContextFileSeed[] = [
-  {
-    name: "tone-guide.md",
-    ext: "md",
-    summary: "House style for support replies — tone, sign-offs, escalation wording.",
-    tags: ["style", "support"],
-    status: "ingested",
-    error: null,
-  },
-  {
-    name: "promotions-2026.xlsx",
-    ext: "xlsx",
-    summary: "Current promotion calendar with bonus terms per product.",
-    tags: ["promotions", "bonuses"],
-    status: "ingested",
-    error: null,
-  },
-  {
-    name: "kyc-policy.pdf",
-    ext: "pdf",
-    summary: "KYC escalation policy: when to route players to the VIP desk.",
-    tags: ["kyc", "policy"],
-    status: "ingested",
-    error: null,
-  },
-  {
-    name: "legacy-notes.pdf",
-    ext: "pdf",
-    summary: "",
-    tags: [],
-    status: "failed",
-    error: "text extraction failed: encrypted PDF",
-  },
-  // The capture-memory flow polls for this exact file, so it must exist for
-  // the "Indexing… → Indexed" badge to resolve.
-  {
-    name: "memories.md",
-    ext: "md",
-    summary: "Captured memories: durable signals distilled from Slack threads and emails.",
-    tags: ["memories"],
-    status: "ingested",
-    error: null,
-  },
-];
-
-function contextFiles(root: string) {
-  return CONTEXT_FILES.map((f, i) => ({
-    path: `${root}\\${f.name}`,
-    source_root: root,
-    ext: f.ext,
-    mtime_ms: Date.now() - i * 3_600_000,
-    size_bytes: 12_000 + i * 4_500,
-    summary: f.summary,
-    tags: f.tags,
-    status: f.status,
-    error: f.error,
-    ingested_at: f.status === "ingested" ? Date.now() - i * 3_600_000 : null,
-  }));
-}
-
-function contextStatus(sources: string[]) {
-  return {
-    sources: sources.map((path) => ({
-      path,
-      file_count: CONTEXT_FILES.length,
-      ingested_count: CONTEXT_FILES.filter((f) => f.status === "ingested").length,
-      failed_count: CONTEXT_FILES.filter((f) => f.status === "failed").length,
-      pending_count: CONTEXT_FILES.filter((f) => f.status === "pending").length,
-      last_ingested_at: Date.now() - 1_800_000,
-      exists: true,
-    })),
-    in_flight: 0,
-  };
-}
-
-// Naive lexical overlap so paste-match returns plausible, stable rankings.
-function rankCatalog(pasted: string, catalog: { id: string; name: string; body: string }[]) {
-  const words = new Set(
-    pasted
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 3),
-  );
-  return catalog
-    .map((t) => {
-      const hay = `${t.name} ${t.body}`.toLowerCase();
-      let hits = 0;
-      for (const w of words) if (hay.includes(w)) hits++;
-      return { template_id: t.id, score: hits / Math.max(words.size, 1) };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8)
-    .map((r, i) => ({ ...r, score: Math.max(0.15, Math.min(0.97, r.score + 0.4 - i * 0.06)) }));
-}
-
-function fakeEdit(draft: { opening: string; body: string }, prompt: string) {
-  const p = prompt.toLowerCase();
-  let body = draft.body;
-  if (p.includes("short")) {
-    const lines = body.split("\n").filter((l) => l.trim().length > 0);
-    body = lines.slice(0, Math.max(2, Math.ceil(lines.length / 2))).join("\n");
-  } else if (p.includes("formal")) {
-    body = body.replace(/\bThanks\b/g, "Thank you").replace(/\bfeel free to\b/gi, "please do not hesitate to");
-  } else {
-    body = `${body}\n\n(Dev mock applied: "${prompt}")`;
-  }
-  return {
-    reasoning: `Dev mock: applied "${prompt}" to the draft. In the packaged app this comes from Claude.`,
-    updated: { opening: draft.opening, body },
-  };
-}
-
-async function streamEditProgress(result: { reasoning: string; updated: { opening: string; body: string } }) {
-  const full = JSON.stringify(result);
-  for (const fraction of [0.2, 0.45, 0.7, 0.9]) {
-    await sleep(DELAY_EDIT_MS / 5);
-    void emit("sidecar-progress", { id: "dev", progress: { text: full.slice(0, Math.floor(full.length * fraction)) } });
-  }
-  await sleep(DELAY_EDIT_MS / 5);
 }
 
 export function installDevMocks(): void {
@@ -217,8 +81,6 @@ export function installDevMocks(): void {
         case "save_app_data":
           data = args.data as AppData;
           return null;
-        case "get_env_warnings":
-          return { api_key_override: false };
         case "list_template_backups":
           return [1, 2, 3].map((n) => ({
             name: `templates.json.bak.${Math.floor(Date.now() / 1000) - n * 86_400}`,
@@ -262,88 +124,10 @@ export function installDevMocks(): void {
           return data?.templates ?? [];
         }
 
-        // ---- AI ops ----------------------------------------------------
-        case "rank_templates":
-          await sleep(DELAY_RANK_MS);
-          return { ok: true, rankings: rankCatalog(args.pasted as string, args.catalog as never) };
-        case "edit_template": {
-          const result = fakeEdit(args.draft as never, args.prompt as string);
-          await streamEditProgress(result);
-          return { ok: true, ...result };
-        }
-        case "adapt_template": {
-          const result = fakeEdit(args.draft as never, `adapt to: ${String(args.inbound).slice(0, 60)}…`);
-          await streamEditProgress(result);
-          return {
-            ok: true,
-            ...result,
-            context_used: [
-              {
-                path: "C:\\dev-mock\\notes\\tone-guide.md",
-                summary: CONTEXT_FILES[0].summary,
-                reason: "Matches the requested tone adjustments.",
-              },
-            ],
-          };
-        }
-
-        // ---- context corpus -------------------------------------------
-        case "context_set_sources":
-        case "context_rescan":
-        case "context_status":
-          return { ok: true, status: contextStatus(data?.settings.context_sources ?? []) };
-        case "context_list_files":
-          return {
-            ok: true,
-            files: (data?.settings.context_sources ?? []).flatMap((s) => contextFiles(s)),
-          };
-        case "context_read_file":
-          return {
-            ok: true,
-            path: args.path,
-            text: `# ${String(args.path).split("\\").pop()}\n\nDev-mock file contents. In the packaged app this shows the extracted text of the real file.`,
-            truncated: false,
-          };
-        case "context_search": {
-          const q = String(args.query ?? "").toLowerCase();
-          const files = (data?.settings.context_sources ?? []).flatMap((s) => contextFiles(s));
-          return {
-            ok: true,
-            files: files
-              .filter((f) => f.status === "ingested")
-              .filter((f) => q.length === 0 || `${f.summary} ${f.tags.join(" ")} ${f.path}`.toLowerCase().includes(q))
-              .map((f) => ({ ...f, score: 0.8 })),
-          };
-        }
-        case "context_capture_memory":
-          await sleep(800);
-          return {
-            ok: true,
-            appendedTo: `${String(args.source)}\\memories.md`,
-            signal: "Player-facing bonus terms changed on 1 March; older templates that cite the 150% welcome bonus need review.",
-            title: "Bonus terms changed 1 March",
-          };
-        case "get_sidecar_diagnostics":
-          return {
-            state: "active",
-            state_reason: null,
-            entries: [
-              { op: "rank", started_at_ms: Date.now() - 60_000, duration_ms: 1180, ok: true, error: null },
-              { op: "edit-template", started_at_ms: Date.now() - 32_000, duration_ms: 4900, ok: true, error: null },
-              { op: "rank", started_at_ms: Date.now() - 8_000, duration_ms: 1320, ok: false, error: "sidecar request timed out" },
-            ],
-            stats: [
-              { op: "rank", count: 14, p50: 1150, p95: 2400, fail: 1 },
-              { op: "edit-template", count: 3, p50: 4200, p95: 6100, fail: 0 },
-            ],
-          };
-
         // ---- window/shell commands (no-ops in a browser) ---------------
         case "set_hotkey":
-        case "set_quick_capture_hotkey":
         case "open_data_dir":
         case "open_path":
-        case "open_claude_login":
         case "reset_window_position":
         case "export_template":
           return null;
