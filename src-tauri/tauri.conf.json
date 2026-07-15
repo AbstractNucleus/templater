@@ -12,7 +12,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/AbstractNucleus/templater-releases/releases/latest/download/latest.json"
+        "https://github.com/AbstractNucleus/templater/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCRTVGQjA0MEY0N0M3OTEKUldTUngwY1BCUHZsdTlYN3hPMFJYc1R1YmR4NERtSU0wT2dpSVFWc1ovZzk1YnVIbkxhUElKU1IK"
     }
