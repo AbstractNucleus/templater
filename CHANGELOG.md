@@ -4,6 +4,13 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-07-16
+
+### Fixed
+
+- **README cleanup.** Trimmed install instructions to a simple download link
+  since releases are now public. Trimmed developer notes to essentials.
+
 ## [0.9.0] — 2026-07-15
 
 ### Added
