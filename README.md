@@ -41,16 +41,15 @@ Svelte frontend (`src/`) talks to the Rust backend (`src-tauri/`) via Tauri `inv
 
 ### Keyboard shortcuts
 
-| Key | Action |
-|---|---|
-| Enter | Copy selected template |
-| ↑ / ↓ | Move selection |
-| Ctrl+F / Ctrl+L | Focus / clear search |
-| Ctrl+Z | Undo last mutation |
+
+| Key                      | Action                     |
+| ------------------------ | -------------------------- |
+| Enter                    | Copy selected template     |
+| ↑ / ↓                    | Move selection             |
+| Ctrl+F / Ctrl+L          | Focus / clear search       |
+| Ctrl+Z                   | Undo last mutation         |
 | Ctrl+0 / Ctrl+= / Ctrl+- | Reset / zoom in / zoom out |
-| ? | Cheat sheet |
-| Ctrl+Shift+\ (global) | Show/hide window |
+| ?                        | Cheat sheet                |
+| Ctrl+Shift+\ (global)    | Show/hide window           |
 
-## License
 
-MIT
