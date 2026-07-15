@@ -1,15 +1,12 @@
 name: Release
 
 # Builds platform installers + updater artifacts on tag push, then publishes
-# them to the public releases repo (AbstractNucleus/templater-releases)
-# under a tag matching the source-repo tag.
+# them to this repo (AbstractNucleus/templater) under a tag matching the source-repo tag.
 #
 # Required secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           — minisign private key (base64-encoded
 #                                         contents of the .key file)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — password for that key
-#   RELEASES_REPO_TOKEN                 — fine-grained PAT with Contents:write
-#                                         on AbstractNucleus/templater-releases
 #
 # Tags must match the version in src-tauri/tauri.conf.json (e.g. tag v0.1.2
 # requires version "0.1.2"). The publish job refuses to run on a mismatch.
@@ -75,6 +72,8 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -100,13 +99,13 @@ jobs:
       - name: Generate latest.json
         run: node scripts/make-release-manifest.mjs --input-dir artifacts
 
-      - name: Publish to releases repo
+      - name: Publish to this repo
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           TAG="v${VERSION}"
-          REPO="AbstractNucleus/templater-releases"
+          REPO="${{ github.repository }}"
           FILES=()
           for f in artifacts/nsis/*.exe artifacts/nsis/*.exe.sig \
                    artifacts/macos/*.app.tar.gz artifacts/macos/*.app.tar.gz.sig \
