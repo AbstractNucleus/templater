@@ -8,7 +8,7 @@
 // `?fresh=1` simulates a first run: load_app_data returns null, so the app
 // seeds starter templates and shows the onboarding tour.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { mockTemplates } from "./mocks";
+import { starterTemplates } from "./starterTemplates";
 import { DEFAULT_SETTINGS, type AppData, type Template } from "./types";
 
 function sleep(ms: number): Promise<void> {
@@ -22,7 +22,7 @@ function daysAgo(n: number): string {
 // Enrich the flat CSV seed so every UI state has something to render:
 // folders, pins, usage stats, placeholders, and version history.
 function seedData(): AppData {
-  const templates: Template[] = mockTemplates.map((t, i) => {
+  const templates: Template[] = starterTemplates.map((t, i) => {
     const next = { ...t, history: [...t.history] };
     if (t.tags.includes("poker")) next.folder = "Poker FAQ";
     if (t.tags.includes("jm")) next.folder = "Sportsbook";
