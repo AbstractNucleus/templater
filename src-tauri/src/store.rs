@@ -120,6 +120,8 @@ pub struct Settings {
     pub onboarding_complete: bool,
     #[serde(default)]
     pub snippets: HashMap<String, String>,
+    #[serde(default)]
+    pub minimal: bool,
 }
 
 fn default_theme() -> String {
@@ -156,6 +158,7 @@ impl Default for Settings {
             tag_order: Vec::new(),
             onboarding_complete: false,
             snippets: HashMap::new(),
+            minimal: false,
         }
     }
 }

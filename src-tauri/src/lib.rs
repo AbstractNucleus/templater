@@ -5,7 +5,7 @@ mod tray;
 mod windows_snap;
 
 use store::{Store, WindowGeometry};
-use tauri::{Manager, PhysicalPosition, PhysicalSize, WindowEvent};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 
 use commands::data::{
     bulk_add_template_tag, bulk_delete_templates, bulk_remove_template_tag, export_template,
@@ -33,6 +33,64 @@ fn reset_window_position(
         store.save(&data)?;
     }
     Ok(())
+}
+
+/// Gap (logical px) between the main window's left edge and the preview window's
+/// right edge when parked to the left.
+const PREVIEW_GAP: i32 = 12;
+/// Default preview window width (logical px) when the main window is too narrow
+/// to derive a sensible mirrored width.
+const PREVIEW_DEFAULT_WIDTH: u32 = 460;
+
+/// Show the preview window parked to the left of the main window. If the
+/// preview window is already visible, this is a no-op (selection updates are
+/// delivered via events from the frontend, not by re-opening the window).
+#[tauri::command]
+fn open_preview_window(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Err("main window not found".into());
+    };
+    let preview = app
+        .get_webview_window("preview")
+        .ok_or_else(|| "preview window not found".to_string())?;
+
+    let (Ok(main_pos), Ok(main_size)) = (main.outer_position(), main.outer_size()) else {
+        // Best-effort: just show it without repositioning.
+        let _ = preview.show();
+        let _ = preview.set_focus();
+        return Ok(());
+    };
+
+    let preview_w = PREVIEW_DEFAULT_WIDTH;
+    // Park to the left of the main window, top-aligned with it.
+    let x = main_pos.x - preview_w as i32 - PREVIEW_GAP;
+    let y = main_pos.y;
+    // Clamp: if the derived x would be off the left edge of the screen, just
+    // butt the preview against the main window's left side and let the OS clip.
+    let clamped_x = if x < 0 { 0 } else { x };
+
+    let _ = preview.set_size(PhysicalSize::new(preview_w, main_size.height));
+    let _ = preview.set_position(PhysicalPosition::new(clamped_x, y));
+    let _ = preview.show();
+    let _ = preview.set_focus();
+    Ok(())
+}
+
+/// Hide the preview window.
+#[tauri::command]
+fn close_preview_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(preview) = app.get_webview_window("preview") {
+        let _ = preview.hide();
+    }
+    Ok(())
+}
+
+/// Returns true if the preview window currently exists and is visible.
+#[tauri::command]
+fn is_preview_open(app: tauri::AppHandle) -> bool {
+    app.get_webview_window("preview")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
 }
 
 /// Returns true if the saved top-left corner falls inside any connected monitor.
@@ -171,6 +229,12 @@ pub fn run() {
                     save_window_geometry(&window.app_handle());
                     api.prevent_close();
                     let _ = window.hide();
+                } else if window.label() == "preview" {
+                    // Don't destroy the preview window — just hide it so the
+                    // main window's toggle state can be updated and re-show is cheap.
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = window.app_handle().emit("preview-closed", ());
                 }
             }
         })
@@ -190,6 +254,9 @@ pub fn run() {
             open_data_dir,
             open_path,
             reset_window_position,
+            open_preview_window,
+            close_preview_window,
+            is_preview_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

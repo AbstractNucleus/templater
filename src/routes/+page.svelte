@@ -20,7 +20,11 @@
     openDataDir,
     checkForUpdate,
     listTemplateBackups,
+    openPreviewWindow,
+    closePreviewWindow,
+    isPreviewOpen,
   } from "$lib/api";
+  import { emit } from "@tauri-apps/api/event";
   import {
     DEFAULT_COLUMN_WIDTHS,
     type Settings,
@@ -147,6 +151,10 @@
 
   let copyTrigger = $state(0);
 
+  // Minimal-mode pop-out state. `previewOpen` tracks whether the secondary
+  // preview window is currently visible, so the titlebar toggle reflects reality.
+  let previewOpen = $state(false);
+
   let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   let contextDeleteTarget = $state<Template | null>(null);
 
@@ -162,6 +170,8 @@
   );
 
   const isEditorMode = $derived(templatesStore.isEditorMode);
+
+  const isMinimal = $derived(settings.minimal);
 
   const availableTags = $derived.by(() => {
     const set = new Set<string>();
@@ -613,6 +623,117 @@
     moveSelection,
     copySelected,
     performUndo: () => void templatesStore.performUndo(),
+    isMinimal: () => isMinimal,
+    isPreviewOpen: () => previewOpen,
+    togglePreview: () => void togglePreview(),
+  });
+
+  /** Build the payload pushed to the preview window. Includes everything the
+   *  pop-out needs to render TemplateView without re-reading the store. */
+  function buildPreviewPayload(): {
+    template: Template | null;
+    globalSignature: string;
+    snippets: Record<string, string>;
+    placeholderValues: Record<string, string>;
+    canEdit: boolean;
+    theme: "dark" | "light";
+  } {
+    return {
+      template: selectedTemplate,
+      globalSignature: settings.global_signature,
+      snippets: settings.snippets,
+      placeholderValues:
+        (selectedTemplate && settings.placeholder_values[selectedTemplate.id]) ?? {},
+      canEdit: isEditorMode,
+      theme: settings.theme,
+    };
+  }
+
+  async function togglePreview(): Promise<void> {
+    if (previewOpen) {
+      try {
+        await closePreviewWindow();
+      } catch {
+        /* ignore */
+      }
+      previewOpen = false;
+    } else {
+      try {
+        await openPreviewWindow();
+        previewOpen = true;
+        // Push the current selection immediately so the pop-out isn't blank.
+        void emit("preview-payload", buildPreviewPayload());
+      } catch (e) {
+        templatesStore.loadError = `open preview failed: ${e}`;
+      }
+    }
+  }
+
+  // Push the current template to the pop-out whenever the selection or any
+  // relevant setting changes — but only while the pop-out is open.
+  $effect(() => {
+    // Read the deps so Svelte re-runs this effect when any of them change.
+    void selectedTemplate;
+    void settings.global_signature;
+    void settings.snippets;
+    void settings.placeholder_values;
+    void settings.theme;
+    if (!previewOpen) return;
+    void emit("preview-payload", buildPreviewPayload());
+  });
+
+  // The pop-out asks for the current payload on mount (and whenever it's
+  // re-shown). Also handle its reports: copy success and placeholder changes
+  // are mirrored back into the main store so it stays the source of truth.
+  $effect(() => {
+    const unlistenRequest = listen("preview-request-payload", () => {
+      void emit("preview-payload", buildPreviewPayload());
+    });
+    const unlistenCopy = listen<{ templateId: string }>(
+      "preview-copy-success",
+      (e) => {
+        void templatesStore.recordCopy(e.payload.templateId);
+      },
+    );
+    const unlistenPlaceholder = listen<{
+      templateId: string;
+      values: Record<string, string>;
+    }>("preview-placeholder-change", (e) => {
+      void templatesStore.recordPlaceholderValues(
+        e.payload.templateId,
+        e.payload.values,
+      );
+    });
+    const unlistenClosed = listen("preview-closed", () => {
+      previewOpen = false;
+    });
+    return () => {
+      void unlistenRequest.then((u) => u());
+      void unlistenCopy.then((u) => u());
+      void unlistenPlaceholder.then((u) => u());
+      void unlistenClosed.then((u) => u());
+    };
+  });
+
+  // When minimal mode turns off, hide any stray preview window so the toggle
+  // state can't dangle open without the affordance that controls it.
+  $effect(() => {
+    if (!isMinimal && previewOpen) {
+      void closePreviewWindow().catch(() => {});
+      previewOpen = false;
+    }
+  });
+
+  // On first load, query whether the preview window is already open (e.g. the
+  // user reopened the app while it was still visible). Keeps the toggle honest.
+  $effect(() => {
+    void (async () => {
+      try {
+        previewOpen = await isPreviewOpen();
+      } catch {
+        previewOpen = false;
+      }
+    })();
   });
 
 </script>
@@ -627,6 +748,9 @@
     onSearchChange={handleSearchChange}
     onClearSearch={clearSearch}
     onSearchInputMount={(el) => (searchInput = el ?? undefined)}
+    minimal={isMinimal}
+    {previewOpen}
+    onTogglePreview={() => void togglePreview()}
   />
   <div class="shell">
     {#if !loaded}
@@ -716,21 +840,25 @@
         onBulkDelete={() => (bulkDeleteConfirmOpen = true)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="col-resize"
-        title="Drag to resize"
-        onpointerdown={startResize("templates")}
-      ></div>
-      <MainPanel
-        {...sharedMainPanelProps}
-        template={selectedTemplate}
-        editing={false}
-        onEnterEdit={enterEditMode}
-        onCancelEdit={cancelEditMode}
-        onSave={handleSave}
-        onDuplicate={() => void duplicateSelectedTemplate()}
-        onDelete={() => void deleteSelectedTemplate()}
-      />
+      {#if !isMinimal}
+        <div
+          class="col-resize"
+          title="Drag to resize"
+          onpointerdown={startResize("templates")}
+        ></div>
+        <MainPanel
+          {...sharedMainPanelProps}
+          template={selectedTemplate}
+          editing={false}
+          onEnterEdit={enterEditMode}
+          onCancelEdit={cancelEditMode}
+          onSave={handleSave}
+          onDuplicate={() => void duplicateSelectedTemplate()}
+          onDelete={() => void deleteSelectedTemplate()}
+        />
+      {:else}
+        <div class="minimal-spacer" aria-hidden="true"></div>
+      {/if}
     {/if}
     {#if templatesStore.loadError}
       <div class="error-banner">
@@ -1094,6 +1222,13 @@
   .col-resize:hover,
   :global(.col-resize.dragging) {
     background: var(--border-focus);
+  }
+
+  .minimal-spacer {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-base);
+    border-left: 1px solid var(--border);
   }
 
   .error-banner {

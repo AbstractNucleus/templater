@@ -29,6 +29,10 @@ export interface GlobalKeydownDeps {
   moveSelection: (delta: number) => void;
   copySelected: () => void;
   performUndo: () => void;
+  // Minimal-mode pop-out toggle.
+  isMinimal: () => boolean;
+  isPreviewOpen: () => boolean;
+  togglePreview: () => void;
 }
 
 /** Builds the `svelte:window` keydown handler. The body is a verbatim lift of
@@ -89,6 +93,19 @@ export function createGlobalKeydownHandler(
         searchInput.focus();
         searchInput.select();
       }
+      return;
+    }
+    // Ctrl+Shift+P: toggle the preview pop-out (only meaningful in minimal mode).
+    if (
+      e.ctrlKey &&
+      e.shiftKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      e.key.toLowerCase() === "p" &&
+      deps.isMinimal()
+    ) {
+      e.preventDefault();
+      deps.togglePreview();
       return;
     }
     // Esc in the search box clears it — matches the Gmail/Slack convention.

@@ -82,6 +82,9 @@ export interface Settings {
   /** Global snippet variables expanded at copy time alongside {{date}}/{{time}}.
    *  Key = placeholder name (e.g. "me_name"), value = literal expansion. */
   snippets: Record<string, string>;
+  /** When true, the main window shows only the Tags and Templates columns;
+   *  the preview/copy UI lives in a pop-out window to the left. */
+  minimal: boolean;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -111,4 +114,5 @@ export const DEFAULT_SETTINGS: Settings = {
   tag_order: [],
   onboarding_complete: false,
   snippets: {},
+  minimal: false,
 };

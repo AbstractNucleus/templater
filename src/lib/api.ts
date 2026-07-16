@@ -127,3 +127,15 @@ export async function listTemplateBackups(): Promise<BackupEntry[]> {
 export async function restoreTemplateBackup(name: string): Promise<AppData> {
   return await invoke<AppData>("restore_template_backup", { name });
 }
+
+export async function openPreviewWindow(): Promise<void> {
+  await invoke<void>("open_preview_window");
+}
+
+export async function closePreviewWindow(): Promise<void> {
+  await invoke<void>("close_preview_window");
+}
+
+export async function isPreviewOpen(): Promise<boolean> {
+  return await invoke<boolean>("is_preview_open");
+}

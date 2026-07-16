@@ -20,6 +20,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Templater",
         "width": 800,
         "height": 600,
@@ -30,6 +31,21 @@
         "minWidth": 480,
         "minHeight": 360,
         "dragDropEnabled": false
+      },
+      {
+        "label": "preview",
+        "title": "Templater — Preview",
+        "url": "/preview",
+        "width": 460,
+        "height": 600,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "minWidth": 320,
+        "minHeight": 240,
+        "dragDropEnabled": false,
+        "resizable": true
       }
     ],
     "security": {
