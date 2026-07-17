@@ -46,6 +46,21 @@
         "minHeight": 240,
         "dragDropEnabled": false,
         "resizable": true
+      },
+      {
+        "label": "translator",
+        "title": "Templater — Translate",
+        "url": "/translator",
+        "width": 460,
+        "height": 360,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "minWidth": 320,
+        "minHeight": 200,
+        "dragDropEnabled": false,
+        "resizable": true
       }
     ],
     "security": {

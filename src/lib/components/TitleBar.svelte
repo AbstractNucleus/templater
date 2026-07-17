@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { getCurrentWindow, getAllWindows } from "@tauri-apps/api/window";
 
   let {
     onOpenSettings,
@@ -11,6 +11,8 @@
     minimal = false,
     previewOpen = false,
     onTogglePreview = () => {},
+    translatorOpen = false,
+    onToggleTranslator = () => {},
   }: {
     onOpenSettings: () => void;
     /** Show the search omnibar slot. */
@@ -25,6 +27,9 @@
     /** Reflects whether the preview pop-out window is currently visible. */
     previewOpen?: boolean;
     onTogglePreview?: () => void;
+    /** Reflects whether the translator pop-out window is currently visible. */
+    translatorOpen?: boolean;
+    onToggleTranslator?: () => void;
   } = $props();
 
   let pinned = $state(false);
@@ -51,16 +56,14 @@
     pinned = !pinned;
     try {
       await getCurrentWindow().setAlwaysOnTop(pinned);
+      // Mirror to the preview and translator pop-outs so all windows stack together.
+      for (const w of await getAllWindows()) {
+        if (w.label === "preview" || w.label === "translator") {
+          await w.setAlwaysOnTop(pinned).catch(() => {});
+        }
+      }
     } catch {
       pinned = !pinned;
-    }
-  }
-
-  async function minimise(): Promise<void> {
-    try {
-      await getCurrentWindow().minimize();
-    } catch {
-      /* no-op */
     }
   }
 
@@ -122,6 +125,22 @@
     {/if}
     <button
       class="btn"
+      class:active={translatorOpen}
+      title={translatorOpen ? "Hide translator" : "Translate (Ctrl+Shift+T)"}
+      onclick={onToggleTranslator}
+      aria-label={translatorOpen ? "Hide translator" : "Show translator"}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 8l6 6" />
+        <path d="M4 14l6-6 2-3" />
+        <path d="M2 5h12" />
+        <path d="M7 2h1" />
+        <path d="M22 21l-5-10-5 10" />
+        <path d="M14 18h6" />
+      </svg>
+    </button>
+    <button
+      class="btn"
       class:active={pinned}
       title={pinned ? "Unpin (currently always on top)" : "Pin always on top"}
       onclick={togglePin}
@@ -136,11 +155,6 @@
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
         <circle cx="12" cy="12" r="3" />
-      </svg>
-    </button>
-    <button class="btn" title="Minimise" onclick={minimise} aria-label="Minimise">
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true">
-        <path d="M5 12h14" />
       </svg>
     </button>
     <button class="btn close-btn" title="Close to tray" onclick={close} aria-label="Close to tray">

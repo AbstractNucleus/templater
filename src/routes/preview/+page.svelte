@@ -7,6 +7,7 @@
   import { composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
   import CopyButton from "$lib/components/CopyButton.svelte";
   import PlaceholderFills from "$lib/components/PlaceholderFills.svelte";
+  import { matchesAccelerator } from "$lib/keyboard";
 
   /** Payload pushed from the main window whenever the selection or relevant
    *  settings change. The pop-out renders directly from this; it owns no
@@ -18,6 +19,7 @@
     placeholderValues: Record<string, string>;
     canEdit: boolean;
     theme: "dark" | "light";
+    previewHotkey: string;
   }
 
   let payload = $state<PreviewPayload | null>(null);
@@ -96,15 +98,42 @@
         void emit("preview-placeholder-change", { templateId: id, values: placeholderValues });
       }
       void emit("preview-copy-success", { templateId: id });
+      // Hide the pop-out — the copy is done, no reason to linger. The main
+      // window owns the hide() call via its preview-request-close listener.
+      void emit("preview-request-close");
     } catch {
       copyState = "error";
     }
     if (copyTimer) clearTimeout(copyTimer);
     copyTimer = setTimeout(() => (copyState = "idle"), 1500);
   }
+
+  // Bare Space closes the pop-out — mirrors the main window's Space→toggle
+  // shortcut. Without this, opening the pop-out grabs focus and leaves the
+  // user stranded (Space in the main window no longer fires). Gated on no
+  // input being focused so the placeholder/checkbox fields keep working.
+  function isInputFocused(): boolean {
+    const ae = document.activeElement;
+    if (!ae || ae === document.body) return false;
+    const tag = ae.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return true;
+    if ((ae as HTMLElement).isContentEditable) return true;
+    return false;
+  }
+
+  function handlePreviewKeydown(e: KeyboardEvent): void {
+    if (
+      !isInputFocused() &&
+      payload &&
+      matchesAccelerator(e, payload.previewHotkey)
+    ) {
+      e.preventDefault();
+      void emit("preview-request-close");
+    }
+  }
 </script>
 
-<svelte:window />
+<svelte:window onkeydown={handlePreviewKeydown} />
 
 {#if template}
   <div class="frame">

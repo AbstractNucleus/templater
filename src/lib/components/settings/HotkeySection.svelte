@@ -12,17 +12,19 @@
   }: {
     settings: Settings;
     /** Owned by the parent so the window-level keydown handler can write to it. */
-    captureCapturing: "none" | "main";
+    captureCapturing: "none" | "main" | "preview";
     /** Bound to the parent: the keydown handler writes errors here, this section
      *  also writes to it from the reset / clear paths. */
     captureError: string | null;
     onUpdate: (next: Settings) => void;
-    /** Tell the parent to enter capture mode. The parent's keydown handler
-     *  picks up the next non-modifier keypress and commits the binding. */
-    onStartCapture: () => void;
+    /** Tell the parent to enter capture mode for the named target. The parent's
+     *  keydown handler picks up the next non-modifier keypress and commits the
+     *  binding. "preview" allows bare keys (no modifier required). */
+    onStartCapture: (target: "main" | "preview") => void;
   } = $props();
 
   const isDefaultHotkey = $derived(settings.global_hotkey === DEFAULT_SETTINGS.global_hotkey);
+  const isDefaultPreview = $derived(settings.preview_hotkey === DEFAULT_SETTINGS.preview_hotkey);
 
   // Friendly labels for the codes the capture handler stores. The accelerator
   // string uses DOM KeyboardEvent.code values; render the human glyph instead.
@@ -70,6 +72,11 @@
       captureError = String(err);
     }
   }
+
+  function resetPreviewHotkey(): void {
+    captureError = null;
+    onUpdate({ ...settings, preview_hotkey: DEFAULT_SETTINGS.preview_hotkey });
+  }
 </script>
 
 <section>
@@ -86,14 +93,43 @@
           <kbd class="keycap">{keyLabel(part)}</kbd>
         {/each}
       </span>
-      <button class="rebind" onclick={() => onStartCapture()}>Rebind</button>
+      <button class="rebind" onclick={() => onStartCapture("main")}>Rebind</button>
       {#if !isDefaultHotkey}
         <button class="rebind" onclick={() => void resetHotkey()}>Reset</button>
       {/if}
     {/if}
   </div>
-  <div class="hint">Toggles the app window from any application.</div>
-  {#if captureError}
+  <div class="hint">Toggles the app window from any application. Must include a modifier.</div>
+  {#if captureError && captureCapturing !== "preview"}
+    <div class="capture-error">{captureError}</div>
+  {/if}
+</section>
+
+<section>
+  <div class="section-label">Toggle preview pop-out</div>
+  <div class="hotkey-row">
+    {#if captureCapturing === "preview"}
+      <span class="keycap-group capturing">
+        <span class="capture-text">Press keys… (Esc to cancel)</span>
+      </span>
+    {:else}
+      <span class="keycap-group">
+        {#each splitAccelerator(settings.preview_hotkey) as part, i (i)}
+          {#if i > 0}<span class="keycap-plus" aria-hidden="true">+</span>{/if}
+          <kbd class="keycap">{keyLabel(part)}</kbd>
+        {/each}
+      </span>
+      <button class="rebind" onclick={() => onStartCapture("preview")}>Rebind</button>
+      {#if !isDefaultPreview}
+        <button class="rebind" onclick={resetPreviewHotkey}>Reset</button>
+      {/if}
+    {/if}
+  </div>
+  <div class="hint">
+    Toggles the preview pop-out in minimal mode. Bare keys are allowed (default
+    <code>Space</code>).
+  </div>
+  {#if captureError && captureCapturing === "preview"}
     <div class="capture-error">{captureError}</div>
   {/if}
 </section>

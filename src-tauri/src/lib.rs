@@ -5,13 +5,19 @@ mod tray;
 mod windows_snap;
 
 use store::{Store, WindowGeometry};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
+
+/// Tracks whether the translator pop-out was visible before the main window
+/// was hidden. Used to restore it when the main window is shown again.
+static TRANSLATOR_WAS_OPEN: AtomicBool = AtomicBool::new(false);
 
 use commands::data::{
     bulk_add_template_tag, bulk_delete_templates, bulk_remove_template_tag, export_template,
     export_templates, export_templates_subset, import_templates, list_template_backups,
     load_app_data, open_data_dir, open_path, restore_template_backup, save_app_data,
 };
+use commands::translate::translate_text;
 use hotkey::set_hotkey;
 
 #[tauri::command]
@@ -37,10 +43,7 @@ fn reset_window_position(
 
 /// Gap (logical px) between the main window's left edge and the preview window's
 /// right edge when parked to the left.
-const PREVIEW_GAP: i32 = 12;
-/// Default preview window width (logical px) when the main window is too narrow
-/// to derive a sensible mirrored width.
-const PREVIEW_DEFAULT_WIDTH: u32 = 460;
+const PREVIEW_GAP: i32 = 0;
 
 /// Show the preview window parked to the left of the main window. If the
 /// preview window is already visible, this is a no-op (selection updates are
@@ -61,8 +64,8 @@ fn open_preview_window(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     };
 
-    let preview_w = PREVIEW_DEFAULT_WIDTH;
-    // Park to the left of the main window, top-aligned with it.
+    let preview_w = main_size.width;
+    // Park to the left of the main window, top-aligned with it, no gap.
     let x = main_pos.x - preview_w as i32 - PREVIEW_GAP;
     let y = main_pos.y;
     // Clamp: if the derived x would be off the left edge of the screen, just
@@ -71,6 +74,13 @@ fn open_preview_window(app: tauri::AppHandle) -> Result<(), String> {
 
     let _ = preview.set_size(PhysicalSize::new(preview_w, main_size.height));
     let _ = preview.set_position(PhysicalPosition::new(clamped_x, y));
+    // Inherit the main window's always-on-top state so the pop-out stacks
+    // with the main window rather than sliding under other apps.
+    if let Ok(true) = main.is_always_on_top() {
+        let _ = preview.set_always_on_top(true);
+    } else {
+        let _ = preview.set_always_on_top(false);
+    }
     let _ = preview.show();
     let _ = preview.set_focus();
     Ok(())
@@ -89,6 +99,67 @@ fn close_preview_window(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn is_preview_open(app: tauri::AppHandle) -> bool {
     app.get_webview_window("preview")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// Gap (logical px) between the main window's top edge and the translator
+/// window's bottom edge when parked above.
+const TRANSLATOR_GAP: i32 = 0;
+/// Default translator window height (logical px) when the main window is too
+/// short to derive a sensible height.
+const TRANSLATOR_DEFAULT_HEIGHT: u32 = 360;
+
+/// Show the translator window parked above the main window, matching its width.
+#[tauri::command]
+fn open_translator_window(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Err("main window not found".into());
+    };
+    let translator = app
+        .get_webview_window("translator")
+        .ok_or_else(|| "translator window not found".to_string())?;
+
+    let (Ok(main_pos), Ok(main_size)) = (main.outer_position(), main.outer_size()) else {
+        let _ = translator.show();
+        let _ = translator.set_focus();
+        return Ok(());
+    };
+
+    let translator_h = TRANSLATOR_DEFAULT_HEIGHT;
+    // Park above the main window, same width, bottom-aligned above it.
+    let x = main_pos.x;
+    let y = main_pos.y - translator_h as i32 - TRANSLATOR_GAP;
+    // Clamp: if the derived y would be off the top of the screen, butt it
+    // against the top edge.
+    let clamped_y = if y < 0 { 0 } else { y };
+
+    let _ = translator.set_size(PhysicalSize::new(main_size.width, translator_h));
+    let _ = translator.set_position(PhysicalPosition::new(x, clamped_y));
+    // Inherit always-on-top from main window.
+    if let Ok(true) = main.is_always_on_top() {
+        let _ = translator.set_always_on_top(true);
+    } else {
+        let _ = translator.set_always_on_top(false);
+    }
+    let _ = translator.show();
+    let _ = translator.set_focus();
+    Ok(())
+}
+
+/// Hide the translator window.
+#[tauri::command]
+fn close_translator_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(translator) = app.get_webview_window("translator") {
+        let _ = translator.hide();
+    }
+    Ok(())
+}
+
+/// Returns true if the translator window currently exists and is visible.
+#[tauri::command]
+fn is_translator_open(app: tauri::AppHandle) -> bool {
+    app.get_webview_window("translator")
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false)
 }
@@ -144,13 +215,42 @@ pub(crate) fn toggle_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
         if visible {
-            save_window_geometry(app);
-            let _ = window.hide();
+            hide_main_window(app);
         } else {
             let _ = window.show();
             let _ = window.set_focus();
+            // Re-show the translator if it was open before the main window was hidden.
+            if TRANSLATOR_WAS_OPEN.swap(false, Ordering::SeqCst) {
+                if let Some(translator) = app.get_webview_window("translator") {
+                    let _ = translator.show();
+                }
+            }
         }
     }
+}
+
+/// Hide the main window and any dependent pop-outs. The preview window is a
+/// satellite of the main window — leaving it dangling once the main window is
+/// gone is confusing (and it has no selection to render anyway). Emits
+/// `preview-closed` so the frontend's toggle state stays honest.
+pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    save_window_geometry(app);
+    if let Some(preview) = app.get_webview_window("preview") {
+        if preview.is_visible().unwrap_or(false) {
+            let _ = preview.hide();
+            let _ = app.emit("preview-closed", ());
+        }
+    }
+    // Hide translator silently — it will be re-shown when the main window comes back.
+    // Don't emit translator-closed here so the frontend toggle state stays open.
+    if let Some(translator) = app.get_webview_window("translator") {
+        TRANSLATOR_WAS_OPEN.store(translator.is_visible().unwrap_or(false), Ordering::SeqCst);
+        let _ = translator.hide();
+    }
+    let _ = main.hide();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -226,15 +326,18 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
-                    save_window_geometry(&window.app_handle());
                     api.prevent_close();
-                    let _ = window.hide();
+                    hide_main_window(&window.app_handle());
                 } else if window.label() == "preview" {
                     // Don't destroy the preview window — just hide it so the
                     // main window's toggle state can be updated and re-show is cheap.
                     api.prevent_close();
                     let _ = window.hide();
                     let _ = window.app_handle().emit("preview-closed", ());
+                } else if window.label() == "translator" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = window.app_handle().emit("translator-closed", ());
                 }
             }
         })
@@ -257,6 +360,10 @@ pub fn run() {
             open_preview_window,
             close_preview_window,
             is_preview_open,
+            open_translator_window,
+            close_translator_window,
+            is_translator_open,
+            translate_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
