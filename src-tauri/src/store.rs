@@ -124,6 +124,10 @@ pub struct Settings {
     pub minimal: bool,
     #[serde(default = "default_preview_hotkey")]
     pub preview_hotkey: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default = "default_translation_model")]
+    pub translation_model: String,
 }
 
 fn default_theme() -> String {
@@ -146,6 +150,10 @@ fn default_preview_hotkey() -> String {
     "Space".to_string()
 }
 
+fn default_translation_model() -> String {
+    "openrouter/free".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -166,6 +174,8 @@ impl Default for Settings {
             snippets: HashMap::new(),
             minimal: false,
             preview_hotkey: default_preview_hotkey(),
+            openrouter_api_key: String::new(),
+            translation_model: default_translation_model(),
         }
     }
 }
