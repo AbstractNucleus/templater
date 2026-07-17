@@ -94,9 +94,10 @@
   // confirm → close), and it has to mutate this state directly.
   let capturing = $state(false);
   let captureError = $state<string | null>(null);
-  // Distinct from `capturing` so the two rebinders don't interfere with each
-  // other when both are exposed in the modal (only "main" remains without AI).
-  let captureCapturing = $state<"none" | "main">("none");
+  // Which binding is being captured. "preview" allows bare keys (no modifier
+  // required) since the pop-out toggle is an in-app shortcut, not a global OS
+  // one. "main" keeps the modifier-required rule for the global hotkey.
+  let captureCapturing = $state<"none" | "main" | "preview">("none");
 
   // Tag management state owned here so the Escape handler can drain it before
   // closing the modal. The TagsSection child binds to these via $bindable.
@@ -148,8 +149,8 @@
     return MODIFIER_PREFIXES.some((p) => code.startsWith(p));
   }
 
-  function startCapture(): void {
-    captureCapturing = "main";
+  function startCapture(target: "main" | "preview" = "main"): void {
+    captureCapturing = target;
     capturing = true;
     captureError = null;
   }
@@ -186,7 +187,8 @@
     if (e.shiftKey) parts.push("Shift");
     if (e.altKey) parts.push("Alt");
     if (e.metaKey) parts.push("Cmd");
-    if (parts.length === 0) {
+    const allowBare = captureCapturing === "preview";
+    if (parts.length === 0 && !allowBare) {
       captureError = "Hotkey must include at least one modifier (Ctrl, Shift, Alt, Cmd).";
       captureCapturing = "none";
       capturing = false;
@@ -195,9 +197,14 @@
     parts.push(e.code);
     const accelerator = parts.join("+");
 
+    const target = captureCapturing;
+    const settingsField = target === "preview" ? "preview_hotkey" : "global_hotkey";
     try {
-      await setHotkey(accelerator);
-      onUpdate({ ...settings, global_hotkey: accelerator });
+      if (target === "main") {
+        // Global hotkey must be registered with the OS before we persist it.
+        await setHotkey(accelerator);
+      }
+      onUpdate({ ...settings, [settingsField]: accelerator });
       captureError = null;
     } catch (err) {
       captureError = String(err);
@@ -262,7 +269,7 @@
             {captureCapturing}
             bind:captureError
             {onUpdate}
-            onStartCapture={startCapture}
+            onStartCapture={(target) => startCapture(target)}
           />
 
           <section>

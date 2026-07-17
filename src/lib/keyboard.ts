@@ -29,6 +29,42 @@ export interface GlobalKeydownDeps {
   moveSelection: (delta: number) => void;
   copySelected: () => void;
   performUndo: () => void;
+  // Minimal-mode pop-out toggle.
+  isMinimal: () => boolean;
+  isPreviewOpen: () => boolean;
+  togglePreview: () => void;
+  /** Persisted in-app accelerator for the pop-out toggle (e.g. "Space",
+   *  "Ctrl+Space"). DOM KeyboardEvent.code parts joined by +. Bare keys are
+   *  allowed — the pop-out only matters when Templater has focus. */
+  previewHotkey: () => string;
+  // Translator pop-out toggle.
+  isTranslatorOpen: () => boolean;
+  toggleTranslator: () => void;
+}
+
+/** True if a KeyboardEvent matches an accelerator string of the form
+ *  "[Mod+...+]Code" (e.g. "Space", "Ctrl+Space", "Shift+KeyP"). Mirrors the
+ *  format the SettingsModal capture handler writes into settings. Bare keys
+ *  (no modifiers) are allowed — used for the in-app pop-out binding. */
+export function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
+  const parts = accelerator.split("+").filter((p) => p.length > 0);
+  if (parts.length === 0) return false;
+  const code = parts[parts.length - 1];
+  const wantMods = new Set(parts.slice(0, -1));
+  const hasCtrl = wantMods.has("Ctrl");
+  const hasShift = wantMods.has("Shift");
+  const hasAlt = wantMods.has("Alt");
+  const hasCmd = wantMods.has("Cmd");
+  // Exact modifier match — reject stray modifiers the user didn't ask for.
+  if (
+    e.ctrlKey !== hasCtrl ||
+    e.shiftKey !== hasShift ||
+    e.altKey !== hasAlt ||
+    e.metaKey !== hasCmd
+  ) {
+    return false;
+  }
+  return e.code === code;
 }
 
 /** Builds the `svelte:window` keydown handler. The body is a verbatim lift of
@@ -89,6 +125,45 @@ export function createGlobalKeydownHandler(
         searchInput.focus();
         searchInput.select();
       }
+      return;
+    }
+    // Ctrl+Shift+P: toggle the preview pop-out (only meaningful in minimal mode).
+    if (
+      e.ctrlKey &&
+      e.shiftKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      e.key.toLowerCase() === "p" &&
+      deps.isMinimal()
+    ) {
+      e.preventDefault();
+      deps.togglePreview();
+      return;
+    }
+    // Configurable in-app shortcut: toggle the preview pop-out in minimal
+    // mode. Default "Space". Bare key mirrors the "?" cheat-sheet shortcut —
+    // gated on no input being focused so typing in search/tag fields doesn't
+    // trigger it.
+    if (
+      deps.isMinimal() &&
+      !deps.isInputFocused() &&
+      document.activeElement !== deps.getSearchInput() &&
+      matchesAccelerator(e, deps.previewHotkey())
+    ) {
+      e.preventDefault();
+      deps.togglePreview();
+      return;
+    }
+    // Ctrl+Shift+T: toggle the translator pop-out (always available).
+    if (
+      e.ctrlKey &&
+      e.shiftKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      e.key.toLowerCase() === "t"
+    ) {
+      e.preventDefault();
+      deps.toggleTranslator();
       return;
     }
     // Esc in the search box clears it — matches the Gmail/Slack convention.

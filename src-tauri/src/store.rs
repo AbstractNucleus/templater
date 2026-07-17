@@ -120,6 +120,14 @@ pub struct Settings {
     pub onboarding_complete: bool,
     #[serde(default)]
     pub snippets: HashMap<String, String>,
+    #[serde(default)]
+    pub minimal: bool,
+    #[serde(default = "default_preview_hotkey")]
+    pub preview_hotkey: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default = "default_translation_model")]
+    pub translation_model: String,
 }
 
 fn default_theme() -> String {
@@ -136,6 +144,14 @@ fn default_zoom() -> f32 {
 
 fn default_sort_mode() -> String {
     "recent".to_string()
+}
+
+fn default_preview_hotkey() -> String {
+    "Space".to_string()
+}
+
+fn default_translation_model() -> String {
+    "openrouter/free".to_string()
 }
 
 impl Default for Settings {
@@ -156,6 +172,10 @@ impl Default for Settings {
             tag_order: Vec::new(),
             onboarding_complete: false,
             snippets: HashMap::new(),
+            minimal: false,
+            preview_hotkey: default_preview_hotkey(),
+            openrouter_api_key: String::new(),
+            translation_model: default_translation_model(),
         }
     }
 }

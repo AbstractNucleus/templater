@@ -11,6 +11,18 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 - **README cleanup.** Trimmed install instructions to a simple download link
   since releases are now public. Trimmed developer notes to essentials.
 
+## [0.9.2] — 2026-07-17
+
+### Added
+
+- **Translation pop-out window.** New detachable translator window (above the main window, same width) with a toggle button in the titlebar and `Ctrl+Shift+T` shortcut. Auto-translates pasted text to English via OpenRouter. Configurable model (default `"openrouter/free"`) and API key in Settings → Translation. Available in both minimal and normal mode. Hides and shows together with the main window.
+
+- **Preview window matches main window width.** The preview pop-out now mirrors the main window's width instead of a fixed 460 px. Pop-out windows sit flush against the main window (no gap).
+
+### Changed
+
+- **Updated settings fields.** `openrouter_api_key` and `translation_model` added to the Rust `Settings` struct so they persist to disk.
+
 ## [0.9.0] — 2026-07-15
 
 ### Added

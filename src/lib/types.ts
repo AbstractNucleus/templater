@@ -82,6 +82,18 @@ export interface Settings {
   /** Global snippet variables expanded at copy time alongside {{date}}/{{time}}.
    *  Key = placeholder name (e.g. "me_name"), value = literal expansion. */
   snippets: Record<string, string>;
+  /** When true, the main window shows only the Tags and Templates columns;
+   *  the preview/copy UI lives in a pop-out window to the left. */
+  minimal: boolean;
+  /** In-app accelerator (DOM KeyboardEvent.code parts joined by +) that
+   *  toggles the preview pop-out in minimal mode. Default "Space". Bare keys
+   *  are allowed — the pop-out only matters when Templater has focus, so a
+   *  global OS shortcut would be overkill. */
+  preview_hotkey: string;
+  /** OpenRouter API key for the translation pop-out. Empty string = not configured. */
+  openrouter_api_key: string;
+  /** OpenRouter model identifier for translation, e.g. "openrouter/free". */
+  translation_model: string;
 }
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
@@ -111,4 +123,8 @@ export const DEFAULT_SETTINGS: Settings = {
   tag_order: [],
   onboarding_complete: false,
   snippets: {},
+  minimal: false,
+  preview_hotkey: "Space",
+  openrouter_api_key: "",
+  translation_model: "openrouter/free",
 };

@@ -12,6 +12,7 @@
     selectedTemplateId,
     bulkSelectedIds,
     width,
+    flex = false,
     canCreate,
     canReorder,
     sortMode,
@@ -33,6 +34,10 @@
     selectedTemplateId: string | null;
     bulkSelectedIds: Set<string>;
     width: number;
+    /** When true, the sidebar flexes to fill available space instead of
+     *  using the fixed `width` (used in minimal mode so window resizes flow
+     *  into the templates column rather than exposing a dead preview area). */
+    flex?: boolean;
     canCreate: boolean;
     /** True only when the visible order matches the underlying array order
      *  (browse mode, no search, no tag filter, manual sort). Drag is gated
@@ -160,7 +165,13 @@
   }
 </script>
 
-<aside bind:this={sidebarEl} class="sidebar" style="width: {width}px" oncontextmenu={handleEmptyContext}>
+<aside
+  bind:this={sidebarEl}
+  class="sidebar"
+  class:flex-grow={flex}
+  style={flex ? "" : `width: ${width}px`}
+  oncontextmenu={handleEmptyContext}
+>
   <div class="sticky-header">
     <div class="section-row">
       <div class="section-label">Templates</div>
@@ -287,6 +298,11 @@
     padding: 0 8px 12px;
     overflow-y: auto;
     box-sizing: border-box;
+  }
+
+  .sidebar.flex-grow {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .sticky-header {

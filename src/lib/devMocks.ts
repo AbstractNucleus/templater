@@ -130,7 +130,18 @@ export function installDevMocks(): void {
         case "open_path":
         case "reset_window_position":
         case "export_template":
+        case "open_translator_window":
+        case "close_translator_window":
           return null;
+
+        case "is_translator_open":
+          return false;
+
+        case "translate_text": {
+          const text = args.text as string;
+          await sleep(600);
+          return `[DEV MOCK] Translated to English:\n\n${text}`;
+        }
 
         // ---- plugins ---------------------------------------------------
         case "plugin:clipboard-manager|write_text":
