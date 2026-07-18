@@ -1,51 +1,27 @@
+import { popouts } from "$lib/stores/popouts.svelte";
+import { templatesStore } from "$lib/stores/templatesStore.svelte";
+import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
+
 /** Dependencies the global keydown handler closes over. Reads are getters so
- *  the handler always sees live values; writes/actions are callbacks. The
- *  factory exists purely to lift this ~140-line handler out of `+page.svelte`
- *  without changing any branch behaviour. */
+ *  the handler always sees live values; writes/actions are callbacks. */
 export interface GlobalKeydownDeps {
-  // Confirm/prompt dialogs own Escape/Enter themselves; these just let the
-  // handler bail so other shortcuts don't run underneath an open dialog.
-  isContextDeleteOpen: () => boolean;
-  isSettingsOpen: () => boolean;
-  isBulkDeleteConfirmOpen: () => boolean;
-  isBulkTagPromptOpen: () => boolean;
-  isBulkRemoveTagPromptOpen: () => boolean;
-  // Cheat sheet: read state to toggle, and to suppress shortcuts while open.
-  isCheatSheetOpen: () => boolean;
-  setCheatSheetOpen: (v: boolean) => void;
-  // Zoom: current effective zoom (already defaulted), the setter, and the step.
   getZoom: () => number;
   setZoom: (next: number) => void;
   zoomStep: number;
-  // Search box element + query.
   getSearchInput: () => HTMLInputElement | undefined;
   getSearchQuery: () => string;
   clearSearch: () => void;
-  // Mode flags.
   isEditing: () => boolean;
-  isEditorMode: () => boolean;
-  // Focus probe + selection/clipboard/undo actions.
   isInputFocused: () => boolean;
   moveSelection: (delta: number) => void;
   copySelected: () => void;
-  performUndo: () => void;
-  // Minimal-mode pop-out toggle.
   isMinimal: () => boolean;
-  isPreviewOpen: () => boolean;
-  togglePreview: () => void;
-  /** Persisted in-app accelerator for the pop-out toggle (e.g. "Space",
-   *  "Ctrl+Space"). DOM KeyboardEvent.code parts joined by +. Bare keys are
-   *  allowed — the pop-out only matters when Templater has focus. */
-  previewHotkey: () => string;
-  // Translator pop-out toggle.
-  isTranslatorOpen: () => boolean;
-  toggleTranslator: () => void;
 }
 
 /** True if a KeyboardEvent matches an accelerator string of the form
  *  "[Mod+...+]Code" (e.g. "Space", "Ctrl+Space", "Shift+KeyP"). Mirrors the
- *  format the SettingsModal capture handler writes into settings. Bare keys
- *  (no modifiers) are allowed — used for the in-app pop-out binding. */
+ *  format the SettingsModal capture handler writes into settings. Bare keys are
+ *  allowed — used for the in-app pop-out binding. */
 export function matchesAccelerator(e: KeyboardEvent, accelerator: string): boolean {
   const parts = accelerator.split("+").filter((p) => p.length > 0);
   if (parts.length === 0) return false;
@@ -67,31 +43,22 @@ export function matchesAccelerator(e: KeyboardEvent, accelerator: string): boole
   return e.code === code;
 }
 
-/** Builds the `svelte:window` keydown handler. The body is a verbatim lift of
- *  the original inline handler — only free-variable access was replaced with
- *  `deps`; every early-return order and branch condition is preserved. */
+/** Builds the `svelte:window` keydown handler. Dialog / popout / mode flags
+ *  come from stores; the page only passes search/zoom/selection actions. */
 export function createGlobalKeydownHandler(
   deps: GlobalKeydownDeps,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent): void => {
-    // Confirm/prompt dialogs (context-delete + the three bulk modals) own
-    // Escape/Enter via ConfirmDialog's own backdrop listener. Returning here
-    // just suppresses the rest of the global handler (e.g. arrow keys moving
-    // selection underneath an open dialog).
-    if (deps.isContextDeleteOpen()) return;
-    if (deps.isSettingsOpen()) return;
-    if (deps.isBulkDeleteConfirmOpen()) return;
-    if (deps.isBulkTagPromptOpen()) return;
-    if (deps.isBulkRemoveTagPromptOpen()) return;
+    if (uiDialogs.blocksShortcuts) return;
     // ? toggles the cheat sheet — runs before the cheatSheetOpen guard so the
     // same key both opens AND closes. Skip when typing in an input so Shift+/
     // still types literally.
     if (e.key === "?" && !deps.isInputFocused()) {
       e.preventDefault();
-      deps.setCheatSheetOpen(!deps.isCheatSheetOpen());
+      uiDialogs.cheatSheetOpen = !uiDialogs.cheatSheetOpen;
       return;
     }
-    if (deps.isCheatSheetOpen()) {
+    if (uiDialogs.cheatSheetOpen) {
       // CheatSheet.svelte has its own window listener for Escape — just
       // suppress global shortcuts so e.g. arrow keys don't move selection.
       return;
@@ -137,7 +104,9 @@ export function createGlobalKeydownHandler(
       deps.isMinimal()
     ) {
       e.preventDefault();
-      deps.togglePreview();
+      void popouts.togglePreview(() =>
+        popouts.buildPreviewPayload(templatesStore.isEditorMode),
+      );
       return;
     }
     // Configurable in-app shortcut: toggle the preview pop-out in minimal
@@ -148,10 +117,12 @@ export function createGlobalKeydownHandler(
       deps.isMinimal() &&
       !deps.isInputFocused() &&
       document.activeElement !== deps.getSearchInput() &&
-      matchesAccelerator(e, deps.previewHotkey())
+      matchesAccelerator(e, templatesStore.settings.preview_hotkey)
     ) {
       e.preventDefault();
-      deps.togglePreview();
+      void popouts.togglePreview(() =>
+        popouts.buildPreviewPayload(templatesStore.isEditorMode),
+      );
       return;
     }
     // Ctrl+Shift+T: toggle the translator pop-out (always available).
@@ -163,12 +134,16 @@ export function createGlobalKeydownHandler(
       e.key.toLowerCase() === "t"
     ) {
       e.preventDefault();
-      deps.toggleTranslator();
+      void popouts.toggleTranslator(() => popouts.buildTranslatorPayload());
       return;
     }
     // Esc in the search box clears it — matches the Gmail/Slack convention.
     // Scoped to the search input so Esc in other fields keeps native behaviour.
-    if (e.key === "Escape" && document.activeElement === deps.getSearchInput() && deps.getSearchQuery().length > 0) {
+    if (
+      e.key === "Escape" &&
+      document.activeElement === deps.getSearchInput() &&
+      deps.getSearchQuery().length > 0
+    ) {
       e.preventDefault();
       deps.clearSearch();
       return;
@@ -182,9 +157,15 @@ export function createGlobalKeydownHandler(
     // inside inputs — including the search box, which we let through the
     // isInputFocused guard above. Disabled in User mode where mutations can't
     // happen anyway.
-    if (ctrlOnly && !e.shiftKey && e.key.toLowerCase() === "z" && deps.isEditorMode() && !inSearch) {
+    if (
+      ctrlOnly &&
+      !e.shiftKey &&
+      e.key.toLowerCase() === "z" &&
+      templatesStore.isEditorMode &&
+      !inSearch
+    ) {
       e.preventDefault();
-      deps.performUndo();
+      void templatesStore.performUndo();
       return;
     }
 

@@ -90,6 +90,58 @@ impl Default for ColumnWidths {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    #[default]
+    Editor,
+    User,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SortMode {
+    Manual,
+    #[default]
+    Recent,
+    MostUsed,
+    NeverUsed,
+}
+
+fn deserialize_theme<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Theme, D::Error> {
+    let raw = String::deserialize(d)?;
+    Ok(match raw.as_str() {
+        "light" => Theme::Light,
+        _ => Theme::Dark,
+    })
+}
+
+fn deserialize_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Mode, D::Error> {
+    let raw = String::deserialize(d)?;
+    Ok(match raw.as_str() {
+        "user" => Mode::User,
+        _ => Mode::Editor,
+    })
+}
+
+fn deserialize_sort_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SortMode, D::Error> {
+    let raw = String::deserialize(d)?;
+    Ok(match raw.as_str() {
+        "manual" => SortMode::Manual,
+        "most_used" => SortMode::MostUsed,
+        "never_used" => SortMode::NeverUsed,
+        _ => SortMode::Recent,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub always_on_top_default: bool,
@@ -102,18 +154,18 @@ pub struct Settings {
     pub close_hint_shown: bool,
     #[serde(default)]
     pub global_signature: String,
-    #[serde(default = "default_theme")]
-    pub theme: String,
-    #[serde(default = "default_mode")]
-    pub mode: String,
+    #[serde(default, deserialize_with = "deserialize_theme")]
+    pub theme: Theme,
+    #[serde(default, deserialize_with = "deserialize_mode")]
+    pub mode: Mode,
     #[serde(default = "default_zoom")]
     pub zoom: f32,
     #[serde(default)]
     pub column_widths: ColumnWidths,
     #[serde(default)]
     pub placeholder_values: HashMap<String, HashMap<String, String>>,
-    #[serde(default = "default_sort_mode")]
-    pub sort_mode: String,
+    #[serde(default, deserialize_with = "deserialize_sort_mode")]
+    pub sort_mode: SortMode,
     #[serde(default)]
     pub tag_order: Vec<String>,
     #[serde(default)]
@@ -130,20 +182,8 @@ pub struct Settings {
     pub translation_model: String,
 }
 
-fn default_theme() -> String {
-    "dark".to_string()
-}
-
-fn default_mode() -> String {
-    "editor".to_string()
-}
-
 fn default_zoom() -> f32 {
     1.0
-}
-
-fn default_sort_mode() -> String {
-    "recent".to_string()
 }
 
 fn default_preview_hotkey() -> String {
@@ -163,12 +203,12 @@ impl Default for Settings {
             window_geometry: None,
             close_hint_shown: false,
             global_signature: String::new(),
-            theme: default_theme(),
-            mode: default_mode(),
+            theme: Theme::default(),
+            mode: Mode::default(),
             zoom: default_zoom(),
             column_widths: ColumnWidths::default(),
             placeholder_values: HashMap::new(),
-            sort_mode: default_sort_mode(),
+            sort_mode: SortMode::default(),
             tag_order: Vec::new(),
             onboarding_complete: false,
             snippets: HashMap::new(),

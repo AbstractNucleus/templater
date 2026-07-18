@@ -27,14 +27,7 @@
     openDataDir,
     checkForUpdate,
     listTemplateBackups,
-    openPreviewWindow,
-    closePreviewWindow,
-    isPreviewOpen,
-    openTranslatorWindow,
-    closeTranslatorWindow,
-    isTranslatorOpen,
   } from "$lib/api";
-  import { emit } from "@tauri-apps/api/event";
   import {
     DEFAULT_COLUMN_WIDTHS,
     type Settings,
@@ -47,6 +40,8 @@
     handleImportTemplates,
   } from "$lib/stores/templatesStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { popouts } from "$lib/stores/popouts.svelte";
+  import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
   import { createGlobalKeydownHandler } from "$lib/keyboard";
 
   const ZOOM_MIN = 0.5;
@@ -156,20 +151,11 @@
   let includeOpening = $state(true);
   let includeSignature = $state(true);
   let editing = $state(false);
-  let settingsOpen = $state(false);
-  let cheatSheetOpen = $state(false);
 
   let copyTrigger = $state(0);
 
-  // Minimal-mode pop-out state. `previewOpen` tracks whether the secondary
-  // preview window is currently visible, so the titlebar toggle reflects reality.
-  let previewOpen = $state(false);
-
-  // Translator pop-out state (always available, not tied to minimal mode).
-  let translatorOpen = $state(false);
-
   let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
-  let contextDeleteTarget = $state<Template | null>(null);
+  let bulkTagDraft = $state("");
 
   // Read-only aliases keep template + derivation code readable. Mutations go
   // directly through the stores so reactivity propagates back.
@@ -395,11 +381,11 @@
       if (isEditorMode) {
         items.push({
           label: `Add tag to ${count}…`,
-          onClick: () => (bulkTagPromptOpen = true),
+          onClick: () => (uiDialogs.bulkTagPromptOpen = true),
         });
         items.push({
           label: `Remove tag from ${count}…`,
-          onClick: () => (bulkRemoveTagPromptOpen = true),
+          onClick: () => (uiDialogs.bulkRemoveTagPromptOpen = true),
         });
       }
       items.push({ label: `Export ${count}…`, onClick: () => void templatesStore.bulkExport(bulk) });
@@ -407,7 +393,7 @@
         items.push({
           label: `Delete ${count}`,
           danger: true,
-          onClick: () => (bulkDeleteConfirmOpen = true),
+          onClick: () => (uiDialogs.bulkDeleteConfirmOpen = true),
         });
       }
       contextMenu = { x, y, items };
@@ -433,20 +419,15 @@
       items.push({
         label: "Delete",
         danger: true,
-        onClick: () => (contextDeleteTarget = tpl),
+        onClick: () => (uiDialogs.contextDeleteTarget = tpl),
       });
     }
     contextMenu = { x, y, items };
   }
 
-  let bulkDeleteConfirmOpen = $state(false);
-  let bulkTagPromptOpen = $state(false);
-  let bulkRemoveTagPromptOpen = $state(false);
-  let bulkTagDraft = $state("");
-
   async function confirmBulkDelete(): Promise<void> {
     const ids = new Set(selectionStore.bulkSelectedIds);
-    bulkDeleteConfirmOpen = false;
+    uiDialogs.bulkDeleteConfirmOpen = false;
     await templatesStore.bulkDelete(ids);
     selectionStore.bulkSelectedIds = new Set();
     if (selectionStore.selectedTemplateId !== null && ids.has(selectionStore.selectedTemplateId)) {
@@ -457,7 +438,7 @@
   async function confirmBulkTag(): Promise<void> {
     const tag = bulkTagDraft.trim();
     if (tag.length === 0) return;
-    bulkTagPromptOpen = false;
+    uiDialogs.bulkTagPromptOpen = false;
     bulkTagDraft = "";
     await templatesStore.bulkAddTag(selectionStore.bulkSelectedIds, tag);
   }
@@ -465,7 +446,7 @@
   async function confirmBulkRemoveTag(): Promise<void> {
     const tag = bulkTagDraft.trim();
     if (tag.length === 0) return;
-    bulkRemoveTagPromptOpen = false;
+    uiDialogs.bulkRemoveTagPromptOpen = false;
     bulkTagDraft = "";
     await templatesStore.bulkRemoveTag(selectionStore.bulkSelectedIds, tag);
   }
@@ -490,9 +471,9 @@
   }
 
   async function confirmContextDelete(): Promise<void> {
-    if (!contextDeleteTarget) return;
-    const id = contextDeleteTarget.id;
-    contextDeleteTarget = null;
+    if (!uiDialogs.contextDeleteTarget) return;
+    const id = uiDialogs.contextDeleteTarget.id;
+    uiDialogs.contextDeleteTarget = null;
     await templatesStore.deleteTemplateById(id);
     selectionStore.pruneBulkSelection(new Set([id]));
     if (selectionStore.selectedTemplateId === id) {
@@ -501,7 +482,7 @@
   }
 
   function cancelContextDelete(): void {
-    contextDeleteTarget = null;
+    uiDialogs.contextDeleteTarget = null;
   }
 
   $effect(() => {
@@ -520,24 +501,14 @@
   // Tray menu → Settings emits this; Rust has already shown + focused the window.
   $effect(() => {
     const unlisten = listen("open-settings", () => {
-      settingsOpen = true;
+      uiDialogs.settingsOpen = true;
     });
     return () => {
       void unlisten.then((u) => u());
     };
   });
 
-  // Global keyboard shortcuts. The handler body lives in $lib/keyboard.ts;
-  // these getters/actions are everything it closes over (live reads via
-  // getters so each keystroke sees current state).
   const handleGlobalKeydown = createGlobalKeydownHandler({
-    isContextDeleteOpen: () => contextDeleteTarget !== null,
-    isSettingsOpen: () => settingsOpen,
-    isBulkDeleteConfirmOpen: () => bulkDeleteConfirmOpen,
-    isBulkTagPromptOpen: () => bulkTagPromptOpen,
-    isBulkRemoveTagPromptOpen: () => bulkRemoveTagPromptOpen,
-    isCheatSheetOpen: () => cheatSheetOpen,
-    setCheatSheetOpen: (v) => (cheatSheetOpen = v),
     getZoom: () => templatesStore.settings.zoom ?? 1,
     setZoom,
     zoomStep: ZOOM_STEP,
@@ -545,171 +516,46 @@
     getSearchQuery: () => searchQuery,
     clearSearch,
     isEditing: () => editing || creatingDraft !== null,
-    isEditorMode: () => isEditorMode,
     isInputFocused,
     moveSelection,
     copySelected,
-    performUndo: () => void templatesStore.performUndo(),
     isMinimal: () => isMinimal,
-    isPreviewOpen: () => previewOpen,
-    togglePreview: () => void togglePreview(),
-    previewHotkey: () => settings.preview_hotkey,
-    isTranslatorOpen: () => translatorOpen,
-    toggleTranslator: () => void toggleTranslator(),
   });
 
-  /** Build the payload pushed to the preview window. Includes everything the
-   *  pop-out needs to render TemplateView without re-reading the store. */
-  function buildPreviewPayload(): {
-    template: Template | null;
-    globalSignature: string;
-    snippets: Record<string, string>;
-    placeholderValues: Record<string, string>;
-    canEdit: boolean;
-    theme: "dark" | "light";
-    previewHotkey: string;
-  } {
-    return {
-      template: selectedTemplate,
-      globalSignature: settings.global_signature,
-      snippets: settings.snippets,
-      placeholderValues:
-        (selectedTemplate && settings.placeholder_values[selectedTemplate.id]) ?? {},
-      canEdit: isEditorMode,
-      theme: settings.theme,
-      previewHotkey: settings.preview_hotkey,
-    };
-  }
-
-  async function togglePreview(): Promise<void> {
-    if (previewOpen) {
-      try {
-        await closePreviewWindow();
-      } catch {
-        /* ignore */
-      }
-      previewOpen = false;
-    } else {
-      try {
-        await openPreviewWindow();
-        previewOpen = true;
-        // Push the current selection immediately so the pop-out isn't blank.
-        void emit("preview-payload", buildPreviewPayload());
-      } catch (e) {
-        templatesStore.loadError = `open preview failed: ${e}`;
-      }
-    }
-  }
-
-  function buildTranslatorPayload(): {
-    openrouterApiKey: string;
-    translationModel: string;
-    theme: "dark" | "light";
-  } {
-    return {
-      openrouterApiKey: settings.openrouter_api_key,
-      translationModel: settings.translation_model,
-      theme: settings.theme,
-    };
-  }
-
-  async function toggleTranslator(): Promise<void> {
-    if (translatorOpen) {
-      try {
-        await closeTranslatorWindow();
-      } catch {
-        /* ignore */
-      }
-      translatorOpen = false;
-    } else {
-      try {
-        await openTranslatorWindow();
-        translatorOpen = true;
-        void emit("translator-payload", buildTranslatorPayload());
-      } catch (e) {
-        templatesStore.loadError = `open translator failed: ${e}`;
-      }
-    }
+  function previewPayload() {
+    return popouts.buildPreviewPayload(isEditorMode, selectedTemplate);
   }
 
   // Push the current template to the pop-out whenever the selection or any
   // relevant setting changes — but only while the pop-out is open.
   $effect(() => {
-    // Read the deps so Svelte re-runs this effect when any of them change.
     void selectedTemplate;
     void settings.global_signature;
     void settings.snippets;
     void settings.placeholder_values;
     void settings.theme;
     void settings.preview_hotkey;
-    if (!previewOpen) return;
-    void emit("preview-payload", buildPreviewPayload());
+    popouts.pushPreview(previewPayload());
   });
 
-  // Push settings to the translator pop-out whenever they change.
   $effect(() => {
     void settings.openrouter_api_key;
     void settings.translation_model;
     void settings.theme;
-    if (!translatorOpen) return;
-    void emit("translator-payload", buildTranslatorPayload());
+    popouts.pushTranslator(popouts.buildTranslatorPayload());
   });
 
-  // The pop-out asks for the current payload on mount (and whenever it's
-  // re-shown). Also handle its reports: copy success and placeholder changes
-  // are mirrored back into the main store so it stays the source of truth.
   $effect(() => {
-    const unlistenRequest = listen("preview-request-payload", () => {
-      void emit("preview-payload", buildPreviewPayload());
+    return popouts.mountListeners({
+      getPreviewPayload: previewPayload,
+      getTranslatorPayload: () => popouts.buildTranslatorPayload(),
     });
-    const unlistenCopy = listen<{ templateId: string }>(
-      "preview-copy-success",
-      (e) => {
-        void templatesStore.recordCopy(e.payload.templateId);
-      },
-    );
-    const unlistenPlaceholder = listen<{
-      templateId: string;
-      values: Record<string, string>;
-    }>("preview-placeholder-change", (e) => {
-      void templatesStore.recordPlaceholderValues(
-        e.payload.templateId,
-        e.payload.values,
-      );
-    });
-    const unlistenClosed = listen("preview-closed", () => {
-      previewOpen = false;
-    });
-    // Space inside the pop-out requests that we close it — the main window
-    // owns the actual hide() call (and the previewOpen toggle state).
-    const unlistenRequestClose = listen("preview-request-close", () => {
-      void closePreviewWindow().catch(() => {});
-      previewOpen = false;
-    });
-    const unlistenTranslatorRequest = listen("translator-request-payload", () => {
-      void emit("translator-payload", buildTranslatorPayload());
-    });
-    const unlistenTranslatorClosed = listen("translator-closed", () => {
-      translatorOpen = false;
-    });
-    return () => {
-      void unlistenRequest.then((u) => u());
-      void unlistenCopy.then((u) => u());
-      void unlistenPlaceholder.then((u) => u());
-      void unlistenClosed.then((u) => u());
-      void unlistenRequestClose.then((u) => u());
-      void unlistenTranslatorRequest.then((u) => u());
-      void unlistenTranslatorClosed.then((u) => u());
-    };
   });
 
   // When minimal mode turns off, hide any stray preview window so the toggle
   // state can't dangle open without the affordance that controls it.
   $effect(() => {
-    if (!isMinimal && previewOpen) {
-      void closePreviewWindow().catch(() => {});
-      previewOpen = false;
-    }
+    if (!isMinimal) popouts.closePreviewForMinimalOff();
   });
 
   // Shrink the main window to just Tags + Templates when minimal mode engages,
@@ -752,27 +598,9 @@
     })();
   });
 
-  // On first load, query whether the preview window is already open (e.g. the
-  // user reopened the app while it was still visible). Keeps the toggle honest.
+  // On first load, query whether satellite windows are already open.
   $effect(() => {
-    void (async () => {
-      try {
-        previewOpen = await isPreviewOpen();
-      } catch {
-        previewOpen = false;
-      }
-    })();
-  });
-
-  // Same for the translator window.
-  $effect(() => {
-    void (async () => {
-      try {
-        translatorOpen = await isTranslatorOpen();
-      } catch {
-        translatorOpen = false;
-      }
-    })();
+    void popouts.syncOpenFlags();
   });
 
 </script>
@@ -781,17 +609,19 @@
 
 <div class="frame">
   <TitleBar
-    onOpenSettings={() => (settingsOpen = true)}
+    onOpenSettings={() => (uiDialogs.settingsOpen = true)}
     showSearch={!editing && creatingDraft === null}
     {searchQuery}
     onSearchChange={handleSearchChange}
     onClearSearch={clearSearch}
     onSearchInputMount={(el) => (searchInput = el ?? undefined)}
     minimal={isMinimal}
-    {previewOpen}
-    onTogglePreview={() => void togglePreview()}
-    {translatorOpen}
-    onToggleTranslator={() => void toggleTranslator()}
+    previewOpen={popouts.previewOpen}
+    onTogglePreview={() => void popouts.togglePreview(previewPayload)}
+    translatorOpen={popouts.translatorOpen}
+    onToggleTranslator={() =>
+      void popouts.toggleTranslator(() => popouts.buildTranslatorPayload())
+    }
   />
   <div class="shell">
     {#if !loaded}
@@ -813,26 +643,24 @@
     {:else if creatingDraft !== null}
       <MainPanel
         {...sharedMainPanelProps}
-        template={null}
-        {creatingDraft}
-        editing={false}
-        onEnterEdit={() => {}}
-        onCancelEdit={cancelCreateDraft}
-        onSave={() => {}}
-        onCreate={handleCreateDraft}
-        onDuplicate={() => {}}
-        onDelete={() => {}}
+        mode={{
+          kind: "create",
+          draft: creatingDraft,
+          onCancel: cancelCreateDraft,
+          onCreate: handleCreateDraft,
+        }}
       />
-    {:else if editing}
+    {:else if editing && selectedTemplate}
       <MainPanel
         {...sharedMainPanelProps}
-        template={selectedTemplate}
-        editing={true}
-        onEnterEdit={() => {}}
-        onCancelEdit={cancelEditMode}
-        onSave={handleSave}
-        onDuplicate={() => void duplicateSelectedTemplate()}
-        onDelete={() => void deleteSelectedTemplate()}
+        mode={{
+          kind: "edit",
+          template: selectedTemplate,
+          onCancel: cancelEditMode,
+          onSave: handleSave,
+          onDuplicate: () => void duplicateSelectedTemplate(),
+          onDelete: () => void deleteSelectedTemplate(),
+        }}
       />
     {:else}
       <TagsSidebar
@@ -876,10 +704,10 @@
         onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
         onMoveToFolder={(ids, folder) => void templatesStore.moveToFolder(ids, folder)}
         onSortModeToggle={() => templatesStore.handleSortModeToggle()}
-        onBulkAddTag={() => (bulkTagPromptOpen = true)}
-        onBulkRemoveTag={() => (bulkRemoveTagPromptOpen = true)}
+        onBulkAddTag={() => (uiDialogs.bulkTagPromptOpen = true)}
+        onBulkRemoveTag={() => (uiDialogs.bulkRemoveTagPromptOpen = true)}
         onBulkExport={() => void templatesStore.bulkExport(selectionStore.bulkSelectedIds)}
-        onBulkDelete={() => (bulkDeleteConfirmOpen = true)}
+        onBulkDelete={() => (uiDialogs.bulkDeleteConfirmOpen = true)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       {#if !isMinimal}
@@ -890,13 +718,14 @@
         ></div>
         <MainPanel
           {...sharedMainPanelProps}
-          template={selectedTemplate}
-          editing={false}
-          onEnterEdit={enterEditMode}
-          onCancelEdit={cancelEditMode}
-          onSave={handleSave}
-          onDuplicate={() => void duplicateSelectedTemplate()}
-          onDelete={() => void deleteSelectedTemplate()}
+          mode={{
+            kind: "browse",
+            template: selectedTemplate,
+            onEnterEdit: enterEditMode,
+            onSave: handleSave,
+            onDuplicate: () => void duplicateSelectedTemplate(),
+            onDelete: () => void deleteSelectedTemplate(),
+          }}
         />
       {/if}
     {/if}
@@ -914,12 +743,12 @@
 
 <ResizeHandles />
 
-{#if settingsOpen}
+{#if uiDialogs.settingsOpen}
   <SettingsModal
     {settings}
     currentVersion={appVersion}
     tagCounts={settingsTagCounts}
-    onClose={() => (settingsOpen = false)}
+    onClose={() => (uiDialogs.settingsOpen = false)}
     onUpdate={handleSettingsUpdate}
     onExportTemplates={handleExportTemplates}
     onImportTemplates={handleImportTemplates}
@@ -929,17 +758,17 @@
     onRenameTag={handleRenameTag}
     onDeleteTag={handleDeleteTag}
     onOpenCheatSheet={() => {
-      settingsOpen = false;
-      cheatSheetOpen = true;
+      uiDialogs.settingsOpen = false;
+      uiDialogs.cheatSheetOpen = true;
     }}
   />
 {/if}
 
-{#if cheatSheetOpen}
+{#if uiDialogs.cheatSheetOpen}
   <CheatSheet
     globalHotkey={settings.global_hotkey}
     previewHotkey={settings.preview_hotkey}
-    onClose={() => (cheatSheetOpen = false)}
+    onClose={() => (uiDialogs.cheatSheetOpen = false)}
   />
 {/if}
 
@@ -955,7 +784,7 @@
   />
 {/if}
 
-{#if bulkDeleteConfirmOpen}
+{#if uiDialogs.bulkDeleteConfirmOpen}
   <ConfirmDialog
     title="Delete {selectionStore.bulkSelectedIds.size} templates?"
     message="Ctrl+Z will restore them."
@@ -963,11 +792,11 @@
     danger
     ariaLabel="Confirm bulk delete"
     onConfirm={() => void confirmBulkDelete()}
-    onCancel={() => (bulkDeleteConfirmOpen = false)}
+    onCancel={() => (uiDialogs.bulkDeleteConfirmOpen = false)}
   />
 {/if}
 
-{#if bulkTagPromptOpen}
+{#if uiDialogs.bulkTagPromptOpen}
   <ConfirmDialog
     title="Add tag to {selectionStore.bulkSelectedIds.size} templates"
     confirmLabel="Add"
@@ -978,14 +807,14 @@
     confirmDisabled={bulkTagDraft.trim().length === 0}
     onConfirm={() => void confirmBulkTag()}
     onCancel={() => {
-      bulkTagPromptOpen = false;
+      uiDialogs.bulkTagPromptOpen = false;
       bulkTagDraft = "";
     }}
-    onDismiss={() => (bulkTagPromptOpen = false)}
+    onDismiss={() => (uiDialogs.bulkTagPromptOpen = false)}
   />
 {/if}
 
-{#if bulkRemoveTagPromptOpen}
+{#if uiDialogs.bulkRemoveTagPromptOpen}
   <ConfirmDialog
     title="Remove tag from {selectionStore.bulkSelectedIds.size} templates"
     confirmLabel="Remove"
@@ -997,10 +826,10 @@
     confirmDisabled={bulkTagDraft.trim().length === 0}
     onConfirm={() => void confirmBulkRemoveTag()}
     onCancel={() => {
-      bulkRemoveTagPromptOpen = false;
+      uiDialogs.bulkRemoveTagPromptOpen = false;
       bulkTagDraft = "";
     }}
-    onDismiss={() => (bulkRemoveTagPromptOpen = false)}
+    onDismiss={() => (uiDialogs.bulkRemoveTagPromptOpen = false)}
   />
 {/if}
 
@@ -1013,10 +842,10 @@
   />
 {/if}
 
-{#if contextDeleteTarget}
+{#if uiDialogs.contextDeleteTarget}
   <ConfirmDialog
     title="Delete template?"
-    name={contextDeleteTarget.name}
+    name={uiDialogs.contextDeleteTarget.name}
     message="Ctrl+Z will restore it."
     confirmLabel="Delete"
     danger

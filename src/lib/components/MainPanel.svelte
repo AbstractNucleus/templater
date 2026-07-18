@@ -3,63 +3,99 @@
   import TemplateView from "./TemplateView.svelte";
   import TemplateEditPanel from "./TemplateEditPanel.svelte";
 
-  let {
-    template,
-    includeOpening,
-    includeSignature,
-    editing,
-    globalSignature,
-    snippets,
-    canEdit,
-    availableTags,
-    availableFolders,
-    copyTrigger,
-    savedPlaceholderValues,
-    onToggleOpening,
-    onToggleSignature,
-    onEnterEdit,
-    onCancelEdit,
-    onSave,
-    onCreate = () => {},
-    onDuplicate,
-    onDelete,
-    onCopySuccess,
-    onPlaceholderValuesChange,
-    onRevertHistory,
-    creatingDraft = null,
-  }: {
-    template: Template | null;
+  type SharedProps = {
     includeOpening: boolean;
     includeSignature: boolean;
-    editing: boolean;
     globalSignature: string;
     snippets: Record<string, string>;
     canEdit: boolean;
     availableTags: string[];
     availableFolders: string[];
     copyTrigger: number;
-    /** Persisted per-template fill-ins. Outer key: template id. */
     savedPlaceholderValues: Record<string, Record<string, string>>;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
-    onEnterEdit: () => void;
-    onCancelEdit: () => void;
-    onSave: (t: Template) => void;
-    onCreate?: (draft: TemplateDraft) => void;
-    onDuplicate: () => void;
-    onDelete: () => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
     onRevertHistory: (templateId: string, versionIdx: number) => void;
-    creatingDraft?: TemplateDraft | null;
-  } = $props();
+  };
+
+  type PanelMode =
+    | {
+        kind: "create";
+        draft: TemplateDraft;
+        onCancel: () => void;
+        onCreate: (draft: TemplateDraft) => void;
+      }
+    | {
+        kind: "edit";
+        template: Template;
+        onCancel: () => void;
+        onSave: (t: Template) => void;
+        onDuplicate: () => void;
+        onDelete: () => void;
+      }
+    | {
+        kind: "browse";
+        template: Template | null;
+        onEnterEdit: () => void;
+        onSave: (t: Template) => void;
+        onDuplicate: () => void;
+        onDelete: () => void;
+      };
+
+  let { mode, ...shared }: { mode: PanelMode } & SharedProps = $props();
 </script>
 
 <section class="main">
-  {#if !template && !creatingDraft}
+  {#if mode.kind === "create"}
+    <TemplateEditPanel
+      template={null}
+      editing={false}
+      canEdit={shared.canEdit}
+      availableTags={shared.availableTags}
+      availableFolders={shared.availableFolders}
+      creatingDraft={mode.draft}
+      onCancelEdit={mode.onCancel}
+      onSave={() => {}}
+      onCreate={mode.onCreate}
+    />
+  {:else if mode.kind === "edit"}
+    <TemplateEditPanel
+      template={mode.template}
+      editing={true}
+      canEdit={shared.canEdit}
+      availableTags={shared.availableTags}
+      availableFolders={shared.availableFolders}
+      creatingDraft={null}
+      onCancelEdit={mode.onCancel}
+      onSave={mode.onSave}
+      onCreate={() => {}}
+    />
+  {:else if mode.template}
+    <TemplateView
+      template={mode.template}
+      includeOpening={shared.includeOpening}
+      includeSignature={shared.includeSignature}
+      globalSignature={shared.globalSignature}
+      snippets={shared.snippets}
+      canEdit={shared.canEdit}
+      copyTrigger={shared.copyTrigger}
+      savedPlaceholderValues={shared.savedPlaceholderValues}
+      onToggleOpening={shared.onToggleOpening}
+      onToggleSignature={shared.onToggleSignature}
+      onEnterEdit={mode.onEnterEdit}
+      onSave={mode.onSave}
+      onDuplicate={mode.onDuplicate}
+      onDelete={mode.onDelete}
+      onCopySuccess={shared.onCopySuccess}
+      onPlaceholderValuesChange={shared.onPlaceholderValuesChange}
+      onRevertHistory={shared.onRevertHistory}
+    />
+  {:else}
     <div class="empty">
       <p class="empty-line">
-        {canEdit
+        {shared.canEdit
           ? "Select a template from the sidebar, or create a new one."
           : "Select a template from the sidebar."}
       </p>
@@ -71,38 +107,6 @@
         <span><kbd>?</kbd> all shortcuts</span>
       </div>
     </div>
-  {:else if canEdit && (creatingDraft || editing)}
-    <TemplateEditPanel
-      {template}
-      {editing}
-      {canEdit}
-      {availableTags}
-      {availableFolders}
-      {creatingDraft}
-      {onCancelEdit}
-      {onSave}
-      {onCreate}
-    />
-  {:else if template}
-    <TemplateView
-      {template}
-      {includeOpening}
-      {includeSignature}
-      {globalSignature}
-      {snippets}
-      {canEdit}
-      {copyTrigger}
-      {savedPlaceholderValues}
-      {onToggleOpening}
-      {onToggleSignature}
-      {onEnterEdit}
-      {onSave}
-      {onDuplicate}
-      {onDelete}
-      {onCopySuccess}
-      {onPlaceholderValuesChange}
-      {onRevertHistory}
-    />
   {/if}
 </section>
 
