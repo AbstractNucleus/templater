@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Settings } from "$lib/types";
-  import { setHotkey, type BackupEntry } from "$lib/api";
+  import type { PortResult, Settings } from "$lib/types";
+  import { setHotkey, type BackupEntry, type UpdateInfo } from "$lib/api";
   import TagsSection from "./settings/TagsSection.svelte";
   import BackupsSection from "./settings/BackupsSection.svelte";
   import WindowSection from "./settings/WindowSection.svelte";
@@ -9,18 +9,6 @@
   import GeneralSection from "./settings/GeneralSection.svelte";
   import SnippetsSection from "./settings/SnippetsSection.svelte";
   import ImportExportSection from "./settings/ImportExportSection.svelte";
-
-  type PortResult =
-    | { kind: "ok"; message: string }
-    | { kind: "cancelled" }
-    | { kind: "err"; error: string };
-
-  type UpdateInfo = {
-    version: string;
-    currentVersion: string;
-    notes: string;
-    install: (onProgress?: (received: number, total: number | null) => void) => Promise<void>;
-  };
 
   type TabId =
     | "general"

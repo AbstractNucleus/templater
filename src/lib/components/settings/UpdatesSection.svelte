@@ -1,10 +1,5 @@
 <script lang="ts">
-  type UpdateInfo = {
-    version: string;
-    currentVersion: string;
-    notes: string;
-    install: (onProgress?: (received: number, total: number | null) => void) => Promise<void>;
-  };
+  import type { UpdateInfo } from "$lib/api";
 
   type UpdateState =
     | { kind: "idle" }

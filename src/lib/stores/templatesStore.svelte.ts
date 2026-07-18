@@ -16,6 +16,7 @@ import { normalizeTag } from "$lib/tags";
 import {
   DEFAULT_SETTINGS,
   TEMPLATE_HISTORY_CAP,
+  type PortResult,
   type Settings,
   type Template,
   type TemplateVersion,
@@ -467,11 +468,6 @@ function slugify(s: string): string {
 }
 
 export const templatesStore = new TemplatesStore();
-
-export type PortResult =
-  | { kind: "ok"; message: string }
-  | { kind: "cancelled" }
-  | { kind: "err"; error: string };
 
 function pluralise(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;

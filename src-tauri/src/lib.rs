@@ -41,127 +41,121 @@ fn reset_window_position(
     Ok(())
 }
 
-/// Gap (logical px) between the main window's left edge and the preview window's
-/// right edge when parked to the left.
-const PREVIEW_GAP: i32 = 0;
+/// Default translator window height (logical px).
+const TRANSLATOR_DEFAULT_HEIGHT: u32 = 360;
+
+/// Where to park a satellite window relative to the main window.
+enum Placement {
+    /// Same height as main, flush to its left edge.
+    LeftOfMain,
+    /// Fixed height, flush above the main window's top edge.
+    AboveMain { height: u32 },
+}
+
+/// Show `label` parked beside/above the main window. If main geometry can't be
+/// read, shows the satellite without repositioning.
+fn park_satellite(
+    app: &tauri::AppHandle,
+    label: &str,
+    placement: Placement,
+) -> Result<(), String> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Err("main window not found".into());
+    };
+    let satellite = app
+        .get_webview_window(label)
+        .ok_or_else(|| format!("{label} window not found"))?;
+
+    let (Ok(main_pos), Ok(main_size)) = (main.outer_position(), main.outer_size()) else {
+        // Best-effort: just show it without repositioning.
+        let _ = satellite.show();
+        let _ = satellite.set_focus();
+        return Ok(());
+    };
+
+    let (size, pos) = match placement {
+        Placement::LeftOfMain => {
+            let w = main_size.width;
+            let x = (main_pos.x - w as i32).max(0);
+            (
+                PhysicalSize::new(w, main_size.height),
+                PhysicalPosition::new(x, main_pos.y),
+            )
+        }
+        Placement::AboveMain { height } => {
+            let y = (main_pos.y - height as i32).max(0);
+            (
+                PhysicalSize::new(main_size.width, height),
+                PhysicalPosition::new(main_pos.x, y),
+            )
+        }
+    };
+
+    let _ = satellite.set_size(size);
+    let _ = satellite.set_position(pos);
+    // Inherit always-on-top so the pop-out stacks with main rather than
+    // sliding under other apps.
+    let _ = satellite.set_always_on_top(main.is_always_on_top().unwrap_or(false));
+    let _ = satellite.show();
+    let _ = satellite.set_focus();
+    Ok(())
+}
+
+fn close_satellite(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.hide();
+    }
+    Ok(())
+}
+
+fn is_satellite_open(app: &tauri::AppHandle, label: &str) -> bool {
+    app.get_webview_window(label)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
 
 /// Show the preview window parked to the left of the main window. If the
 /// preview window is already visible, this is a no-op (selection updates are
 /// delivered via events from the frontend, not by re-opening the window).
 #[tauri::command]
 fn open_preview_window(app: tauri::AppHandle) -> Result<(), String> {
-    let Some(main) = app.get_webview_window("main") else {
-        return Err("main window not found".into());
-    };
-    let preview = app
-        .get_webview_window("preview")
-        .ok_or_else(|| "preview window not found".to_string())?;
-
-    let (Ok(main_pos), Ok(main_size)) = (main.outer_position(), main.outer_size()) else {
-        // Best-effort: just show it without repositioning.
-        let _ = preview.show();
-        let _ = preview.set_focus();
-        return Ok(());
-    };
-
-    let preview_w = main_size.width;
-    // Park to the left of the main window, top-aligned with it, no gap.
-    let x = main_pos.x - preview_w as i32 - PREVIEW_GAP;
-    let y = main_pos.y;
-    // Clamp: if the derived x would be off the left edge of the screen, just
-    // butt the preview against the main window's left side and let the OS clip.
-    let clamped_x = if x < 0 { 0 } else { x };
-
-    let _ = preview.set_size(PhysicalSize::new(preview_w, main_size.height));
-    let _ = preview.set_position(PhysicalPosition::new(clamped_x, y));
-    // Inherit the main window's always-on-top state so the pop-out stacks
-    // with the main window rather than sliding under other apps.
-    if let Ok(true) = main.is_always_on_top() {
-        let _ = preview.set_always_on_top(true);
-    } else {
-        let _ = preview.set_always_on_top(false);
-    }
-    let _ = preview.show();
-    let _ = preview.set_focus();
-    Ok(())
+    park_satellite(&app, "preview", Placement::LeftOfMain)
 }
 
 /// Hide the preview window.
 #[tauri::command]
 fn close_preview_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(preview) = app.get_webview_window("preview") {
-        let _ = preview.hide();
-    }
-    Ok(())
+    close_satellite(&app, "preview")
 }
 
 /// Returns true if the preview window currently exists and is visible.
 #[tauri::command]
 fn is_preview_open(app: tauri::AppHandle) -> bool {
-    app.get_webview_window("preview")
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false)
+    is_satellite_open(&app, "preview")
 }
-
-/// Gap (logical px) between the main window's top edge and the translator
-/// window's bottom edge when parked above.
-const TRANSLATOR_GAP: i32 = 0;
-/// Default translator window height (logical px) when the main window is too
-/// short to derive a sensible height.
-const TRANSLATOR_DEFAULT_HEIGHT: u32 = 360;
 
 /// Show the translator window parked above the main window, matching its width.
 #[tauri::command]
 fn open_translator_window(app: tauri::AppHandle) -> Result<(), String> {
-    let Some(main) = app.get_webview_window("main") else {
-        return Err("main window not found".into());
-    };
-    let translator = app
-        .get_webview_window("translator")
-        .ok_or_else(|| "translator window not found".to_string())?;
-
-    let (Ok(main_pos), Ok(main_size)) = (main.outer_position(), main.outer_size()) else {
-        let _ = translator.show();
-        let _ = translator.set_focus();
-        return Ok(());
-    };
-
-    let translator_h = TRANSLATOR_DEFAULT_HEIGHT;
-    // Park above the main window, same width, bottom-aligned above it.
-    let x = main_pos.x;
-    let y = main_pos.y - translator_h as i32 - TRANSLATOR_GAP;
-    // Clamp: if the derived y would be off the top of the screen, butt it
-    // against the top edge.
-    let clamped_y = if y < 0 { 0 } else { y };
-
-    let _ = translator.set_size(PhysicalSize::new(main_size.width, translator_h));
-    let _ = translator.set_position(PhysicalPosition::new(x, clamped_y));
-    // Inherit always-on-top from main window.
-    if let Ok(true) = main.is_always_on_top() {
-        let _ = translator.set_always_on_top(true);
-    } else {
-        let _ = translator.set_always_on_top(false);
-    }
-    let _ = translator.show();
-    let _ = translator.set_focus();
-    Ok(())
+    park_satellite(
+        &app,
+        "translator",
+        Placement::AboveMain {
+            height: TRANSLATOR_DEFAULT_HEIGHT,
+        },
+    )
 }
 
 /// Hide the translator window.
 #[tauri::command]
 fn close_translator_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(translator) = app.get_webview_window("translator") {
-        let _ = translator.hide();
-    }
-    Ok(())
+    close_satellite(&app, "translator")
 }
 
 /// Returns true if the translator window currently exists and is visible.
 #[tauri::command]
 fn is_translator_open(app: tauri::AppHandle) -> bool {
-    app.get_webview_window("translator")
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false)
+    is_satellite_open(&app, "translator")
 }
 
 /// Returns true if the saved top-left corner falls inside any connected monitor.

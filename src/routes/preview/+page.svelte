@@ -1,12 +1,7 @@
 <script lang="ts">
-  import { listen } from "@tauri-apps/api/event";
-  import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-  import { emit } from "@tauri-apps/api/event";
-  import type { Template, Settings } from "$lib/types";
-  import { composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
-  import CopyButton from "$lib/components/CopyButton.svelte";
-  import PlaceholderFills from "$lib/components/PlaceholderFills.svelte";
+  import { listen, emit } from "@tauri-apps/api/event";
+  import type { Template } from "$lib/types";
+  import TemplatePreview from "$lib/components/TemplatePreview.svelte";
   import { matchesAccelerator } from "$lib/keyboard";
 
   /** Payload pushed from the main window whenever the selection or relevant
@@ -23,19 +18,11 @@
   }
 
   let payload = $state<PreviewPayload | null>(null);
+  /** Bumped on each payload so TemplatePreview re-seeds fills from the store. */
+  let valuesRevision = $state(0);
 
   let includeOpening = $state(true);
   let includeSignature = $state(true);
-
-  let placeholderValues = $state<Record<string, string>>({});
-
-  let copyState = $state<"idle" | "ok" | "error">("idle");
-  let copyTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Persisted-fill debounce back to the main window so its store stays the
-  // source of truth for cross-session survival.
-  let persistTimer: ReturnType<typeof setTimeout> | null = null;
-  const PERSIST_DEBOUNCE_MS = 400;
 
   $effect(() => {
     if (payload && typeof document !== "undefined") {
@@ -46,9 +33,7 @@
   $effect(() => {
     const unlisten = listen<PreviewPayload>("preview-payload", (e) => {
       payload = e.payload;
-      if (payload) {
-        placeholderValues = { ...payload.placeholderValues };
-      }
+      valuesRevision += 1;
     });
     return () => {
       void unlisten.then((u) => u());
@@ -64,48 +49,24 @@
   const template = $derived(payload?.template ?? null);
   const globalSignature = $derived(payload?.globalSignature ?? "");
   const snippets = $derived(payload?.snippets ?? {});
-
-  const composed = $derived(
-    template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
+  const savedPlaceholderValues = $derived(
+    template && payload
+      ? { [template.id]: payload.placeholderValues }
+      : ({} as Record<string, Record<string, string>>),
   );
-  const previewSegments = $derived(
-    template ? splitPlaceholders(composed, placeholderValues, new Date(), snippets) : [],
-  );
-  const composedFilled = $derived(previewSegments.map((s) => s.text).join(""));
-  const placeholders = $derived(template ? extractPlaceholders(composed, snippets) : []);
-  const signatureAvailable = $derived(globalSignature.trim().length > 0);
 
-  function setPlaceholderValue(key: string, value: string): void {
-    placeholderValues = { ...placeholderValues, [key]: value };
-    if (persistTimer) clearTimeout(persistTimer);
-    const id = template?.id;
-    if (!id) return;
-    persistTimer = setTimeout(() => {
-      persistTimer = null;
-      void emit("preview-placeholder-change", { templateId: id, values: placeholderValues });
-    }, PERSIST_DEBOUNCE_MS);
+  function handlePlaceholderChange(
+    templateId: string,
+    values: Record<string, string>,
+  ): void {
+    void emit("preview-placeholder-change", { templateId, values });
   }
 
-  async function copyToClipboard(): Promise<void> {
-    if (!template || composedFilled.trim().length === 0) return;
-    const id = template.id;
-    try {
-      await writeText(composedFilled);
-      copyState = "ok";
-      if (persistTimer) {
-        clearTimeout(persistTimer);
-        persistTimer = null;
-        void emit("preview-placeholder-change", { templateId: id, values: placeholderValues });
-      }
-      void emit("preview-copy-success", { templateId: id });
-      // Hide the pop-out — the copy is done, no reason to linger. The main
-      // window owns the hide() call via its preview-request-close listener.
-      void emit("preview-request-close");
-    } catch {
-      copyState = "error";
-    }
-    if (copyTimer) clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => (copyState = "idle"), 1500);
+  function handleCopySuccess(templateId: string): void {
+    void emit("preview-copy-success", { templateId });
+    // Hide the pop-out — the copy is done, no reason to linger. The main
+    // window owns the hide() call via its preview-request-close listener.
+    void emit("preview-request-close");
   }
 
   // Bare Space closes the pop-out — mirrors the main window's Space→toggle
@@ -143,48 +104,19 @@
     </header>
 
     <div class="body">
-      {#if template.tags.length > 0}
-        <div class="tag-chips">
-          {#each template.tags as t (t)}
-            <span class="tag-chip">{t}</span>
-          {/each}
-        </div>
-      {/if}
-
-      <div class="toggles">
-        <label class:disabled={template.opening.trim().length === 0}>
-          <input
-            type="checkbox"
-            checked={includeOpening}
-            disabled={template.opening.trim().length === 0}
-            onchange={(e) => (includeOpening = e.currentTarget.checked)}
-          />
-          Include opening
-        </label>
-        <label class:disabled={!signatureAvailable}>
-          <input
-            type="checkbox"
-            checked={includeSignature}
-            disabled={!signatureAvailable}
-            onchange={(e) => (includeSignature = e.currentTarget.checked)}
-          />
-          Include signature
-        </label>
-      </div>
-
-      <pre class="preview">{#each previewSegments as seg}{#if seg.placeholder}<span class="placeholder">{seg.text}</span>{:else}{seg.text}{/if}{/each}</pre>
-
-      <PlaceholderFills {placeholders} values={placeholderValues} onSetValue={setPlaceholderValue} />
-
-      <div class="footer">
-        <div class="footer-spacer"></div>
-        <CopyButton
-          {copyState}
-          showKbd
-          disabled={composedFilled.trim().length === 0}
-          onclick={() => void copyToClipboard()}
-        />
-      </div>
+      <TemplatePreview
+        {template}
+        {includeOpening}
+        {includeSignature}
+        {globalSignature}
+        {snippets}
+        {savedPlaceholderValues}
+        {valuesRevision}
+        onToggleOpening={(v) => (includeOpening = v)}
+        onToggleSignature={(v) => (includeSignature = v)}
+        onCopySuccess={handleCopySuccess}
+        onPlaceholderValuesChange={handlePlaceholderChange}
+      />
     </div>
   </div>
 {:else}
@@ -330,81 +262,5 @@
     font-size: 0.9rem;
     margin: auto;
     text-align: center;
-  }
-
-  .tag-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-bottom: 8px;
-  }
-
-  .tag-chip {
-    font-size: 0.68rem;
-    line-height: 1;
-    padding: 3px 7px;
-    border-radius: 999px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-  }
-
-  .toggles {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 10px;
-    font-size: 0.82rem;
-    color: var(--text);
-  }
-
-  .toggles label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-  }
-
-  .toggles label.disabled {
-    color: var(--text-placeholder);
-    cursor: default;
-  }
-
-  .toggles input[type="checkbox"] {
-    accent-color: var(--accent-brand);
-  }
-
-  .preview {
-    flex: 1;
-    margin: 0 0 14px;
-    padding: 16px 18px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-family: -apple-system, "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
-    font-size: 0.9rem;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    overflow-y: auto;
-    min-height: 100px;
-  }
-
-  .preview .placeholder {
-    color: var(--accent-info-text);
-    background: var(--accent-info-bg);
-    border-radius: 3px;
-    padding: 0 3px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.82em;
-  }
-
-  .footer {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .footer-spacer {
-    flex: 1;
   }
 </style>

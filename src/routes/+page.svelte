@@ -14,6 +14,12 @@
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { searchTemplates } from "$lib/search";
+  import {
+    canReorder,
+    filterByTags,
+    groupPinnedHits,
+    sortTemplates,
+  } from "$lib/browse";
   import { orderedTagCounts } from "$lib/tags";
   import { buildContextMenu } from "$lib/contextMenu";
   import {
@@ -192,74 +198,33 @@
     return [...set].sort();
   });
 
-  // Browse order: pinned first, then by sort mode. "manual" preserves array
-  // order; "recent" by last_used_at desc; "most_used" by copy_count desc.
-  const browseOrdered = $derived.by(() => {
-    const mode = settings.sort_mode;
-    return [...templates].sort((a, b) => {
-      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      if (mode === "recent") {
-        const aT = a.last_used_at ?? "";
-        const bT = b.last_used_at ?? "";
-        if (aT !== bT) return aT > bT ? -1 : 1;
-        return 0;
-      }
-      if (mode === "most_used") {
-        if (a.copy_count !== b.copy_count) return b.copy_count - a.copy_count;
-        return 0;
-      }
-      if (mode === "never_used") {
-        const aNever = a.copy_count === 0 && a.last_used_at === null;
-        const bNever = b.copy_count === 0 && b.last_used_at === null;
-        if (aNever !== bNever) return aNever ? -1 : 1;
-        return 0;
-      }
-      return 0;
-    });
-  });
+  const browseOrdered = $derived(sortTemplates(templates, settings.sort_mode));
 
-  const tagFiltered = $derived.by(() => {
-    if (selectionStore.selectedTagIds.size === 0 && selectionStore.excludedTagIds.size === 0) return browseOrdered;
-    return browseOrdered.filter((t) => {
-      for (const tag of selectionStore.excludedTagIds) {
-        if (t.tags.includes(tag)) return false;
-      }
-      if (selectionStore.selectedTagIds.size === 0) return true;
-      if (selectionStore.tagCombinator === "or") {
-        for (const tag of selectionStore.selectedTagIds) {
-          if (t.tags.includes(tag)) return true;
-        }
-        return false;
-      }
-      for (const tag of selectionStore.selectedTagIds) {
-        if (!t.tags.includes(tag)) return false;
-      }
-      return true;
-    });
-  });
+  const tagFiltered = $derived(
+    filterByTags(
+      browseOrdered,
+      selectionStore.selectedTagIds,
+      selectionStore.excludedTagIds,
+      selectionStore.tagCombinator,
+    ),
+  );
 
   const rawHits = $derived(searchTemplates(searchQuery, tagFiltered));
 
   // Group pinned to the top regardless of search score. Within each tier the
   // searchTemplates ordering (full-match → score → name) is preserved.
-  const searchResults = $derived.by(() => {
-    const pinned: typeof rawHits = [];
-    const others: typeof rawHits = [];
-    for (const h of rawHits) {
-      if (h.template.pinned) pinned.push(h);
-      else others.push(h);
-    }
-    return [...pinned, ...others];
-  });
+  const searchResults = $derived(groupPinnedHits(rawHits));
 
   // Drag-reorder is only safe when the visible order IS the underlying array
   // order. Any filter, search, or paste-mode ranking breaks that invariant.
   const canReorderTemplates = $derived(
-    isEditorMode &&
-      searchQuery.trim().length === 0 &&
-      selectionStore.selectedTagIds.size === 0 &&
-      selectionStore.excludedTagIds.size === 0 &&
-      settings.sort_mode === "manual",
+    canReorder({
+      isEditorMode,
+      searchQuery,
+      selectedTagIds: selectionStore.selectedTagIds,
+      excludedTagIds: selectionStore.excludedTagIds,
+      sortMode: settings.sort_mode,
+    }),
   );
 
   // Tag counts shared between the Tags sidebar UI and the SettingsModal tag
@@ -321,22 +286,6 @@
       }
     })();
   });
-
-  function handleTagToggle(tag: string): void {
-    selectionStore.toggleTag(tag);
-  }
-
-  function handleTagExclude(tag: string): void {
-    selectionStore.excludeTag(tag);
-  }
-
-  function handleTagsClear(): void {
-    selectionStore.clearTags();
-  }
-
-  function handleCombinatorToggle(): void {
-    selectionStore.toggleTagCombinator();
-  }
 
   function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
     if (editing) {
@@ -922,10 +871,10 @@
         tagCombinator={selectionStore.tagCombinator}
         tagOrder={settings.tag_order}
         width={tagsWidth}
-        onTagToggle={handleTagToggle}
-        onTagExclude={handleTagExclude}
-        onTagsClear={handleTagsClear}
-        onCombinatorToggle={handleCombinatorToggle}
+        onTagToggle={(tag) => selectionStore.toggleTag(tag)}
+        onTagExclude={(tag) => selectionStore.excludeTag(tag)}
+        onTagsClear={() => selectionStore.clearTags()}
+        onCombinatorToggle={() => selectionStore.toggleTagCombinator()}
         onContextEmpty={openContextForEmpty}
         onTagReorder={(next) => void templatesStore.handleTagsReorder(next)}
       />
@@ -1106,153 +1055,6 @@
 {/if}
 
 <style>
-  :global(:root) {
-    --bg-base: #1c1c1e;
-    --bg-elevated: #18181a;
-    --bg-titlebar: #141416;
-    --bg-input: #121214;
-    --bg-hover: #25252a;
-    --bg-active: #2d2d33;
-    --border: #2a2a2e;
-    --border-strong: #3a3a40;
-    --border-focus: #5a5a62;
-    --text: #e8e6e3;
-    --text-strong: #f3f1ee;
-    --text-muted: #8c8a86;
-    --text-subtle: #6a6862;
-    --text-deemphasis: #7a7874;
-    --text-placeholder: #56544f;
-    --shadow: rgba(0, 0, 0, 0.6);
-    --backdrop: rgba(0, 0, 0, 0.5);
-    --accent-brand: #cc785c;
-    --accent-brand-hover: #d88a6f;
-    --accent-brand-soft: #3a2419;
-    --accent-brand-text: #f5d4c4;
-    --accent-positive-bg: #2a3a2a;
-    --accent-positive-border: #3a5a3a;
-    --accent-positive-text: #d0e0d0;
-    --accent-positive-hover: #34453a;
-    --accent-danger-bg: #3a2222;
-    --accent-danger-border: #5a3030;
-    --accent-danger-text: #ff9a9a;
-    --accent-warning-bg: #3a2a16;
-    --accent-warning-border: #5a4426;
-    --accent-warning-text: #f0d090;
-    --accent-warning-strong: #ffe0a0;
-    --accent-info-bg: #1a2a3a;
-    --accent-info-border: #2a4a6a;
-    --accent-info-text: #a8c8e8;
-  }
-
-  :global([data-theme="light"]) {
-    --bg-base: #f7f5f1;
-    --bg-elevated: #f1ede6;
-    --bg-titlebar: #ebe7df;
-    --bg-input: #fdfcf9;
-    --bg-hover: #e4dfd5;
-    --bg-active: #d8d2c5;
-    --border: #ddd6c8;
-    --border-strong: #c2bbac;
-    --border-focus: #8a8275;
-    --text: #2a2724;
-    --text-strong: #161310;
-    --text-muted: #5c5852;
-    --text-subtle: #8c8780;
-    --text-deemphasis: #6f6a62;
-    --text-placeholder: #b0aa9e;
-    --shadow: rgba(60, 50, 35, 0.18);
-    --backdrop: rgba(0, 0, 0, 0.3);
-    --accent-brand: #c5613e;
-    --accent-brand-hover: #b4542f;
-    --accent-brand-soft: #f5e0d4;
-    --accent-brand-text: #6d2c14;
-    --accent-positive-bg: #d4eada;
-    --accent-positive-border: #88c896;
-    --accent-positive-text: #1e5f2e;
-    --accent-positive-hover: #c0e0c8;
-    --accent-danger-bg: #fbe2e2;
-    --accent-danger-border: #e0a0a0;
-    --accent-danger-text: #9a2a2a;
-    --accent-warning-bg: #fbf0d8;
-    --accent-warning-border: #d8b870;
-    --accent-warning-text: #7a5510;
-    --accent-warning-strong: #5a3f00;
-    --accent-info-bg: #dde8f4;
-    --accent-info-border: #a0b8d0;
-    --accent-info-text: #2a4a6a;
-  }
-
-  :global(html) {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    background: transparent;
-    color: var(--text);
-    font-family: Inter, system-ui, sans-serif;
-    overflow: hidden;
-  }
-
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    height: 100vh;
-    background: transparent;
-    overflow: hidden;
-  }
-
-  :global(#svelte) {
-    height: 100%;
-  }
-
-  :global(::-webkit-scrollbar) {
-    width: 10px;
-    height: 10px;
-  }
-
-  :global(::-webkit-scrollbar-track) {
-    background: transparent;
-  }
-
-  :global(::-webkit-scrollbar-thumb) {
-    background: var(--border);
-    border-radius: 5px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-    min-height: 28px;
-  }
-
-  :global(::-webkit-scrollbar-thumb:hover) {
-    background: var(--border-strong);
-    background-clip: content-box;
-    border: 2px solid transparent;
-  }
-
-  :global(::-webkit-scrollbar-thumb:active) {
-    background: var(--border-focus);
-    background-clip: content-box;
-    border: 2px solid transparent;
-  }
-
-  :global(::-webkit-scrollbar-corner) {
-    background: transparent;
-  }
-
-  :global(:focus-visible) {
-    outline: 2px solid var(--accent-brand);
-    outline-offset: 1px;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    :global(*),
-    :global(*::before),
-    :global(*::after) {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
-    }
-  }
-
   .frame {
     display: flex;
     flex-direction: column;

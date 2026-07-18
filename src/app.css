@@ -1,0 +1,148 @@
+/* Shared design tokens + base chrome. Pop-out routes only set data-theme. */
+
+:root {
+  --bg-base: #1c1c1e;
+  --bg-elevated: #18181a;
+  --bg-titlebar: #141416;
+  --bg-input: #121214;
+  --bg-hover: #25252a;
+  --bg-active: #2d2d33;
+  --border: #2a2a2e;
+  --border-strong: #3a3a40;
+  --border-focus: #5a5a62;
+  --text: #e8e6e3;
+  --text-strong: #f3f1ee;
+  --text-muted: #8c8a86;
+  --text-subtle: #6a6862;
+  --text-deemphasis: #7a7874;
+  --text-placeholder: #56544f;
+  --shadow: rgba(0, 0, 0, 0.6);
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --accent-brand: #cc785c;
+  --accent-brand-hover: #d88a6f;
+  --accent-brand-soft: #3a2419;
+  --accent-brand-text: #f5d4c4;
+  --accent-positive-bg: #2a3a2a;
+  --accent-positive-border: #3a5a3a;
+  --accent-positive-text: #d0e0d0;
+  --accent-positive-hover: #34453a;
+  --accent-danger-bg: #3a2222;
+  --accent-danger-border: #5a3030;
+  --accent-danger-text: #ff9a9a;
+  --accent-warning-bg: #3a2a16;
+  --accent-warning-border: #5a4426;
+  --accent-warning-text: #f0d090;
+  --accent-warning-strong: #ffe0a0;
+  --accent-info-bg: #1a2a3a;
+  --accent-info-border: #2a4a6a;
+  --accent-info-text: #a8c8e8;
+}
+
+[data-theme="light"] {
+  --bg-base: #f7f5f1;
+  --bg-elevated: #f1ede6;
+  --bg-titlebar: #ebe7df;
+  --bg-input: #fdfcf9;
+  --bg-hover: #e4dfd5;
+  --bg-active: #d8d2c5;
+  --border: #ddd6c8;
+  --border-strong: #c2bbac;
+  --border-focus: #8a8275;
+  --text: #2a2724;
+  --text-strong: #161310;
+  --text-muted: #5c5852;
+  --text-subtle: #8c8780;
+  --text-deemphasis: #6f6a62;
+  --text-placeholder: #b0aa9e;
+  --shadow: rgba(60, 50, 35, 0.18);
+  --backdrop: rgba(0, 0, 0, 0.3);
+  --accent-brand: #c5613e;
+  --accent-brand-hover: #b4542f;
+  --accent-brand-soft: #f5e0d4;
+  --accent-brand-text: #6d2c14;
+  --accent-positive-bg: #d4eada;
+  --accent-positive-border: #88c896;
+  --accent-positive-text: #1e5f2e;
+  --accent-positive-hover: #c0e0c8;
+  --accent-danger-bg: #fbe2e2;
+  --accent-danger-border: #e0a0a0;
+  --accent-danger-text: #9a2a2a;
+  --accent-warning-bg: #fbf0d8;
+  --accent-warning-border: #d8b870;
+  --accent-warning-text: #7a5510;
+  --accent-warning-strong: #5a3f00;
+  --accent-info-bg: #dde8f4;
+  --accent-info-border: #a0b8d0;
+  --accent-info-text: #2a4a6a;
+}
+
+html {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  height: 100vh;
+  background: transparent;
+  overflow: hidden;
+}
+
+#svelte {
+  height: 100%;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  min-height: 28px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--border-focus);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-brand);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -107,6 +107,12 @@ export interface AppData {
   settings: Settings;
 }
 
+/** Tagged result for export/import dialog flows (Settings → Import/Export). */
+export type PortResult =
+  | { kind: "ok"; message: string }
+  | { kind: "cancelled" }
+  | { kind: "err"; error: string };
+
 export const DEFAULT_SETTINGS: Settings = {
   always_on_top_default: false,
   global_hotkey: "Ctrl+Shift+Backslash",
