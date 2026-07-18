@@ -2,28 +2,39 @@
  * Generate `latest.json` for the Tauri updater from a directory of build
  * artifacts. Usage:
  *
- *   node scripts/make-release-manifest.mjs --input-dir <dir>
+ *   node scripts/make-release-manifest.mjs --input-dir <dir> --download-base-url <url>
  *
  * Scans the input directory recursively for `.sig` files, pairs each one
  * with its signed artifact, and writes `latest.json` next to the artifacts.
  * Platform keys are derived from artifact filenames (OS + arch); ambiguous
  * names fail the build instead of being silently mis-mapped.
+ * Download URLs are built from --download-base-url + the artifact basename
+ * (local paths are not valid for the updater).
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
-import { join } from "path";
+import { join, basename } from "path";
 import { platformFromArtifact } from "./lib/releasePlatform.mjs";
 
 const args = process.argv.slice(2);
 const inputDirIdx = args.indexOf("--input-dir");
 if (inputDirIdx === -1) {
-  console.error("Usage: make-release-manifest.mjs --input-dir <dir>");
+  console.error(
+    "Usage: make-release-manifest.mjs --input-dir <dir> --download-base-url <url>",
+  );
   process.exit(1);
 }
 
 const inputDir = args[inputDirIdx + 1];
 if (!inputDir || !existsSync(inputDir)) {
   console.error(`input directory not found: ${inputDir}`);
+  process.exit(1);
+}
+
+const downloadBaseUrlIdx = args.indexOf("--download-base-url");
+const downloadBaseUrl = downloadBaseUrlIdx === -1 ? "" : args[downloadBaseUrlIdx + 1];
+if (!downloadBaseUrl) {
+  console.error("missing --download-base-url");
   process.exit(1);
 }
 
@@ -38,6 +49,7 @@ if (!pubkey) {
 
 const platforms = new Map();
 const errors = [];
+const base = downloadBaseUrl.replace(/\/$/, "");
 
 function walk(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -56,16 +68,17 @@ function walk(dir) {
         errors.push(mapped.error);
         continue;
       }
+      const url = `${base}/${encodeURIComponent(basename(artifactPath))}`;
       if (platforms.has(mapped.platform)) {
         errors.push(
-          `duplicate platform ${mapped.platform}: ${platforms.get(mapped.platform).url} and ${artifactPath}`,
+          `duplicate platform ${mapped.platform}: ${platforms.get(mapped.platform).url} and ${url}`,
         );
         continue;
       }
       const signature = readFileSync(sigPath, "utf-8").trim();
       platforms.set(mapped.platform, {
         signature,
-        url: artifactPath,
+        url,
       });
     }
   }

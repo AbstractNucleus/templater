@@ -4,6 +4,14 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] — 2026-07-18
+
+### Fixed
+
+- **Startup data-store race.** Register the Rust data store before Tauri constructs config-defined webviews, so `load_app_data` cannot hit an unmanaged store when the main window shows.
+- **Template data-loss protection.** Block normal saves when the initial data load fails, preventing an existing template file from being overwritten with an empty list.
+- **Updater manifest download URLs.** `latest.json` now uses GitHub release download URLs instead of local artifact paths.
+
 ## [0.9.0] — 2026-07-15
 
 ### Added

@@ -97,7 +97,11 @@ jobs:
           merge-multiple: true
 
       - name: Generate latest.json
-        run: node scripts/make-release-manifest.mjs --input-dir artifacts
+        run: |
+          VERSION=$(node -p "require(\"./src-tauri/tauri.conf.json\").version")
+          node scripts/make-release-manifest.mjs \
+            --input-dir artifacts \
+            --download-base-url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}"
 
       - name: Publish to this repo
         env:

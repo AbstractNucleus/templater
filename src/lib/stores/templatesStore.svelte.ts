@@ -37,6 +37,10 @@ class TemplatesStore {
   settingsCorrupt = $state(false);
   undoToast = $state<string | null>(null);
 
+  // Only permit writes after the initial load (or deliberate first-run bootstrap) succeeds.
+  // This prevents an IPC/load failure from overwriting existing data with an empty list.
+  #loadSucceeded = false;
+
   #undo = new UndoStack();
   #undoToastTimer: ReturnType<typeof setTimeout> | null = null;
   /** Serialize disk writes so concurrent persist callers cannot last-write-wins drop mutations. */
@@ -92,6 +96,7 @@ class TemplatesStore {
           });
         }
       }
+      this.#loadSucceeded = true;
     } catch (e) {
       // Surface the error and leave templates empty — DON'T fall back to
       // starter templates here. Any subsequent persist would overwrite the
@@ -117,6 +122,10 @@ class TemplatesStore {
     nextTemplates: Template[],
     nextSettings: Settings = this.settings,
   ): Promise<void> {
+    if (!this.#loadSucceeded) {
+      appErrors.setLoad("save blocked: initial data load did not complete");
+      return;
+    }
     if (this.settingsCorrupt) {
       appErrors.setLoad(
         "Saves blocked: settings file is corrupt. Reset settings to continue.",

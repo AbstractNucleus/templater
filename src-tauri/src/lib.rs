@@ -22,7 +22,27 @@ use hotkey::set_hotkey;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Resolve the data dir and register the store before Tauri constructs
+    // config-defined webviews. Showing the main window lets its frontend
+    // invoke load_app_data immediately; the store must already be managed.
+    let context = tauri::generate_context!();
+    let dir = dirs::data_dir()
+        .expect("could not resolve application data directory")
+        .join(&context.config().identifier);
+    std::fs::create_dir_all(&dir).expect("could not create application data directory");
+
+    let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
+    let loaded_settings = match store.load() {
+        Ok(LoadOutcome::Ready { data }) => Some(data.settings),
+        _ => None,
+    };
+    let start_minimised = loaded_settings
+        .as_ref()
+        .map(|s| s.start_minimised_to_tray)
+        .unwrap_or(false);
+
     let mut builder = tauri::Builder::default()
+        .manage(store)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -46,30 +66,10 @@ pub fn run() {
     }
 
     builder
-        .setup(|app| {
-            let dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| -> Box<dyn std::error::Error> { format!("app_data_dir: {e}").into() })?;
-            std::fs::create_dir_all(&dir).map_err(|e| -> Box<dyn std::error::Error> {
-                format!("mkdir {}: {e}", dir.display()).into()
-            })?;
-
-            let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
-
-            let loaded_settings = match store.load() {
-                Ok(LoadOutcome::Ready { data }) => Some(data.settings),
-                _ => None,
-            };
-            let start_minimised = loaded_settings
-                .as_ref()
-                .map(|s| s.start_minimised_to_tray)
-                .unwrap_or(false);
-
+        .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 configure_main_on_startup(&window, loaded_settings.as_ref(), start_minimised);
             }
-            app.manage(store);
 
             #[cfg(desktop)]
             hotkey::register_startup(app, loaded_settings.as_ref());
@@ -101,6 +101,6 @@ pub fn run() {
             is_satellite,
             translate_text,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
