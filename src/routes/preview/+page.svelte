@@ -6,8 +6,6 @@
   import type { PreviewPayload } from "$lib/stores/popouts.svelte";
 
   let payload = $state<PreviewPayload | null>(null);
-  /** Bumped on each payload so TemplatePreview re-seeds fills from the store. */
-  let valuesRevision = $state(0);
 
   let includeOpening = $state(true);
   let includeSignature = $state(true);
@@ -18,10 +16,12 @@
     }
   });
 
+  // Update payload for theme/compose/selection — do NOT force-reset fills.
+  // TemplatePreview re-seeds on template.id change; bumping a revision on every
+  // push (theme, snippets, echoed placeholder_values) wiped mid-edit values.
   $effect(() => {
     const unlisten = listen<PreviewPayload>("preview-payload", (e) => {
       payload = e.payload;
-      valuesRevision += 1;
     });
     return () => {
       void unlisten.then((u) => u());
@@ -90,7 +90,6 @@
         {globalSignature}
         {snippets}
         {savedPlaceholderValues}
-        {valuesRevision}
         onToggleOpening={(v) => (includeOpening = v)}
         onToggleSignature={(v) => (includeSignature = v)}
         onCopySuccess={handleCopySuccess}
