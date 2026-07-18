@@ -11,6 +11,12 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 - **README cleanup.** Trimmed install instructions to a simple download link
   since releases are now public. Trimmed developer notes to essentials.
 
+## [0.9.4] — 2026-07-18
+
+### Fixed
+
+- **Template data-loss protection.** Register the data store before Tauri constructs config-defined webviews, eliminating the startup IPC race that made load_app_data report an unmanaged store. Normal saves are now blocked when initial data loading fails, preventing an existing template file from being overwritten with an empty list.
+
 ## [0.9.3] — 2026-07-18
 
 ### Fixed

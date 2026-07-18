@@ -61,6 +61,10 @@ class TemplatesStore {
   loadError = $state<string | null>(null);
   undoToast = $state<string | null>(null);
 
+  // Only permit writes after the initial load (or deliberate first-run bootstrap) succeeds.
+  // This prevents an IPC/load failure from overwriting existing data with an empty list.
+  #loadSucceeded = $state(false);
+
   #undoStack: UndoSnapshot[] = $state([]);
   #undoToastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -96,6 +100,7 @@ class TemplatesStore {
           });
         }
       }
+      this.#loadSucceeded = true;
     } catch (e) {
       // Surface the error and leave templates empty — DON'T fall back to
       // starter templates here. Any subsequent persist would overwrite the
@@ -110,6 +115,10 @@ class TemplatesStore {
     nextTemplates: Template[],
     nextSettings: Settings = this.settings,
   ): Promise<void> {
+    if (!this.#loadSucceeded) {
+      this.loadError = "save blocked: initial data load did not complete";
+      return;
+    }
     // Rust's ColumnWidths is u32. Pointer events emit fractional pixel deltas
     // on high-DPI displays, so coerce here as the last line of defence before
     // serde rejects the save with "expected u32".

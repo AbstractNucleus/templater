@@ -255,7 +255,20 @@ pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    let dir = dirs::data_dir()
+        .expect("could not resolve application data directory")
+        .join(&context.config().identifier);
+    std::fs::create_dir_all(&dir).expect("could not create application data directory");
+
+    let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
+    let loaded_settings = store.load().ok().flatten().map(|d| d.settings);
+    let start_minimised = loaded_settings
+        .as_ref()
+        .map(|s| s.start_minimised_to_tray)
+        .unwrap_or(false);
     let mut builder = tauri::Builder::default()
+        .manage(store)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -279,27 +292,7 @@ pub fn run() {
     }
 
     builder
-        .setup(|app| {
-            let dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| -> Box<dyn std::error::Error> { format!("app_data_dir: {e}").into() })?;
-            std::fs::create_dir_all(&dir).map_err(|e| -> Box<dyn std::error::Error> {
-                format!("mkdir {}: {e}", dir.display()).into()
-            })?;
-
-            let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
-
-            let loaded_settings = store.load().ok().flatten().map(|d| d.settings);
-            let start_minimised = loaded_settings
-                .as_ref()
-                .map(|s| s.start_minimised_to_tray)
-                .unwrap_or(false);
-
-            // Register managed state before any webview is shown: showing the
-            // main window lets its frontend invoke load_app_data immediately.
-            app.manage(store);
-
+        .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(settings) = &loaded_settings {
                     if let Some(geo) = &settings.window_geometry {
@@ -367,6 +360,6 @@ pub fn run() {
             is_translator_open,
             translate_text,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
