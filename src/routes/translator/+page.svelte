@@ -49,6 +49,8 @@
   function handlePaste(e: ClipboardEvent): void {
     const text = e.clipboardData?.getData("text") ?? "";
     if (text.trim().length > 0) {
+      // Prevent the browser from also inserting — we'd end up with the text twice.
+      e.preventDefault();
       sourceText = text;
       // Translate on next tick so the UI updates the source text first.
       setTimeout(() => void doTranslate(), 0);
