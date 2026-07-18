@@ -12,6 +12,37 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 - **Template data-loss protection.** Block normal saves when the initial data load fails, preventing an existing template file from being overwritten with an empty list.
 - **Updater manifest download URLs.** `latest.json` now uses GitHub release download URLs instead of local artifact paths.
 
+## [0.9.4] — 2026-07-18
+
+### Fixed
+
+- **Template data-loss protection.** Register the data store before Tauri constructs config-defined webviews, eliminating the startup IPC race that made load_app_data report an unmanaged store. Normal saves are now blocked when initial data loading fails, preventing an existing template file from being overwritten with an empty list.
+
+## [0.9.3] — 2026-07-18
+
+### Fixed
+
+- **Startup data-loading race.** Register the Rust data store before displaying the main window, preventing load_app_data from failing with state not managed for field store immediately after an update. Existing templates and settings load normally again.
+
+## [0.9.2] — 2026-07-17
+
+### Added
+
+- **Translation pop-out window.** New detachable translator window (above the main window, same width) with a toggle button in the titlebar and `Ctrl+Shift+T` shortcut. Auto-translates pasted text to English via OpenRouter. Configurable model (default `"openrouter/free"`) and API key in Settings → Translation. Available in both minimal and normal mode. Hides and shows together with the main window.
+
+- **Preview window matches main window width.** The preview pop-out now mirrors the main window's width instead of a fixed 460 px. Pop-out windows sit flush against the main window (no gap).
+
+### Changed
+
+- **Updated settings fields.** `openrouter_api_key` and `translation_model` added to the Rust `Settings` struct so they persist to disk.
+
+## [0.9.1] — 2026-07-16
+
+### Fixed
+
+- **README cleanup.** Trimmed install instructions to a simple download link
+  since releases are now public. Trimmed developer notes to essentials.
+
 ## [0.9.0] — 2026-07-15
 
 ### Added
