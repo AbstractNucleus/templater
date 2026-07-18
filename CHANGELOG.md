@@ -4,6 +4,12 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] — 2026-07-18
+
+### Fixed
+
+- **Translator paste duplication.** Prevent the browser's default paste insertion when the translator replaces source text, so pasted text is no longer doubled. Shipped as a version bump so existing 0.9.6 installs can pick it up via auto-update.
+
 ## [0.9.6] — 2026-07-18
 
 ### Fixed
