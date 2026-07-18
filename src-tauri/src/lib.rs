@@ -296,6 +296,10 @@ pub fn run() {
                 .map(|s| s.start_minimised_to_tray)
                 .unwrap_or(false);
 
+            // Register managed state before any webview is shown: showing the
+            // main window lets its frontend invoke load_app_data immediately.
+            app.manage(store);
+
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(settings) = &loaded_settings {
                     if let Some(geo) = &settings.window_geometry {
@@ -314,8 +318,6 @@ pub fn run() {
                 }
                 windows_snap::install(&window);
             }
-            app.manage(store);
-
             #[cfg(desktop)]
             hotkey::register_startup(app, loaded_settings.as_ref());
 

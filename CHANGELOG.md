@@ -11,6 +11,12 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 - **README cleanup.** Trimmed install instructions to a simple download link
   since releases are now public. Trimmed developer notes to essentials.
 
+## [0.9.3] — 2026-07-18
+
+### Fixed
+
+- **Startup data-loading race.** Register the Rust data store before displaying the main window, preventing load_app_data from failing with state not managed for field store immediately after an update. Existing templates and settings load normally again.
+
 ## [0.9.2] — 2026-07-17
 
 ### Added
