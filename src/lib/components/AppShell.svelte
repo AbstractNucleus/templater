@@ -1,62 +1,57 @@
 <script lang="ts">
-  import type { Template, TemplateDraft } from "$lib/types";
   import TemplateView from "./TemplateView.svelte";
   import TemplateEditPanel from "./TemplateEditPanel.svelte";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
+  import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { editorSession } from "$lib/stores/editorSession.svelte";
 
+  /** Session-only UI (compose toggles). Store data is read here. */
   let {
-    template,
     includeOpening,
     includeSignature,
-    editing,
-    globalSignature,
-    snippets,
-    canEdit,
-    availableTags,
-    availableFolders,
-    copyTrigger,
-    savedPlaceholderValues,
     onToggleOpening,
     onToggleSignature,
-    onEnterEdit,
-    onCancelEdit,
-    onSave,
-    onCreate = () => {},
-    onDuplicate,
-    onDelete,
-    onCopySuccess,
-    onPlaceholderValuesChange,
-    onRevertHistory,
-    creatingDraft = null,
   }: {
-    template: Template | null;
     includeOpening: boolean;
     includeSignature: boolean;
-    editing: boolean;
-    globalSignature: string;
-    snippets: Record<string, string>;
-    canEdit: boolean;
-    availableTags: string[];
-    availableFolders: string[];
-    copyTrigger: number;
-    /** Persisted per-template fill-ins. Outer key: template id. */
-    savedPlaceholderValues: Record<string, Record<string, string>>;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
-    onEnterEdit: () => void;
-    onCancelEdit: () => void;
-    onSave: (t: Template) => void;
-    onCreate?: (draft: TemplateDraft) => void;
-    onDuplicate: () => void;
-    onDelete: () => void;
-    onCopySuccess: (templateId: string) => void;
-    onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
-    onRevertHistory: (templateId: string, versionIdx: number) => void;
-    creatingDraft?: TemplateDraft | null;
   } = $props();
+
+  const selectedTemplate = $derived(
+    templatesStore.templates.find((t) => t.id === selectionStore.selectedTemplateId) ?? null,
+  );
+  const canEdit = $derived(templatesStore.isEditorMode);
 </script>
 
 <section class="main">
-  {#if !template && !creatingDraft}
+  {#if editorSession.creatingDraft !== null}
+    <TemplateEditPanel
+      mode={{
+        kind: "create",
+        draft: editorSession.creatingDraft,
+        onCancel: () => editorSession.cancelCreate(),
+        onCreate: (d) => void editorSession.create(d),
+      }}
+    />
+  {:else if editorSession.editing && selectedTemplate}
+    <TemplateEditPanel
+      mode={{
+        kind: "edit",
+        template: selectedTemplate,
+        onCancel: () => editorSession.cancelEdit(),
+        onSave: (t) => void editorSession.save(t),
+      }}
+    />
+  {:else if selectedTemplate}
+    <TemplateView
+      template={selectedTemplate}
+      {includeOpening}
+      {includeSignature}
+      {onToggleOpening}
+      {onToggleSignature}
+    />
+  {:else}
     <div class="empty">
       <p class="empty-line">
         {canEdit
@@ -71,38 +66,6 @@
         <span><kbd>?</kbd> all shortcuts</span>
       </div>
     </div>
-  {:else if canEdit && (creatingDraft || editing)}
-    <TemplateEditPanel
-      {template}
-      {editing}
-      {canEdit}
-      {availableTags}
-      {availableFolders}
-      {creatingDraft}
-      {onCancelEdit}
-      {onSave}
-      {onCreate}
-    />
-  {:else if template}
-    <TemplateView
-      {template}
-      {includeOpening}
-      {includeSignature}
-      {globalSignature}
-      {snippets}
-      {canEdit}
-      {copyTrigger}
-      {savedPlaceholderValues}
-      {onToggleOpening}
-      {onToggleSignature}
-      {onEnterEdit}
-      {onSave}
-      {onDuplicate}
-      {onDelete}
-      {onCopySuccess}
-      {onPlaceholderValuesChange}
-      {onRevertHistory}
-    />
   {/if}
 </section>
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatAccelerator } from "$lib/hotkeyLabels";
+
   let {
     onClose,
     globalHotkey,
@@ -8,45 +10,6 @@
     globalHotkey: string;
     previewHotkey?: string;
   } = $props();
-
-  const KEY_LABELS: Record<string, string> = {
-    Backslash: "\\",
-    Slash: "/",
-    Period: ".",
-    Comma: ",",
-    Semicolon: ";",
-    Quote: "'",
-    Backquote: "`",
-    Minus: "-",
-    Equal: "=",
-    BracketLeft: "[",
-    BracketRight: "]",
-    Space: "Space",
-    Enter: "Enter",
-    Tab: "Tab",
-    Backspace: "⌫",
-    Escape: "Esc",
-    ArrowUp: "↑",
-    ArrowDown: "↓",
-    ArrowLeft: "←",
-    ArrowRight: "→",
-  };
-
-  function keyLabel(code: string): string {
-    if (code in KEY_LABELS) return KEY_LABELS[code];
-    if (code.startsWith("Key") && code.length === 4) return code.slice(3);
-    if (code.startsWith("Digit") && code.length === 6) return code.slice(5);
-    if (code.startsWith("Numpad") && code.length === 7) return code.slice(6);
-    return code;
-  }
-
-  function formatAccelerator(s: string): string {
-    return s
-      .split("+")
-      .filter((p) => p.length > 0)
-      .map(keyLabel)
-      .join("+");
-  }
 
   function handleBackdrop(e: MouseEvent): void {
     if (e.target === e.currentTarget) onClose();

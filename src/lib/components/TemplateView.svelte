@@ -1,56 +1,27 @@
 <script lang="ts">
-  import { untrack } from "svelte";
-  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
-  import { composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
-  import ConfirmDialog from "./ConfirmDialog.svelte";
-  import CopyButton from "./CopyButton.svelte";
   import HistoryPanel from "./HistoryPanel.svelte";
-  import PlaceholderFills from "./PlaceholderFills.svelte";
+  import TemplatePreview from "./TemplatePreview.svelte";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
+  import { editorSession } from "$lib/stores/editorSession.svelte";
+  import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
 
   let {
     template,
     includeOpening,
     includeSignature,
-    globalSignature,
-    snippets,
-    canEdit,
-    copyTrigger,
-    savedPlaceholderValues,
     onToggleOpening,
     onToggleSignature,
-    onEnterEdit,
-    onSave,
-    onDuplicate,
-    onDelete,
-    onCopySuccess,
-    onPlaceholderValuesChange,
-    onRevertHistory,
   }: {
     template: Template;
     includeOpening: boolean;
     includeSignature: boolean;
-    globalSignature: string;
-    snippets: Record<string, string>;
-    canEdit: boolean;
-    copyTrigger: number;
-    /** Persisted per-template fill-ins. Outer key: template id. */
-    savedPlaceholderValues: Record<string, Record<string, string>>;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
-    onEnterEdit: () => void;
-    onSave: (t: Template) => void;
-    onDuplicate: () => void;
-    onDelete: () => void;
-    onCopySuccess: (templateId: string) => void;
-    onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
-    onRevertHistory: (templateId: string, versionIdx: number) => void;
   } = $props();
 
-  const signatureAvailable = $derived(globalSignature.trim().length > 0);
-
-  let copyState = $state<"idle" | "ok" | "error">("idle");
-  let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  const canEdit = $derived(templatesStore.isEditorMode);
+  const settings = $derived(templatesStore.settings);
 
   let historyOpen = $state(false);
 
@@ -70,7 +41,7 @@
     }
     const trimmed = renameDraft.trim();
     if (trimmed.length > 0 && trimmed !== template.name) {
-      onSave({
+      void editorSession.save({
         ...template,
         name: trimmed,
         updated_at: new Date().toISOString(),
@@ -105,50 +76,6 @@
     historyOpen = false;
   });
 
-  // Per-template fill-in values. Loaded from the persisted map on template
-  // switch and written back on edit via a debounced callback — values
-  // survive across template switches AND app restarts.
-  let placeholderValues = $state<Record<string, string>>({});
-  let lastTemplateId: string | null = null;
-  let persistTimer: ReturnType<typeof setTimeout> | null = null;
-  const PERSIST_DEBOUNCE_MS = 400;
-
-  $effect(() => {
-    const id = template?.id ?? null;
-    if (id !== lastTemplateId) {
-      // Flush any pending writes for the previous template before swapping.
-      if (persistTimer && lastTemplateId !== null) {
-        clearTimeout(persistTimer);
-        persistTimer = null;
-        onPlaceholderValuesChange(lastTemplateId, placeholderValues);
-      }
-      lastTemplateId = id;
-      placeholderValues = id ? { ...(savedPlaceholderValues[id] ?? {}) } : {};
-    }
-  });
-
-  function setPlaceholderValue(key: string, value: string): void {
-    placeholderValues = { ...placeholderValues, [key]: value };
-    if (persistTimer) clearTimeout(persistTimer);
-    const id = template?.id;
-    if (!id) return;
-    persistTimer = setTimeout(() => {
-      persistTimer = null;
-      onPlaceholderValuesChange(id, placeholderValues);
-    }, PERSIST_DEBOUNCE_MS);
-  }
-
-  const composed = $derived(
-    template ? composeText(template, includeOpening, includeSignature, globalSignature) : "",
-  );
-  const previewSegments = $derived(
-    template ? splitPlaceholders(composed, placeholderValues, new Date(), snippets) : [],
-  );
-  // The copied text is exactly the preview with each segment flattened — one
-  // parse and one `now`, so the clipboard output can't drift from what's shown.
-  const composedFilled = $derived(previewSegments.map((s) => s.text).join(""));
-  const placeholders = $derived(template ? extractPlaceholders(composed, snippets) : []);
-
   function compactDate(iso: string): string {
     const d = new Date(iso);
     const now = new Date();
@@ -158,61 +85,6 @@
       day: "numeric",
       ...(sameYear ? {} : { year: "numeric" }),
     });
-  }
-
-  async function copyToClipboard(): Promise<void> {
-    if (!template || composedFilled.trim().length === 0) return;
-    const id = template.id;
-    try {
-      await writeText(composedFilled);
-      copyState = "ok";
-      // Flush any pending debounced placeholder write so a copy-then-close
-      // doesn't lose the fill-ins the user just typed.
-      if (persistTimer) {
-        clearTimeout(persistTimer);
-        persistTimer = null;
-        onPlaceholderValuesChange(id, placeholderValues);
-      }
-      onCopySuccess(id);
-    } catch {
-      copyState = "error";
-    }
-    if (copyTimer) clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => (copyState = "idle"), 1500);
-  }
-
-  // Bumping `copyTrigger` from the parent runs the same copy flow as the
-  // Copy button — keeps the "Copied"/"Copy failed" feedback shared.
-  //
-  // Copy ONLY when the counter actually increments. The effect must not pick
-  // up any other dependency: copyToClipboard reads `template` and
-  // `composedFilled` synchronously, and recordCopy replaces the template
-  // object after every copy — tracked, that re-fires the effect and copies
-  // forever. `untrack` keeps the dep set to {copyTrigger}; the equality guard
-  // ignores spurious re-runs (e.g. sibling fields of the parent's spread
-  // props changing); seeding from the current value makes remounts inert.
-  let lastCopyTrigger = untrack(() => copyTrigger);
-  $effect(() => {
-    const t = copyTrigger;
-    if (t === lastCopyTrigger) return;
-    lastCopyTrigger = t;
-    untrack(() => void copyToClipboard());
-  });
-
-  let confirmingDelete = $state(false);
-
-  function handleDelete(): void {
-    if (!template) return;
-    confirmingDelete = true;
-  }
-
-  function confirmDelete(): void {
-    confirmingDelete = false;
-    onDelete();
-  }
-
-  function cancelDelete(): void {
-    confirmingDelete = false;
   }
 </script>
 
@@ -261,19 +133,19 @@
   </div>
   {#if canEdit}
     <div class="actions">
-      <button class="icon-action" onclick={onEnterEdit} title="Edit (or click the body to inline-edit)" aria-label="Edit template">
+      <button class="icon-action" onclick={() => editorSession.enterEdit()} title="Edit (or click the body to inline-edit)" aria-label="Edit template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 20h9" />
           <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
         </svg>
       </button>
-      <button class="icon-action" onclick={onDuplicate} title="Duplicate" aria-label="Duplicate template">
+      <button class="icon-action" onclick={() => void editorSession.duplicate(template)} title="Duplicate" aria-label="Duplicate template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="9" y="9" width="13" height="13" rx="2" />
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </svg>
       </button>
-      <button class="icon-action danger" onclick={handleDelete} title="Delete" aria-label="Delete template">
+      <button class="icon-action danger" onclick={() => uiDialogs.requestDelete(template)} title="Delete" aria-label="Delete template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M3 6h18" />
           <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -284,65 +156,41 @@
   {/if}
 </div>
 
-<div class="toggles">
-  <label class:disabled={template.opening.trim().length === 0}>
-    <input
-      type="checkbox"
-      checked={includeOpening}
-      disabled={template.opening.trim().length === 0}
-      onchange={(e) => onToggleOpening(e.currentTarget.checked)}
-    />
-    Include opening
-  </label>
-  <label class:disabled={!signatureAvailable}>
-    <input
-      type="checkbox"
-      checked={includeSignature}
-      disabled={!signatureAvailable}
-      onchange={(e) => onToggleSignature(e.currentTarget.checked)}
-    />
-    Include signature
-  </label>
-</div>
-
-<pre class="preview">{#each previewSegments as seg}{#if seg.placeholder}<span class="placeholder">{seg.text}</span>{:else}{seg.text}{/if}{/each}</pre>
-
-<PlaceholderFills {placeholders} values={placeholderValues} onSetValue={setPlaceholderValue} />
-
-{#if canEdit}
-  <HistoryPanel {template} open={historyOpen} {onRevertHistory} />
-{/if}
-
-<div class="footer">
-  {#if canEdit && template.history.length > 0}
-    <button
-      class="history-toggle"
-      onclick={() => (historyOpen = !historyOpen)}
-      title={historyOpen ? "Collapse history" : "Show previous saved versions"}
-    >
-      {historyOpen ? "Hide" : "Show"} history ({template.history.length})
-    </button>
-  {/if}
-  <div class="footer-spacer"></div>
-  <CopyButton
-    {copyState}
-    showKbd
-    disabled={composedFilled.trim().length === 0}
-    onclick={() => void copyToClipboard()}
-  />
-</div>
-
-{#if confirmingDelete && template}
-  <ConfirmDialog
-    title="Delete template?"
-    name={template.name}
-    message="Ctrl+Z will restore it."
-    confirmLabel="Delete"
-    danger
-    onConfirm={confirmDelete}
-    onCancel={cancelDelete}
-  />
-{/if}
+<TemplatePreview
+  {template}
+  {includeOpening}
+  {includeSignature}
+  globalSignature={settings.global_signature}
+  snippets={settings.snippets}
+  savedPlaceholderValues={settings.placeholder_values}
+  {onToggleOpening}
+  {onToggleSignature}
+  onCopySuccess={(id) => void templatesStore.recordCopy(id)}
+  onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
+  registerForShortcuts
+  showTags={false}
+>
+  {#snippet afterFills()}
+    {#if canEdit}
+      <HistoryPanel
+        {template}
+        open={historyOpen}
+        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
+      />
+    {/if}
+  {/snippet}
+  {#snippet footerLeading()}
+    {#if canEdit && template.history.length > 0}
+      <button
+        class="history-toggle"
+        onclick={() => (historyOpen = !historyOpen)}
+        title={historyOpen ? "Collapse history" : "Show previous saved versions"}
+      >
+        {historyOpen ? "Hide" : "Show"} history ({template.history.length})
+      </button>
+    {/if}
+  {/snippet}
+</TemplatePreview>
 
 <style>
   .header-row {
@@ -471,55 +319,6 @@
     color: var(--accent-danger-text);
   }
 
-  .toggles {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 12px;
-    font-size: 0.85rem;
-    color: var(--text);
-  }
-
-  .toggles label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-  }
-
-  .toggles label.disabled {
-    color: var(--text-placeholder);
-    cursor: default;
-  }
-
-  .toggles input[type="checkbox"] {
-    accent-color: var(--accent-brand);
-  }
-
-  .preview {
-    flex: 1;
-    margin: 0 0 16px;
-    padding: 18px 20px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-family: -apple-system, "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
-    font-size: 0.9rem;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    overflow-y: auto;
-    min-height: 120px;
-  }
-
-  .preview .placeholder {
-    color: var(--accent-info-text);
-    background: var(--accent-info-bg);
-    border-radius: 3px;
-    padding: 0 3px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.82em;
-  }
-
   .history-toggle {
     background: transparent;
     border: 1px solid var(--border);
@@ -534,15 +333,5 @@
   .history-toggle:hover {
     background: var(--bg-hover);
     color: var(--text);
-  }
-
-  .footer {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .footer-spacer {
-    flex: 1;
   }
 </style>

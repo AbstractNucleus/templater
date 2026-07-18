@@ -1,10 +1,5 @@
 <script lang="ts">
-  export interface ContextMenuItem {
-    label: string;
-    onClick: () => void;
-    danger?: boolean;
-    disabled?: boolean;
-  }
+  import type { DialogMenuItem } from "$lib/stores/uiDialogs.svelte";
 
   let {
     x,
@@ -14,7 +9,7 @@
   }: {
     x: number;
     y: number;
-    items: ContextMenuItem[];
+    items: DialogMenuItem[];
     onClose: () => void;
   } = $props();
 
@@ -41,7 +36,7 @@
     }
   }
 
-  function pick(item: ContextMenuItem): void {
+  function pick(item: DialogMenuItem): void {
     if (item.disabled) return;
     item.onClick();
     onClose();

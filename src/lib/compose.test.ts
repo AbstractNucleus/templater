@@ -68,7 +68,7 @@ describe("splitPlaceholders", () => {
   });
 
   it("substitutes when value provided", () => {
-    expect(splitPlaceholders("Hi {{name}}!", { name: "Sarah" })).toEqual([
+    expect(splitPlaceholders("Hi {{name}}!", { values: { name: "Sarah" } })).toEqual([
       { text: "Hi ", placeholder: false },
       { text: "Sarah", placeholder: true },
       { text: "!", placeholder: false },
@@ -76,76 +76,94 @@ describe("splitPlaceholders", () => {
   });
 
   it("leaves raw {{var}} when value is empty string", () => {
-    const segs = splitPlaceholders("Hi {{name}}!", { name: "" });
+    const segs = splitPlaceholders("Hi {{name}}!", { values: { name: "" } });
     expect(segs[1]).toEqual({ text: "{{name}}", placeholder: true });
   });
 
   it("trims placeholder name when matching", () => {
-    expect(splitPlaceholders("Hi {{ name }}!", { name: "Sarah" })[1]).toEqual({
+    expect(splitPlaceholders("Hi {{ name }}!", { values: { name: "Sarah" } })[1]).toEqual({
       text: "Sarah",
       placeholder: true,
     });
   });
 
   it("auto-fills {{date}} in ISO format", () => {
-    const segs = splitPlaceholders("Today is {{date}}.", {}, FIXED_NOW);
+    const segs = splitPlaceholders("Today is {{date}}.", { now: FIXED_NOW });
     expect(segs[1]).toEqual({ text: "2026-05-24", placeholder: true });
   });
 
   it("auto-fills {{date:long}}", () => {
-    const segs = splitPlaceholders("Today is {{date:long}}.", {}, FIXED_NOW);
+    const segs = splitPlaceholders("Today is {{date:long}}.", { now: FIXED_NOW });
     expect(segs[1].placeholder).toBe(true);
-    // exact format depends on Intl locale but should contain year + 2026 + May
     expect(segs[1].text).toMatch(/2026/);
     expect(segs[1].text).toMatch(/May/);
   });
 
   it("auto-fills {{time}} as HH:MM", () => {
-    const segs = splitPlaceholders("At {{time}}.", {}, FIXED_NOW_WITH_SEC);
+    const segs = splitPlaceholders("At {{time}}.", { now: FIXED_NOW_WITH_SEC });
     expect(segs[1]).toEqual({ text: "14:03", placeholder: true });
   });
 
   it("auto-fills {{time:long}} as HH:MM:SS", () => {
-    const segs = splitPlaceholders("At {{time:long}}.", {}, FIXED_NOW_WITH_SEC);
+    const segs = splitPlaceholders("At {{time:long}}.", { now: FIXED_NOW_WITH_SEC });
     expect(segs[1]).toEqual({ text: "14:03:07", placeholder: true });
   });
 
   it("resolves {{choice:a|b}} by its full key", () => {
-    const segs = splitPlaceholders("Pick {{choice:yes|no}}.", { "choice:yes|no": "yes" });
+    const segs = splitPlaceholders("Pick {{choice:yes|no}}.", {
+      values: { "choice:yes|no": "yes" },
+    });
     expect(segs[1]).toEqual({ text: "yes", placeholder: true });
   });
 
   it("leaves choice raw when no selection", () => {
-    const segs = splitPlaceholders("Pick {{choice:yes|no}}.", {});
+    const segs = splitPlaceholders("Pick {{choice:yes|no}}.");
     expect(segs[1]).toEqual({ text: "{{choice:yes|no}}", placeholder: true });
+  });
+
+  it("fills from snippets when no per-template value", () => {
+    const segs = splitPlaceholders("Hi {{name}}!", { snippets: { name: "Alex" } });
+    expect(segs[1]).toEqual({ text: "Alex", placeholder: true });
+  });
+
+  it("prefers values over snippets", () => {
+    const segs = splitPlaceholders("Hi {{name}}!", {
+      values: { name: "Sam" },
+      snippets: { name: "Alex" },
+    });
+    expect(segs[1]).toEqual({ text: "Sam", placeholder: true });
   });
 });
 
 describe("applyValues", () => {
   it("substitutes a value", () => {
-    expect(applyValues("Hi {{name}}!", { name: "Sarah" })).toBe("Hi Sarah!");
+    expect(applyValues("Hi {{name}}!", { values: { name: "Sarah" } })).toBe("Hi Sarah!");
   });
 
   it("leaves raw {{var}} when missing", () => {
-    expect(applyValues("Hi {{name}}!", {})).toBe("Hi {{name}}!");
+    expect(applyValues("Hi {{name}}!")).toBe("Hi {{name}}!");
   });
 
   it("leaves raw {{var}} when value is empty", () => {
-    expect(applyValues("Hi {{name}}!", { name: "" })).toBe("Hi {{name}}!");
+    expect(applyValues("Hi {{name}}!", { values: { name: "" } })).toBe("Hi {{name}}!");
   });
 
   it("replaces every occurrence", () => {
-    expect(applyValues("{{x}} and {{x}}", { x: "y" })).toBe("y and y");
+    expect(applyValues("{{x}} and {{x}}", { values: { x: "y" } })).toBe("y and y");
   });
 
   it("substitutes {{date}} with today's ISO date", () => {
-    expect(applyValues("on {{date}}", {}, FIXED_NOW)).toBe("on 2026-05-24");
+    expect(applyValues("on {{date}}", { now: FIXED_NOW })).toBe("on 2026-05-24");
   });
 
   it("substitutes {{choice:a|b}} via its full key", () => {
-    expect(applyValues("Pick {{choice:yes|no}}.", { "choice:yes|no": "no" })).toBe(
+    expect(applyValues("Pick {{choice:yes|no}}.", { values: { "choice:yes|no": "no" } })).toBe(
       "Pick no.",
     );
+  });
+
+  it("applies snippets", () => {
+    expect(applyValues("Hi {{name}}!", { snippets: { name: "Alex" } })).toBe("Hi Alex!");
   });
 });
 
@@ -162,6 +180,16 @@ describe("parsePlaceholder", () => {
 
   it("classifies date:long", () => {
     expect(parsePlaceholder("date:long").kind).toEqual({ type: "date", format: "long" });
+  });
+
+  it("rejects unknown date format as free text", () => {
+    const p = parsePlaceholder("date:neon");
+    expect(p.kind).toEqual({ type: "text" });
+    expect(p.key).toBe("date:neon");
+  });
+
+  it("rejects unknown time format as free text", () => {
+    expect(parsePlaceholder("time:bogus").kind).toEqual({ type: "text" });
   });
 
   it("parses choice options", () => {
@@ -199,5 +227,11 @@ describe("extractPlaceholders", () => {
     const out = extractPlaceholders("{{choice:yes|no}}");
     expect(out).toHaveLength(1);
     expect(out[0].kind).toEqual({ type: "choice", options: ["yes", "no"] });
+  });
+
+  it("excludes text placeholders covered by snippets", () => {
+    expect(extractPlaceholders("{{name}} {{other}}", { name: "Alex" }).map((p) => p.key)).toEqual([
+      "other",
+    ]);
   });
 });

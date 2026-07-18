@@ -1,13 +1,8 @@
 <script lang="ts">
-  import { listen } from "@tauri-apps/api/event";
-  import { emit } from "@tauri-apps/api/event";
+  import { listen, emit } from "@tauri-apps/api/event";
   import { translateText } from "$lib/api";
-
-  interface TranslatorPayload {
-    openrouterApiKey: string;
-    translationModel: string;
-    theme: "dark" | "light";
-  }
+  import PopoutFrame from "$lib/components/PopoutFrame.svelte";
+  import type { TranslatorPayload } from "$lib/stores/popouts.svelte";
 
   let payload = $state<TranslatorPayload | null>(null);
 
@@ -37,17 +32,12 @@
   });
 
   async function doTranslate(): Promise<void> {
-    const p = payload;
-    if (!p || sourceText.trim().length === 0) return;
-    if (!p.openrouterApiKey) {
-      error = "OpenRouter API key not configured. Add it in Settings → Translation.";
-      return;
-    }
+    if (sourceText.trim().length === 0) return;
     translating = true;
     error = null;
     translatedText = "";
     try {
-      const result = await translateText(sourceText, p.openrouterApiKey, p.translationModel);
+      const result = await translateText(sourceText);
       translatedText = result;
     } catch (e) {
       error = String(e);
@@ -76,12 +66,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="frame">
-  <header class="titlebar" data-tauri-drag-region>
-    <span class="brand" data-tauri-drag-region>Translate</span>
-    <span class="drag-spacer" data-tauri-drag-region></span>
-  </header>
-
+<PopoutFrame title="Translate">
   <div class="body">
     <!-- Translated output pane (top) -->
     <div class="pane-label">English translation</div>
@@ -115,128 +100,9 @@
       onpaste={handlePaste}
     ></textarea>
   </div>
-</div>
+</PopoutFrame>
 
 <style>
-  :global(html) {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    background: transparent;
-    color: var(--text);
-    font-family: Inter, system-ui, sans-serif;
-    overflow: hidden;
-  }
-
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    height: 100vh;
-    background: transparent;
-    overflow: hidden;
-  }
-
-  :global(#svelte) {
-    height: 100%;
-  }
-
-  :global(:root) {
-    --bg-base: #1c1c1e;
-    --bg-elevated: #18181a;
-    --bg-titlebar: #141416;
-    --bg-input: #121214;
-    --bg-hover: #25252a;
-    --bg-active: #2d2d33;
-    --border: #2a2a2e;
-    --border-strong: #3a3a40;
-    --border-focus: #5a5a62;
-    --text: #e8e6e3;
-    --text-strong: #f3f1ee;
-    --text-muted: #8c8a86;
-    --text-subtle: #6a6862;
-    --text-placeholder: #56544f;
-    --shadow: rgba(0, 0, 0, 0.6);
-    --accent-brand: #cc785c;
-    --accent-brand-hover: #d88a6f;
-    --accent-brand-soft: #3a2419;
-    --accent-brand-text: #f5d4c4;
-    --accent-positive-bg: #2a3a2a;
-    --accent-positive-border: #3a5a3a;
-    --accent-positive-text: #d0e0d0;
-    --accent-danger-bg: #3a2222;
-    --accent-danger-border: #5a3030;
-    --accent-danger-text: #ff9a9a;
-    --accent-info-bg: #1a2a3a;
-    --accent-info-border: #2a4a6a;
-    --accent-info-text: #a8c8e8;
-  }
-
-  :global([data-theme="light"]) {
-    --bg-base: #f7f5f1;
-    --bg-elevated: #f1ede6;
-    --bg-titlebar: #ebe7df;
-    --bg-input: #fdfcf9;
-    --bg-hover: #e4dfd5;
-    --bg-active: #d8d2c5;
-    --border: #ddd6c8;
-    --border-strong: #c2bbac;
-    --border-focus: #8a8275;
-    --text: #2a2724;
-    --text-strong: #161310;
-    --text-muted: #5c5852;
-    --text-subtle: #8c8780;
-    --text-placeholder: #b0aa9e;
-    --shadow: rgba(60, 50, 35, 0.18);
-    --accent-brand: #c5613e;
-    --accent-brand-hover: #b4542f;
-    --accent-brand-soft: #f5e0d4;
-    --accent-brand-text: #6d2c14;
-    --accent-positive-bg: #d4eada;
-    --accent-positive-border: #88c896;
-    --accent-positive-text: #1e5f2e;
-    --accent-danger-bg: #fbe2e2;
-    --accent-danger-border: #e0a0a0;
-    --accent-danger-text: #9a2a2a;
-    --accent-info-bg: #dde8f4;
-    --accent-info-border: #a0b8d0;
-    --accent-info-text: #2a4a6a;
-  }
-
-  .frame {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--bg-base);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 4px 24px var(--shadow), 0 0 0 1px rgba(0, 0, 0, 0.2);
-    overflow: hidden;
-  }
-
-  .titlebar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 36px;
-    padding: 0 12px;
-    background: var(--bg-titlebar);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    user-select: none;
-  }
-
-  .brand {
-    color: var(--text-strong);
-    font-size: 0.85rem;
-    font-weight: 600;
-  }
-
-  .drag-spacer {
-    flex: 1;
-    align-self: stretch;
-    min-width: 8px;
-  }
-
   .body {
     flex: 1;
     display: flex;
@@ -326,7 +192,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .error {

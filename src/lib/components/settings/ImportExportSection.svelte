@@ -1,10 +1,5 @@
 <script lang="ts">
-  import type { Settings } from "$lib/types";
-
-  type PortResult =
-    | { kind: "ok"; message: string }
-    | { kind: "cancelled" }
-    | { kind: "err"; error: string };
+  import type { PortResult, Settings } from "$lib/types";
 
   let {
     settings,

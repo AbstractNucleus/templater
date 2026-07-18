@@ -1,89 +1,48 @@
 <script lang="ts">
-  import type { Template, SortMode } from "$lib/types";
   import type { SearchHit } from "$lib/search";
   import { createDragReorder } from "$lib/dragReorder.svelte";
   import TemplateRow from "./TemplateRow.svelte";
-
-  export type SelectModifier = "none" | "ctrl" | "shift";
+  import TemplateBulkBar from "./TemplateBulkBar.svelte";
+  import GroupedTemplateList from "./GroupedTemplateList.svelte";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
+  import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { browseSession } from "$lib/stores/browseSession.svelte";
+  import { editorSession } from "$lib/stores/editorSession.svelte";
+  import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
 
   let {
-    templates,
-    searchResults,
-    selectedTemplateId,
-    bulkSelectedIds,
     width,
     flex = false,
-    canCreate,
-    canReorder,
-    sortMode,
-    onTemplateSelect,
-    onNew,
-    onClearFilters,
-    onContextTemplate,
-    onContextEmpty,
-    onReorder,
-    onMoveToFolder,
-    onSortModeToggle,
-    onBulkAddTag,
-    onBulkRemoveTag,
-    onBulkExport,
-    onBulkDelete,
   }: {
-    templates: Template[];
-    searchResults: SearchHit[];
-    selectedTemplateId: string | null;
-    bulkSelectedIds: Set<string>;
     width: number;
     /** When true, the sidebar flexes to fill available space instead of
      *  using the fixed `width` (used in minimal mode so window resizes flow
      *  into the templates column rather than exposing a dead preview area). */
     flex?: boolean;
-    canCreate: boolean;
-    /** True only when the visible order matches the underlying array order
-     *  (browse mode, no search, no tag filter, manual sort). Drag is gated
-     *  on this so the user can't reorder a filtered view ambiguously. */
-    canReorder: boolean;
-    sortMode: SortMode;
-    onTemplateSelect: (id: string, modifier: SelectModifier) => void;
-    onNew: () => void;
-    /** Clears the search box and any tag filters — offered from the
-     *  "No matches" empty state. */
-    onClearFilters: () => void;
-    onContextTemplate: (id: string, x: number, y: number) => void;
-    onContextEmpty: (x: number, y: number) => void;
-    onReorder: (newOrderIds: string[]) => void;
-    onMoveToFolder: (ids: Set<string>, folder: string | null) => void;
-    onSortModeToggle: () => void;
-    onBulkAddTag: () => void;
-    onBulkRemoveTag: () => void;
-    onBulkExport: () => void;
-    onBulkDelete: () => void;
   } = $props();
+
+  const templates = $derived(templatesStore.templates);
+  const searchResults = $derived(browseSession.results);
+  const selectedTemplateId = $derived(selectionStore.selectedTemplateId);
+  const bulkSelectedIds = $derived(selectionStore.bulkSelectedIds);
+  const canCreate = $derived(templatesStore.isEditorMode);
+  const canReorder = $derived(browseSession.canReorderTemplates);
+  const sortMode = $derived(templatesStore.settings.sort_mode);
 
   function handleEmptyContext(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    onContextEmpty(e.clientX, e.clientY);
+    uiDialogs.openContextForEmpty(e.clientX, e.clientY);
   }
 
   function handleTemplateContext(e: MouseEvent, id: string): void {
     e.preventDefault();
     e.stopPropagation();
-    onContextTemplate(id, e.clientX, e.clientY);
+    uiDialogs.openContextForTemplate(id, e.clientX, e.clientY);
   }
 
-  const templateById = $derived.by(() => {
-    const map = new Map<string, Template>();
-    for (const t of templates) map.set(t.id, t);
-    return map;
-  });
-
-  // True when at least one template carries a folder. Groups render only when
-  // the catalog uses folders — otherwise it's a flat list, just like before.
   const hasFolders = $derived(templates.some((t) => t.folder !== null));
 
-  // Per-folder collapse state. The null key is the "ungrouped" bucket. Empty
-  // set = everything expanded; touched names persist within the session.
   let collapsedFolders = $state<Set<string>>(new Set());
 
   function toggleFolder(name: string): void {
@@ -93,9 +52,6 @@
     collapsedFolders = next;
   }
 
-  // Ordered (folder | null, hits) groups, preserving the first-seen order of
-  // each folder within `searchResults`. Pinned-sort logic is upstream — by the
-  // time hits land here they're already in the order the user wanted.
   const groupedSearchResults = $derived.by(() => {
     const groups = new Map<string | null, SearchHit[]>();
     const order: (string | null)[] = [];
@@ -112,8 +68,6 @@
 
   let sidebarEl: HTMLElement | undefined = $state();
 
-  // Keep the active row visible when arrow-key navigation moves selection
-  // off-screen. `block: "nearest"` avoids reflowing if it's already visible.
   $effect(() => {
     if (!selectedTemplateId || !sidebarEl) return;
     const btn = sidebarEl.querySelector(
@@ -122,17 +76,12 @@
     btn?.scrollIntoView({ block: "nearest" });
   });
 
-  // Drag-to-reorder. The shared helper tracks the dragged id, hover target,
-  // and hover half; the reorder fires on drop. Gated on `canReorder` so a
-  // filtered view can't be reordered ambiguously.
   const drag = createDragReorder({
     enabled: () => canReorder,
     currentIds: () => templates.map((t) => t.id),
-    onReorder: (ids) => onReorder(ids),
+    onReorder: (ids) => void templatesStore.handleTemplatesReorder(ids),
   });
 
-  // Folder drop state lives outside the shared helper — it's specific to the
-  // Templates sidebar's grouped view.
   let dragOverFolder = $state<string | null>(null);
 
   function draggedSelection(): Set<string> {
@@ -156,7 +105,7 @@
     const ids = draggedSelection();
     drag.reset();
     dragOverFolder = null;
-    onMoveToFolder(ids, folder);
+    void templatesStore.moveToFolder(ids, folder);
   }
 
   function handleDragEnd(): void {
@@ -185,7 +134,7 @@
               : sortMode === "most_used"
                 ? "Sorted by lifetime copy count. Click → never used."
                 : "Sorted by never used first. Click → manual."}
-          onclick={onSortModeToggle}
+          onclick={() => templatesStore.handleSortModeToggle()}
         >{
           sortMode === "manual" ? "Manual ↕"
           : sortMode === "recent" ? "Recent ↓"
@@ -193,26 +142,19 @@
           : "Never used 0"
         }</button>
         {#if canCreate}
-          <button class="new-btn" title="New template" onclick={onNew}>+</button>
+          <button class="new-btn" title="New template" onclick={() => editorSession.startCreate()}>+</button>
         {/if}
       </div>
     </div>
 
-    {#if bulkSelectedIds.size > 1}
-      <div class="bulk-bar">
-        <span class="bulk-count">{bulkSelectedIds.size} selected</span>
-        <div class="bulk-actions">
-          {#if canCreate}
-            <button class="bulk-btn" onclick={onBulkAddTag} title="Add tag to selected">Tag</button>
-            <button class="bulk-btn" onclick={onBulkRemoveTag} title="Remove tag from selected">Untag</button>
-          {/if}
-          <button class="bulk-btn" onclick={onBulkExport} title="Export selected">Export</button>
-          {#if canCreate}
-            <button class="bulk-btn danger" onclick={onBulkDelete} title="Delete selected">Delete</button>
-          {/if}
-        </div>
-      </div>
-    {/if}
+    <TemplateBulkBar
+      count={bulkSelectedIds.size}
+      canEdit={canCreate}
+      onTag={() => uiDialogs.openBulkTagPrompt()}
+      onUntag={() => uiDialogs.openBulkRemoveTagPrompt()}
+      onExport={() => void templatesStore.bulkExport(bulkSelectedIds)}
+      onDelete={() => (uiDialogs.bulkDeleteConfirmOpen = true)}
+    />
   </div>
 
   {#snippet templateRow(hit: SearchHit, indent: boolean = false)}
@@ -225,7 +167,7 @@
         dragging={drag.draggingId === hit.template.id}
         dragOverTop={drag.dragOverId === hit.template.id && drag.dragOverHalf === "top"}
         dragOverBottom={drag.dragOverId === hit.template.id && drag.dragOverHalf === "bottom"}
-        onSelect={(m) => onTemplateSelect(hit.template.id, m)}
+        onSelect={(m) => browseSession.selectTemplate(hit.template.id, m)}
         onContext={(e) => handleTemplateContext(e, hit.template.id)}
         onDragStart={(e) => drag.handleDragStart(e, hit.template.id)}
         onDragOver={(e) => drag.handleDragOver(e, hit.template.id)}
@@ -245,40 +187,21 @@
       {:else}
         <li class="empty no-matches">
           <span>No matches</span>
-          <button class="clear-filters-btn" onclick={onClearFilters}>Clear search & filters</button>
+          <button class="clear-filters-btn" onclick={() => browseSession.clearFilters()}>Clear search & filters</button>
         </li>
       {/if}
     </ul>
   {:else if hasFolders}
-    <ul class="template-list" role="listbox" aria-label="Templates">
-      {#each groupedSearchResults as group (group.folder ?? "__ungrouped__")}
-        {@const label = group.folder ?? "Ungrouped"}
-        {@const collapsed = collapsedFolders.has(label)}
-        <li
-          class="folder-header"
-          role="presentation"
-          class:drag-over={dragOverFolder === (group.folder ?? "__ungrouped__")}
-          ondragover={(e) => handleFolderDragOver(e, group.folder)}
-          ondragleave={() => (dragOverFolder = null)}
-          ondrop={(e) => handleFolderDrop(e, group.folder)}
-        >
-          <button
-            class="folder-toggle"
-            onclick={() => toggleFolder(label)}
-            title={collapsed ? "Expand, or drop templates here to move them" : "Collapse, or drop templates here to move them"}
-          >
-            <span class="folder-chevron">{collapsed ? "▸" : "▾"}</span>
-            <span class="folder-name">{label}</span>
-            <span class="folder-count">{group.hits.length}</span>
-          </button>
-        </li>
-        {#if !collapsed}
-          {#each group.hits as hit (hit.template.id)}
-            {@render templateRow(hit, true)}
-          {/each}
-        {/if}
-      {/each}
-    </ul>
+    <GroupedTemplateList
+      groups={groupedSearchResults}
+      {collapsedFolders}
+      {dragOverFolder}
+      onToggleFolder={toggleFolder}
+      onFolderDragOver={handleFolderDragOver}
+      onFolderDragLeave={() => (dragOverFolder = null)}
+      onFolderDrop={handleFolderDrop}
+      {templateRow}
+    />
   {:else}
     <ul class="template-list" role="listbox" aria-label="Templates">
       {#each searchResults as hit (hit.template.id)}
@@ -368,64 +291,6 @@
     color: var(--text);
   }
 
-  .bulk-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 3px 4px 3px 8px;
-    margin: 0 2px 6px;
-    background: var(--accent-info-bg);
-    border: 1px solid var(--accent-info-border);
-    border-radius: 4px;
-    font-size: 0.72rem;
-    color: var(--accent-info-text);
-    animation: bulk-in 120ms ease-out;
-  }
-
-  @keyframes bulk-in {
-    from {
-      opacity: 0;
-      transform: translateY(-3px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .bulk-count {
-    font-weight: 600;
-    flex-shrink: 0;
-  }
-
-  .bulk-actions {
-    display: flex;
-    gap: 2px;
-  }
-
-  .bulk-btn {
-    background: transparent;
-    border: 1px solid transparent;
-    color: inherit;
-    padding: 2px 7px;
-    border-radius: 3px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.7rem;
-    line-height: 1.3;
-  }
-
-  .bulk-btn:hover {
-    background: var(--accent-info-border);
-    color: var(--bg-base);
-  }
-
-  .bulk-btn.danger:hover {
-    background: var(--accent-danger-border);
-    color: var(--bg-base);
-  }
-
   ul {
     list-style: none;
     margin: 0;
@@ -438,57 +303,6 @@
 
   .template-list li.in-folder {
     padding-left: 12px;
-  }
-
-  .folder-header {
-    margin-top: 4px;
-  }
-
-  .folder-header.drag-over .folder-toggle {
-    background: var(--accent-info-bg);
-    color: var(--accent-info-text);
-    outline: 1px solid var(--accent-info-border);
-  }
-
-  .folder-header:first-child {
-    margin-top: 0;
-  }
-
-  .folder-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    width: 100%;
-    text-align: left;
-    background: transparent;
-    border: none;
-    color: var(--text-deemphasis);
-    padding: 2px 6px;
-    border-radius: 3px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .folder-toggle:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-
-  .folder-chevron {
-    width: 10px;
-    color: var(--text-subtle);
-  }
-
-  .folder-name {
-    flex: 1;
-  }
-
-  .folder-count {
-    color: var(--text-subtle);
-    font-size: 0.65rem;
   }
 
   .empty {

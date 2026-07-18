@@ -1,10 +1,13 @@
 // One-shot: back up the live templates.json, then rewrite it with only
 // withdrawal/deposit-related entries (matched by name or any tag).
 //
-// Run: node scripts/filter-payments-templates.mjs
+// Dry-run by default. To mutate APPDATA:
+//   node scripts/filter-payments-templates.mjs --write
 
 import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
+
+const write = process.argv.includes("--write");
 
 const appData = process.env.APPDATA;
 if (!appData) {
@@ -14,12 +17,6 @@ if (!appData) {
 
 const dir = join(appData, "com.noel.templatewidget");
 const file = join(dir, "templates.json");
-
-const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const backup = join(dir, `templates.json.full-backup-${stamp}`);
-
-copyFileSync(file, backup);
-console.log(`Backed up to ${backup}`);
 
 const raw = readFileSync(file, "utf8");
 const data = JSON.parse(raw);
@@ -34,6 +31,16 @@ const matched = data.templates.filter((t) => {
 
 console.log(`Matched ${matched.length} of ${data.templates.length} templates.`);
 for (const t of matched) console.log(`  - ${t.name}`);
+
+if (!write) {
+  console.log("Dry-run only. Pass --write to backup and rewrite templates.json.");
+  process.exit(0);
+}
+
+const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+const backup = join(dir, `templates.json.full-backup-${stamp}`);
+copyFileSync(file, backup);
+console.log(`Backed up to ${backup}`);
 
 const next = { ...data, templates: matched };
 writeFileSync(file, JSON.stringify(next, null, 2), "utf8");

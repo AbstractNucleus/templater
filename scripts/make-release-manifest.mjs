@@ -2,20 +2,26 @@
  * Generate `latest.json` for the Tauri updater from a directory of build
  * artifacts. Usage:
  *
- *   node scripts/make-release-manifest.mjs --input-dir <dir>
+ *   node scripts/make-release-manifest.mjs --input-dir <dir> --download-base-url <url>
  *
  * Scans the input directory recursively for `.sig` files, pairs each one
  * with its signed artifact, and writes `latest.json` next to the artifacts.
- * The app's updater endpoint fetches this file to check for new versions.
+ * Platform keys are derived from artifact filenames (OS + arch); ambiguous
+ * names fail the build instead of being silently mis-mapped.
+ * Download URLs are built from --download-base-url + the artifact basename
+ * (local paths are not valid for the updater).
  */
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join, basename } from "path";
+import { platformFromArtifact } from "./lib/releasePlatform.mjs";
 
 const args = process.argv.slice(2);
 const inputDirIdx = args.indexOf("--input-dir");
 if (inputDirIdx === -1) {
-  console.error("Usage: make-release-manifest.mjs --input-dir <dir> --download-base-url <url>");
+  console.error(
+    "Usage: make-release-manifest.mjs --input-dir <dir> --download-base-url <url>",
+  );
   process.exit(1);
 }
 
@@ -32,7 +38,6 @@ if (!downloadBaseUrl) {
   process.exit(1);
 }
 
-// Read tauri.conf.json for the current version and pubkey.
 const confPath = join(process.cwd(), "src-tauri", "tauri.conf.json");
 const conf = JSON.parse(readFileSync(confPath, "utf-8"));
 const version = conf.version;
@@ -42,8 +47,10 @@ if (!pubkey) {
   process.exit(1);
 }
 
-// Collect all .sig files, find the matching artifact, and build the platform map.
 const platforms = new Map();
+const errors = [];
+const base = downloadBaseUrl.replace(/\/$/, "");
+
 function walk(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
@@ -56,42 +63,39 @@ function walk(dir) {
         console.warn(`  skipping ${full}: no matching artifact`);
         continue;
       }
-      const signature = readFileSync(sigPath, "utf-8").trim();
-      const platform = guessPlatform(artifactPath);
-      if (platform) {
-        platforms.set(platform, {
-          signature,
-          url: `${downloadBaseUrl.replace(/\/$/, "")}/${encodeURIComponent(basename(artifactPath))}`,
-        });
-      } else {
-        console.warn(`  skipping ${artifactPath}: unknown platform`);
+      const mapped = platformFromArtifact(artifactPath);
+      if ("error" in mapped) {
+        errors.push(mapped.error);
+        continue;
       }
+      const url = `${base}/${encodeURIComponent(basename(artifactPath))}`;
+      if (platforms.has(mapped.platform)) {
+        errors.push(
+          `duplicate platform ${mapped.platform}: ${platforms.get(mapped.platform).url} and ${url}`,
+        );
+        continue;
+      }
+      const signature = readFileSync(sigPath, "utf-8").trim();
+      platforms.set(mapped.platform, {
+        signature,
+        url,
+      });
     }
   }
 }
 
-function guessPlatform(artifactPath) {
-  const name = artifactPath.toLowerCase();
-  const ext = artifactPath.split(".").pop();
-  const isNsis = name.includes(".exe") || name.endsWith(".exe");
-  const isDmg = name.endsWith(".dmg") || name.includes(".dmg");
-  const isAppTar = name.endsWith(".tar.gz") || name.endsWith(".app.tar.gz");
-  const isWindows = isNsis || name.includes("x86_64");
-  // We can't map every artifact to a unique platform key, but we try.
-  // The updater only cares about the key matching the client's platform.
-  if (isNsis && isWindows) {
-    return "windows-x86_64";
-  }
-  if (isDmg) {
-    return "darwin-aarch64";
-  }
-  if (isAppTar) {
-    return "darwin-aarch64";
-  }
-  return null;
+walk(inputDir);
+
+if (errors.length > 0) {
+  console.error("Platform mapping failed:");
+  for (const e of errors) console.error(`  - ${e}`);
+  process.exit(1);
 }
 
-walk(inputDir);
+if (platforms.size === 0) {
+  console.error("no signed artifacts found");
+  process.exit(1);
+}
 
 const manifest = {
   version,

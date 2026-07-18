@@ -1,3 +1,6 @@
+//! Native caption hit-testing for the frameless main window on Windows.
+//! Pop-outs use `data-tauri-drag-region` instead and do not need this.
+
 #[cfg(windows)]
 mod imp {
     use std::mem::transmute;
@@ -9,8 +12,12 @@ mod imp {
         HTCAPTION, HTCLIENT, WM_NCHITTEST, WNDPROC,
     };
 
-    const TITLEBAR_HEIGHT: i32 = 36;
-    const RIGHT_BUTTONS_WIDTH: i32 = 230;
+    /// Must match `.titlebar { height }` in `src/lib/components/TitleBar.svelte`.
+    const TITLEBAR_HEIGHT: i32 = 40;
+
+    /// Width reserved for trailing chrome (pin / pop-outs / settings / close).
+    /// Measured against the TitleBar trailing cluster; keep in sync if buttons change.
+    const RIGHT_BUTTONS_WIDTH: i32 = 138;
 
     static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 

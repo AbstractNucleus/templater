@@ -12,12 +12,14 @@ import type { Template } from "./types";
  * dropped.
  */
 
-export interface NameHit {
-  /** Inclusive start index into the original `template.name` string. */
+/** Inclusive-start / exclusive-end range into a source string. */
+export interface TextRange {
   start: number;
-  /** Exclusive end index. */
   end: number;
 }
+
+/** Name match ranges — same shape as body ranges (`TextRange`). */
+export type NameHit = TextRange;
 
 export interface SearchHit {
   template: Template;

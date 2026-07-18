@@ -1,5 +1,6 @@
 import type { Template } from "$lib/types";
 
+export type SelectModifier = "none" | "ctrl" | "shift";
 export type TagCombinator = "and" | "or";
 
 class SelectionStore {
@@ -40,7 +41,7 @@ class SelectionStore {
     }
   }
 
-  selectTemplate(id: string, visibleIds: string[], modifier: "none" | "ctrl" | "shift"): void {
+  selectTemplate(id: string, visibleIds: string[], modifier: SelectModifier): void {
     const cur = this.selectedTemplateId;
     if (modifier === "ctrl") {
       const next = new Set(this.bulkSelectedIds.size > 0 ? this.bulkSelectedIds : cur ? [cur] : []);
@@ -69,6 +70,17 @@ class SelectionStore {
     const next = new Set<string>();
     for (const id of this.bulkSelectedIds) if (!removedIds.has(id)) next.add(id);
     this.bulkSelectedIds = next;
+  }
+
+  /** After deleteIds: drop removed bulk ids and reselect if the current row is gone. */
+  syncAfterRemoval(removedIds: Set<string>, fallbackId: string | null): void {
+    this.pruneBulkSelection(removedIds);
+    if (
+      this.selectedTemplateId !== null &&
+      removedIds.has(this.selectedTemplateId)
+    ) {
+      this.selectedTemplateId = fallbackId;
+    }
   }
 
   toggleTag(tag: string): void {

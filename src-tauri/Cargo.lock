@@ -4359,9 +4359,8 @@ dependencies = [
 
 [[package]]
 name = "templater"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
- "chrono",
  "dirs",
  "reqwest 0.12.28",
  "serde",

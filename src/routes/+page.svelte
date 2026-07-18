@@ -1,47 +1,30 @@
 <script lang="ts">
   import TagsSidebar from "$lib/components/TagsSidebar.svelte";
-  import TemplatesSidebar, { type SelectModifier } from "$lib/components/TemplatesSidebar.svelte";
-  import MainPanel from "$lib/components/MainPanel.svelte";
+  import TemplatesSidebar from "$lib/components/TemplatesSidebar.svelte";
+  import AppShell from "$lib/components/AppShell.svelte";
   import TitleBar from "$lib/components/TitleBar.svelte";
-  import SettingsModal from "$lib/components/SettingsModal.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
-  import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
-  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
-  import CheatSheet from "$lib/components/CheatSheet.svelte";
+  import DialogsHost from "$lib/components/DialogsHost.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
-  import { readText } from "@tauri-apps/plugin-clipboard-manager";
+  import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
-  import { searchTemplates } from "$lib/search";
-  import { orderedTagCounts } from "$lib/tags";
-  import { buildContextMenu } from "$lib/contextMenu";
+  import { bindContextMenuItems, buildContextMenu } from "$lib/contextMenu";
+  import { bootstrapApp } from "$lib/appBootstrap";
   import {
-    getAppVersion,
-    openDataDir,
-    checkForUpdate,
-    listTemplateBackups,
-    openPreviewWindow,
-    closePreviewWindow,
-    isPreviewOpen,
-    openTranslatorWindow,
-    closeTranslatorWindow,
-    isTranslatorOpen,
-  } from "$lib/api";
-  import { emit } from "@tauri-apps/api/event";
-  import {
-    DEFAULT_COLUMN_WIDTHS,
-    type Settings,
-    type Template,
-    type TemplateDraft,
-  } from "$lib/types";
-  import {
-    templatesStore,
-    handleExportTemplates,
-    handleImportTemplates,
-  } from "$lib/stores/templatesStore.svelte";
+    applyMinimalGeometry,
+    createMinimalGeometryState,
+  } from "$lib/minimalGeometry";
+  import { DEFAULT_COLUMN_WIDTHS } from "$lib/types";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { browseSession } from "$lib/stores/browseSession.svelte";
+  import { editorSession } from "$lib/stores/editorSession.svelte";
+  import { popouts } from "$lib/stores/popouts.svelte";
+  import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
+  import { appErrors } from "$lib/stores/appErrors.svelte";
   import { createGlobalKeydownHandler } from "$lib/keyboard";
+  import { composeSession } from "$lib/stores/composeSession.svelte";
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2.0;
@@ -54,22 +37,31 @@
 
   let tagsWidth = $state(DEFAULT_COLUMN_WIDTHS.tags);
   let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
-  let searchInput: HTMLInputElement | undefined = $state();
+  let appVersion = $state("0.0.0");
+  let includeOpening = $state(true);
+  let includeSignature = $state(true);
 
-  // New-template flow state. When non-null, the template form opens for creation.
-  let creatingDraft = $state<TemplateDraft | null>(null);
-
-  function clearSearch(): void {
-    searchQuery = "";
-    searchInput?.focus();
-  }
+  const minimalGeo = createMinimalGeometryState();
 
   function handleGlobalContextMenu(e: MouseEvent): void {
     const result = buildContextMenu(e);
     if (result.action === "default") return;
     e.preventDefault();
     if (result.action === "menu") {
-      contextMenu = { x: e.clientX, y: e.clientY, items: result.items };
+      uiDialogs.contextMenu = {
+        x: e.clientX,
+        y: e.clientY,
+        items: bindContextMenuItems(result.items, {
+          readText: async () => {
+            try {
+              return await readText();
+            } catch {
+              return null;
+            }
+          },
+          writeText: (text) => writeText(text),
+        }),
+      };
     }
   }
 
@@ -80,22 +72,9 @@
     void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, zoom: clamped });
   }
 
-  function isInputFocused(): boolean {
-    const ae = document.activeElement;
-    if (!ae || ae === document.body) return false;
-    const tag = ae.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return true;
-    if ((ae as HTMLElement).isContentEditable) return true;
-    return false;
-  }
-
-  function moveSelection(delta: number): void {
-    selectionStore.moveSelection(visibleTemplateIds, delta);
-  }
-
   function copySelected(): void {
     if (selectionStore.selectedTemplateId === null) return;
-    copyTrigger++;
+    composeSession.requestCopy();
   }
 
   function startResize(target: "tags" | "templates"): (e: PointerEvent) => void {
@@ -106,14 +85,8 @@
       const widthOf = (t: typeof target): number =>
         t === "tags" ? tagsWidth : templatesWidth;
       const startWidth = widthOf(target);
-      const min =
-        target === "tags"
-          ? TAGS_MIN
-          : TEMPLATES_MIN;
-      const max =
-        target === "tags"
-          ? TAGS_MAX
-          : TEMPLATES_MAX;
+      const min = target === "tags" ? TAGS_MIN : TEMPLATES_MIN;
+      const max = target === "tags" ? TAGS_MAX : TEMPLATES_MAX;
       handle.setPointerCapture(e.pointerId);
       handle.classList.add("dragging");
 
@@ -144,214 +117,44 @@
     };
   }
 
-  let appVersion = $state("0.0.0");
-
-  let searchQuery = $state("");
-  let includeOpening = $state(true);
-  let includeSignature = $state(true);
-  let editing = $state(false);
-  let settingsOpen = $state(false);
-  let cheatSheetOpen = $state(false);
-
-  let copyTrigger = $state(0);
-
-  // Minimal-mode pop-out state. `previewOpen` tracks whether the secondary
-  // preview window is currently visible, so the titlebar toggle reflects reality.
-  let previewOpen = $state(false);
-
-  // Translator pop-out state (always available, not tied to minimal mode).
-  let translatorOpen = $state(false);
-
-  let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
-  let contextDeleteTarget = $state<Template | null>(null);
-
-  // Read-only aliases keep template + derivation code readable. Mutations go
-  // directly through the stores so reactivity propagates back.
-  const templates = $derived(templatesStore.templates);
   const settings = $derived(templatesStore.settings);
   const loaded = $derived(templatesStore.loaded);
   const undoToast = $derived(templatesStore.undoToast);
-
-  const selectedTemplate = $derived(
-    templates.find((t) => t.id === selectionStore.selectedTemplateId) ?? null,
-  );
-
   const isEditorMode = $derived(templatesStore.isEditorMode);
-
   const isMinimal = $derived(settings.minimal);
 
-  const availableTags = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of templates) for (const tag of t.tags) set.add(tag);
-    return [...set].sort();
-  });
-
-  const availableFolders = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of templates) if (t.folder !== null) set.add(t.folder);
-    return [...set].sort();
-  });
-
-  // Browse order: pinned first, then by sort mode. "manual" preserves array
-  // order; "recent" by last_used_at desc; "most_used" by copy_count desc.
-  const browseOrdered = $derived.by(() => {
-    const mode = settings.sort_mode;
-    return [...templates].sort((a, b) => {
-      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      if (mode === "recent") {
-        const aT = a.last_used_at ?? "";
-        const bT = b.last_used_at ?? "";
-        if (aT !== bT) return aT > bT ? -1 : 1;
-        return 0;
-      }
-      if (mode === "most_used") {
-        if (a.copy_count !== b.copy_count) return b.copy_count - a.copy_count;
-        return 0;
-      }
-      if (mode === "never_used") {
-        const aNever = a.copy_count === 0 && a.last_used_at === null;
-        const bNever = b.copy_count === 0 && b.last_used_at === null;
-        if (aNever !== bNever) return aNever ? -1 : 1;
-        return 0;
-      }
-      return 0;
-    });
-  });
-
-  const tagFiltered = $derived.by(() => {
-    if (selectionStore.selectedTagIds.size === 0 && selectionStore.excludedTagIds.size === 0) return browseOrdered;
-    return browseOrdered.filter((t) => {
-      for (const tag of selectionStore.excludedTagIds) {
-        if (t.tags.includes(tag)) return false;
-      }
-      if (selectionStore.selectedTagIds.size === 0) return true;
-      if (selectionStore.tagCombinator === "or") {
-        for (const tag of selectionStore.selectedTagIds) {
-          if (t.tags.includes(tag)) return true;
-        }
-        return false;
-      }
-      for (const tag of selectionStore.selectedTagIds) {
-        if (!t.tags.includes(tag)) return false;
-      }
-      return true;
-    });
-  });
-
-  const rawHits = $derived(searchTemplates(searchQuery, tagFiltered));
-
-  // Group pinned to the top regardless of search score. Within each tier the
-  // searchTemplates ordering (full-match → score → name) is preserved.
-  const searchResults = $derived.by(() => {
-    const pinned: typeof rawHits = [];
-    const others: typeof rawHits = [];
-    for (const h of rawHits) {
-      if (h.template.pinned) pinned.push(h);
-      else others.push(h);
-    }
-    return [...pinned, ...others];
-  });
-
-  // Drag-reorder is only safe when the visible order IS the underlying array
-  // order. Any filter, search, or paste-mode ranking breaks that invariant.
-  const canReorderTemplates = $derived(
-    isEditorMode &&
-      searchQuery.trim().length === 0 &&
-      selectionStore.selectedTagIds.size === 0 &&
-      selectionStore.excludedTagIds.size === 0 &&
-      settings.sort_mode === "manual",
-  );
-
-  // Tag counts shared between the Tags sidebar UI and the SettingsModal tag
-  // manager.
-  const settingsTagCounts = $derived(orderedTagCounts(templates, settings.tag_order));
-
-  // Props the MainPanel takes identically in all three render modes (create /
-  // edit / browse). Spread at each site with `{...sharedMainPanelProps}`;
-  // per-branch props (template, editing, creatingDraft, action callbacks) are
-  // passed explicitly alongside the spread.
-  const sharedMainPanelProps = $derived({
-    globalSignature: settings.global_signature,
-    snippets: settings.snippets,
-    canEdit: isEditorMode,
-    availableTags,
-    availableFolders,
-    copyTrigger,
-    savedPlaceholderValues: settings.placeholder_values,
+  // Session UI for AppShell (compose toggles). Store data is read inside.
+  const appShellProps = $derived({
     includeOpening,
     includeSignature,
     onToggleOpening: (v: boolean) => (includeOpening = v),
     onToggleSignature: (v: boolean) => (includeSignature = v),
-    onCopySuccess: (id: string) => void templatesStore.recordCopy(id),
-    onPlaceholderValuesChange: (id: string, vals: Record<string, string>) =>
-      void templatesStore.recordPlaceholderValues(id, vals),
-    onRevertHistory: (id: string, idx: number) => void templatesStore.revertHistory(id, idx),
   });
 
-  // Ordered IDs the user can step through with ↑/↓. Only browse search results.
-  const visibleTemplateIds = $derived(
-    searchResults.map((h) => h.template.id),
-  );
-
   // Snap selection to the first visible row when the current pick drops out
-  // of the result set (e.g. user typed and the previous selection no longer
-  // matches). Skip during editing where the selection is locked.
+  // of the result set. Skip during editing where the selection is locked.
   $effect(() => {
-    if (editing || creatingDraft) return;
-    selectionStore.ensureSelection(visibleTemplateIds);
+    if (editorSession.isActive) return;
+    selectionStore.ensureSelection(browseSession.visibleIds);
   });
 
   $effect(() => {
     void (async () => {
       try {
-        const [version] = await Promise.all([
-          getAppVersion().catch(() => "0.0.0"),
-        ]);
-        appVersion = version;
-        await templatesStore.load();
-        selectionStore.selectInitial(templatesStore.templates);
-        const s = templatesStore.settings;
-        tagsWidth = s.column_widths.tags;
-        templatesWidth = s.column_widths.templates;
+        const boot = await bootstrapApp();
+        appVersion = boot.appVersion;
+        tagsWidth = boot.tagsWidth;
+        templatesWidth = boot.templatesWidth;
       } catch (e) {
         // Surface the error and leave templates empty — DON'T fall back to
         // starter templates here. Any subsequent persist would overwrite the
         // user's (presumably recoverable) on-disk file with the starter set.
-        templatesStore.loadError = String(e);
+        appErrors.setLoad(String(e));
       }
     })();
   });
 
-  function handleTagToggle(tag: string): void {
-    selectionStore.toggleTag(tag);
-  }
-
-  function handleTagExclude(tag: string): void {
-    selectionStore.excludeTag(tag);
-  }
-
-  function handleTagsClear(): void {
-    selectionStore.clearTags();
-  }
-
-  function handleCombinatorToggle(): void {
-    selectionStore.toggleTagCombinator();
-  }
-
-  function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
-    if (editing) {
-      editing = false;
-    }
-    selectionStore.selectTemplate(id, visibleTemplateIds, modifier);
-  }
-
-  function handleSearchChange(q: string): void {
-    searchQuery = q;
-  }
-
   // The Rust handler emits this when the quick-capture hotkey is pressed.
-  // Read the clipboard and open the new-template form with the body
-  // pre-filled. Skipped in User mode (no template creation allowed).
   $effect(() => {
     const unlisten = listen("quick-capture", async () => {
       if (!isEditorMode) return;
@@ -361,228 +164,12 @@
       } catch {
         text = "";
       }
-      handleNew(text);
+      editorSession.startCreate(text);
     });
     return () => {
       void unlisten.then((u) => u());
     };
   });
-
-  async function handleSave(updated: Template): Promise<void> {
-    await templatesStore.handleSave(updated);
-    editing = false;
-  }
-
-  function enterEditMode(): void {
-    if (!selectedTemplate) return;
-    editing = true;
-  }
-
-  function cancelEditMode(): void {
-    editing = false;
-  }
-
-  async function handleNew(prefilledBody: string = ""): Promise<void> {
-    if (!isEditorMode) return;
-    creatingDraft = {
-      name: "",
-      tags: [],
-      opening: "Hello,",
-      body: prefilledBody,
-      folder: null,
-    };
-  }
-
-  async function handleCreateDraft(draft: TemplateDraft): Promise<void> {
-    if (!isEditorMode) return;
-    templatesStore.pushUndo("create");
-    const now = new Date().toISOString();
-    const folder = draft.folder !== null && draft.folder.trim().length > 0
-      ? draft.folder.trim()
-      : null;
-    const newTemplate: Template = {
-      id: crypto.randomUUID(),
-      name: draft.name.trim() || "Untitled",
-      tags: draft.tags,
-      opening: draft.opening,
-      body: draft.body,
-      created_at: now,
-      updated_at: now,
-      pinned: false,
-      last_used_at: null,
-      copy_count: 0,
-      folder,
-      history: [],
-    };
-    const next = [newTemplate, ...templatesStore.templates];
-    await templatesStore.persist(next);
-    selectionStore.selectedTemplateId = newTemplate.id;
-    creatingDraft = null;
-  }
-
-  function cancelCreateDraft(): void {
-    creatingDraft = null;
-  }
-
-  async function duplicateSelectedTemplate(): Promise<void> {
-    if (!selectedTemplate) return;
-    const id = await templatesStore.duplicateTemplateById(selectedTemplate.id);
-    if (id) selectionStore.selectedTemplateId = id;
-  }
-
-  async function deleteSelectedTemplate(): Promise<void> {
-    if (!selectedTemplate) return;
-    const id = selectedTemplate.id;
-    await templatesStore.deleteTemplateById(id);
-    selectionStore.pruneBulkSelection(new Set([id]));
-    selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
-  }
-
-  async function handleSettingsUpdate(next: Settings): Promise<void> {
-    await templatesStore.persist(templatesStore.templates, next);
-  }
-
-  async function handleRenameTag(from: string, to: string): Promise<void> {
-    await templatesStore.handleRenameTag(
-      from,
-      to,
-      selectionStore.selectedTagIds,
-      selectionStore.excludedTagIds,
-    );
-    selectionStore.remapTag(from, to);
-  }
-
-  async function handleDeleteTag(tag: string): Promise<void> {
-    await templatesStore.handleDeleteTag(
-      tag,
-      selectionStore.selectedTagIds,
-      selectionStore.excludedTagIds,
-    );
-    selectionStore.removeTag(tag);
-  }
-
-  function openContextForTemplate(id: string, x: number, y: number): void {
-    const tpl = templates.find((t) => t.id === id);
-    if (!tpl) return;
-
-    // Bulk menu: when the right-clicked row is part of a >1 selection, show
-    // bulk actions instead of per-template ones. Otherwise fall through to
-    // the single-template menu.
-    const bulk = selectionStore.bulkSelectedIds;
-    if (bulk.size > 1 && bulk.has(id)) {
-      const count = bulk.size;
-      const items: ContextMenuItem[] = [];
-      if (isEditorMode) {
-        items.push({
-          label: `Add tag to ${count}…`,
-          onClick: () => (bulkTagPromptOpen = true),
-        });
-        items.push({
-          label: `Remove tag from ${count}…`,
-          onClick: () => (bulkRemoveTagPromptOpen = true),
-        });
-      }
-      items.push({ label: `Export ${count}…`, onClick: () => void templatesStore.bulkExport(bulk) });
-      if (isEditorMode) {
-        items.push({
-          label: `Delete ${count}`,
-          danger: true,
-          onClick: () => (bulkDeleteConfirmOpen = true),
-        });
-      }
-      contextMenu = { x, y, items };
-      return;
-    }
-
-    const items: ContextMenuItem[] = [];
-    if (isEditorMode) {
-      items.push({
-        label: tpl.pinned ? "Unpin" : "Pin",
-        onClick: () => void templatesStore.togglePin(id),
-      });
-      items.push({
-        label: "Duplicate",
-        onClick: async () => {
-          const copyId = await templatesStore.duplicateTemplateById(id);
-          if (copyId) selectionStore.selectedTemplateId = copyId;
-        },
-      });
-    }
-    items.push({ label: "Export…", onClick: () => void templatesStore.exportSingleTemplate(id) });
-    if (isEditorMode) {
-      items.push({
-        label: "Delete",
-        danger: true,
-        onClick: () => (contextDeleteTarget = tpl),
-      });
-    }
-    contextMenu = { x, y, items };
-  }
-
-  let bulkDeleteConfirmOpen = $state(false);
-  let bulkTagPromptOpen = $state(false);
-  let bulkRemoveTagPromptOpen = $state(false);
-  let bulkTagDraft = $state("");
-
-  async function confirmBulkDelete(): Promise<void> {
-    const ids = new Set(selectionStore.bulkSelectedIds);
-    bulkDeleteConfirmOpen = false;
-    await templatesStore.bulkDelete(ids);
-    selectionStore.bulkSelectedIds = new Set();
-    if (selectionStore.selectedTemplateId !== null && ids.has(selectionStore.selectedTemplateId)) {
-      selectionStore.selectedTemplateId = templates[0]?.id ?? null;
-    }
-  }
-
-  async function confirmBulkTag(): Promise<void> {
-    const tag = bulkTagDraft.trim();
-    if (tag.length === 0) return;
-    bulkTagPromptOpen = false;
-    bulkTagDraft = "";
-    await templatesStore.bulkAddTag(selectionStore.bulkSelectedIds, tag);
-  }
-
-  async function confirmBulkRemoveTag(): Promise<void> {
-    const tag = bulkTagDraft.trim();
-    if (tag.length === 0) return;
-    bulkRemoveTagPromptOpen = false;
-    bulkTagDraft = "";
-    await templatesStore.bulkRemoveTag(selectionStore.bulkSelectedIds, tag);
-  }
-
-  function openContextForEmpty(x: number, y: number): void {
-    contextMenu = {
-      x,
-      y,
-      items: [
-        {
-          label: "Open data folder",
-          onClick: () => {
-            openDataDir().catch((e) => (templatesStore.loadError = `open folder failed: ${e}`));
-          },
-        },
-      ],
-    };
-  }
-
-  function closeContextMenu(): void {
-    contextMenu = null;
-  }
-
-  async function confirmContextDelete(): Promise<void> {
-    if (!contextDeleteTarget) return;
-    const id = contextDeleteTarget.id;
-    contextDeleteTarget = null;
-    await templatesStore.deleteTemplateById(id);
-    selectionStore.pruneBulkSelection(new Set([id]));
-    if (selectionStore.selectedTemplateId === id) {
-      selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
-    }
-  }
-
-  function cancelContextDelete(): void {
-    contextDeleteTarget = null;
-  }
 
   $effect(() => {
     if (typeof document !== "undefined") {
@@ -600,278 +187,59 @@
   // Tray menu → Settings emits this; Rust has already shown + focused the window.
   $effect(() => {
     const unlisten = listen("open-settings", () => {
-      settingsOpen = true;
+      uiDialogs.settingsOpen = true;
     });
     return () => {
       void unlisten.then((u) => u());
     };
   });
 
-  // Global keyboard shortcuts. The handler body lives in $lib/keyboard.ts;
-  // these getters/actions are everything it closes over (live reads via
-  // getters so each keystroke sees current state).
   const handleGlobalKeydown = createGlobalKeydownHandler({
-    isContextDeleteOpen: () => contextDeleteTarget !== null,
-    isSettingsOpen: () => settingsOpen,
-    isBulkDeleteConfirmOpen: () => bulkDeleteConfirmOpen,
-    isBulkTagPromptOpen: () => bulkTagPromptOpen,
-    isBulkRemoveTagPromptOpen: () => bulkRemoveTagPromptOpen,
-    isCheatSheetOpen: () => cheatSheetOpen,
-    setCheatSheetOpen: (v) => (cheatSheetOpen = v),
     getZoom: () => templatesStore.settings.zoom ?? 1,
     setZoom,
     zoomStep: ZOOM_STEP,
-    getSearchInput: () => searchInput,
-    getSearchQuery: () => searchQuery,
-    clearSearch,
-    isEditing: () => editing || creatingDraft !== null,
-    isEditorMode: () => isEditorMode,
-    isInputFocused,
-    moveSelection,
+    getSearchInput: () => browseSession.searchInputEl,
+    getSearchQuery: () => browseSession.searchQuery,
+    clearSearch: () => browseSession.clearSearch(),
+    isEditing: () => editorSession.isActive,
+    moveSelection: (delta) => browseSession.moveSelection(delta),
     copySelected,
-    performUndo: () => void templatesStore.performUndo(),
     isMinimal: () => isMinimal,
-    isPreviewOpen: () => previewOpen,
-    togglePreview: () => void togglePreview(),
-    previewHotkey: () => settings.preview_hotkey,
-    isTranslatorOpen: () => translatorOpen,
-    toggleTranslator: () => void toggleTranslator(),
+    blocksShortcuts: () => uiDialogs.blocksShortcuts,
+    cheatSheetOpen: () => uiDialogs.cheatSheetOpen,
+    toggleCheatSheet: () => {
+      uiDialogs.cheatSheetOpen = !uiDialogs.cheatSheetOpen;
+    },
+    togglePreview: () => void popouts.togglePreview(),
+    toggleTranslator: () => void popouts.toggleTranslator(),
+    getPreviewHotkey: () => templatesStore.settings.preview_hotkey,
+    canUndo: () => templatesStore.isEditorMode,
+    performUndo: () => void templatesStore.performUndo(),
   });
 
-  /** Build the payload pushed to the preview window. Includes everything the
-   *  pop-out needs to render TemplateView without re-reading the store. */
-  function buildPreviewPayload(): {
-    template: Template | null;
-    globalSignature: string;
-    snippets: Record<string, string>;
-    placeholderValues: Record<string, string>;
-    canEdit: boolean;
-    theme: "dark" | "light";
-    previewHotkey: string;
-  } {
-    return {
-      template: selectedTemplate,
-      globalSignature: settings.global_signature,
-      snippets: settings.snippets,
-      placeholderValues:
-        (selectedTemplate && settings.placeholder_values[selectedTemplate.id]) ?? {},
-      canEdit: isEditorMode,
-      theme: settings.theme,
-      previewHotkey: settings.preview_hotkey,
-    };
-  }
+  // Popouts own push + listeners; page only mounts the lifecycle once.
+  $effect(() => popouts.startLifecycle());
 
-  async function togglePreview(): Promise<void> {
-    if (previewOpen) {
-      try {
-        await closePreviewWindow();
-      } catch {
-        /* ignore */
-      }
-      previewOpen = false;
-    } else {
-      try {
-        await openPreviewWindow();
-        previewOpen = true;
-        // Push the current selection immediately so the pop-out isn't blank.
-        void emit("preview-payload", buildPreviewPayload());
-      } catch (e) {
-        templatesStore.loadError = `open preview failed: ${e}`;
-      }
-    }
-  }
-
-  function buildTranslatorPayload(): {
-    openrouterApiKey: string;
-    translationModel: string;
-    theme: "dark" | "light";
-  } {
-    return {
-      openrouterApiKey: settings.openrouter_api_key,
-      translationModel: settings.translation_model,
-      theme: settings.theme,
-    };
-  }
-
-  async function toggleTranslator(): Promise<void> {
-    if (translatorOpen) {
-      try {
-        await closeTranslatorWindow();
-      } catch {
-        /* ignore */
-      }
-      translatorOpen = false;
-    } else {
-      try {
-        await openTranslatorWindow();
-        translatorOpen = true;
-        void emit("translator-payload", buildTranslatorPayload());
-      } catch (e) {
-        templatesStore.loadError = `open translator failed: ${e}`;
-      }
-    }
-  }
-
-  // Push the current template to the pop-out whenever the selection or any
-  // relevant setting changes — but only while the pop-out is open.
   $effect(() => {
-    // Read the deps so Svelte re-runs this effect when any of them change.
-    void selectedTemplate;
-    void settings.global_signature;
-    void settings.snippets;
-    void settings.placeholder_values;
-    void settings.theme;
-    void settings.preview_hotkey;
-    if (!previewOpen) return;
-    void emit("preview-payload", buildPreviewPayload());
+    applyMinimalGeometry(minimalGeo, isMinimal, tagsWidth, templatesWidth);
   });
-
-  // Push settings to the translator pop-out whenever they change.
-  $effect(() => {
-    void settings.openrouter_api_key;
-    void settings.translation_model;
-    void settings.theme;
-    if (!translatorOpen) return;
-    void emit("translator-payload", buildTranslatorPayload());
-  });
-
-  // The pop-out asks for the current payload on mount (and whenever it's
-  // re-shown). Also handle its reports: copy success and placeholder changes
-  // are mirrored back into the main store so it stays the source of truth.
-  $effect(() => {
-    const unlistenRequest = listen("preview-request-payload", () => {
-      void emit("preview-payload", buildPreviewPayload());
-    });
-    const unlistenCopy = listen<{ templateId: string }>(
-      "preview-copy-success",
-      (e) => {
-        void templatesStore.recordCopy(e.payload.templateId);
-      },
-    );
-    const unlistenPlaceholder = listen<{
-      templateId: string;
-      values: Record<string, string>;
-    }>("preview-placeholder-change", (e) => {
-      void templatesStore.recordPlaceholderValues(
-        e.payload.templateId,
-        e.payload.values,
-      );
-    });
-    const unlistenClosed = listen("preview-closed", () => {
-      previewOpen = false;
-    });
-    // Space inside the pop-out requests that we close it — the main window
-    // owns the actual hide() call (and the previewOpen toggle state).
-    const unlistenRequestClose = listen("preview-request-close", () => {
-      void closePreviewWindow().catch(() => {});
-      previewOpen = false;
-    });
-    const unlistenTranslatorRequest = listen("translator-request-payload", () => {
-      void emit("translator-payload", buildTranslatorPayload());
-    });
-    const unlistenTranslatorClosed = listen("translator-closed", () => {
-      translatorOpen = false;
-    });
-    return () => {
-      void unlistenRequest.then((u) => u());
-      void unlistenCopy.then((u) => u());
-      void unlistenPlaceholder.then((u) => u());
-      void unlistenClosed.then((u) => u());
-      void unlistenRequestClose.then((u) => u());
-      void unlistenTranslatorRequest.then((u) => u());
-      void unlistenTranslatorClosed.then((u) => u());
-    };
-  });
-
-  // When minimal mode turns off, hide any stray preview window so the toggle
-  // state can't dangle open without the affordance that controls it.
-  $effect(() => {
-    if (!isMinimal && previewOpen) {
-      void closePreviewWindow().catch(() => {});
-      previewOpen = false;
-    }
-  });
-
-  // Shrink the main window to just Tags + Templates when minimal mode engages,
-  // and restore the prior width when it disengages. Fires only on transitions,
-  // not on the initial mount — `prevMinimal` is undefined until the effect has
-  // run once, so the first run just primes the flag.
-  let prevMinimal: boolean | undefined;
-  let preMinimalWidth: number | null = null;
-  $effect(() => {
-    if (prevMinimal === undefined) {
-      prevMinimal = isMinimal;
-      return;
-    }
-    if (isMinimal === prevMinimal) return;
-    prevMinimal = isMinimal;
-    void (async () => {
-      try {
-        const win = getCurrentWindow();
-        if (isMinimal) {
-          const size = await win.outerSize();
-          const factor = await win.scaleFactor().catch(() => 1);
-          const logicalW = size.width / factor;
-          // Account for the OS frame's vertical chrome; only width matters.
-          const minimalW = tagsWidth + templatesWidth + 6 /* col-resize */ + 2 /* frame borders */;
-          // Only stash if the window is actually wider than the minimal target —
-          // otherwise restoring later would grow a window the user already had narrow.
-          if (logicalW > minimalW + 8) {
-            preMinimalWidth = logicalW;
-          }
-          await win.setSize(new LogicalSize(minimalW, size.height / factor));
-        } else if (preMinimalWidth !== null) {
-          const size = await win.outerSize();
-          const factor = await win.scaleFactor().catch(() => 1);
-          await win.setSize(new LogicalSize(preMinimalWidth, size.height / factor));
-          preMinimalWidth = null;
-        }
-      } catch {
-        /* best-effort */
-      }
-    })();
-  });
-
-  // On first load, query whether the preview window is already open (e.g. the
-  // user reopened the app while it was still visible). Keeps the toggle honest.
-  $effect(() => {
-    void (async () => {
-      try {
-        previewOpen = await isPreviewOpen();
-      } catch {
-        previewOpen = false;
-      }
-    })();
-  });
-
-  // Same for the translator window.
-  $effect(() => {
-    void (async () => {
-      try {
-        translatorOpen = await isTranslatorOpen();
-      } catch {
-        translatorOpen = false;
-      }
-    })();
-  });
-
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
 
 <div class="frame">
   <TitleBar
-    onOpenSettings={() => (settingsOpen = true)}
-    showSearch={!editing && creatingDraft === null}
-    {searchQuery}
-    onSearchChange={handleSearchChange}
-    onClearSearch={clearSearch}
-    onSearchInputMount={(el) => (searchInput = el ?? undefined)}
+    onOpenSettings={() => (uiDialogs.settingsOpen = true)}
+    showSearch={!editorSession.isActive}
+    searchQuery={browseSession.searchQuery}
+    onSearchChange={(q) => browseSession.setSearchQuery(q)}
+    onClearSearch={() => browseSession.clearSearch()}
+    onSearchInputMount={(el) => (browseSession.searchInputEl = el ?? undefined)}
     minimal={isMinimal}
-    {previewOpen}
-    onTogglePreview={() => void togglePreview()}
-    {translatorOpen}
-    onToggleTranslator={() => void toggleTranslator()}
+    previewOpen={popouts.previewOpen}
+    onTogglePreview={() => void popouts.togglePreview()}
+    translatorOpen={popouts.translatorOpen}
+    onToggleTranslator={() => void popouts.toggleTranslator()}
   />
   <div class="shell">
     {#if !loaded}
@@ -890,77 +258,17 @@
         <div class="skel-line"></div>
         <div class="skel-block"></div>
       </section>
-    {:else if creatingDraft !== null}
-      <MainPanel
-        {...sharedMainPanelProps}
-        template={null}
-        {creatingDraft}
-        editing={false}
-        onEnterEdit={() => {}}
-        onCancelEdit={cancelCreateDraft}
-        onSave={() => {}}
-        onCreate={handleCreateDraft}
-        onDuplicate={() => {}}
-        onDelete={() => {}}
-      />
-    {:else if editing}
-      <MainPanel
-        {...sharedMainPanelProps}
-        template={selectedTemplate}
-        editing={true}
-        onEnterEdit={() => {}}
-        onCancelEdit={cancelEditMode}
-        onSave={handleSave}
-        onDuplicate={() => void duplicateSelectedTemplate()}
-        onDelete={() => void deleteSelectedTemplate()}
-      />
+    {:else if editorSession.isActive}
+      <AppShell {...appShellProps} />
     {:else}
-      <TagsSidebar
-        {templates}
-        selectedTagIds={selectionStore.selectedTagIds}
-        excludedTagIds={selectionStore.excludedTagIds}
-        tagCombinator={selectionStore.tagCombinator}
-        tagOrder={settings.tag_order}
-        width={tagsWidth}
-        onTagToggle={handleTagToggle}
-        onTagExclude={handleTagExclude}
-        onTagsClear={handleTagsClear}
-        onCombinatorToggle={handleCombinatorToggle}
-        onContextEmpty={openContextForEmpty}
-        onTagReorder={(next) => void templatesStore.handleTagsReorder(next)}
-      />
+      <TagsSidebar width={tagsWidth} />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="col-resize"
         title="Drag to resize"
         onpointerdown={startResize("tags")}
       ></div>
-      <TemplatesSidebar
-        {searchResults}
-        {templates}
-        selectedTemplateId={selectionStore.selectedTemplateId}
-        bulkSelectedIds={selectionStore.bulkSelectedIds}
-        width={templatesWidth}
-        flex={isMinimal}
-        canCreate={isEditorMode}
-        canReorder={canReorderTemplates}
-        sortMode={settings.sort_mode}
-        onTemplateSelect={handleTemplateSelect}
-        onNew={() => void handleNew()}
-        onClearFilters={() => {
-          selectionStore.clearTags();
-          clearSearch();
-        }}
-        onContextTemplate={openContextForTemplate}
-        onContextEmpty={openContextForEmpty}
-        onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
-        onMoveToFolder={(ids, folder) => void templatesStore.moveToFolder(ids, folder)}
-        onSortModeToggle={() => templatesStore.handleSortModeToggle()}
-        onBulkAddTag={() => (bulkTagPromptOpen = true)}
-        onBulkRemoveTag={() => (bulkRemoveTagPromptOpen = true)}
-        onBulkExport={() => void templatesStore.bulkExport(selectionStore.bulkSelectedIds)}
-        onBulkDelete={() => (bulkDeleteConfirmOpen = true)}
-      />
+      <TemplatesSidebar width={templatesWidth} flex={isMinimal} />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       {#if !isMinimal}
         <div
@@ -968,60 +276,30 @@
           title="Drag to resize"
           onpointerdown={startResize("templates")}
         ></div>
-        <MainPanel
-          {...sharedMainPanelProps}
-          template={selectedTemplate}
-          editing={false}
-          onEnterEdit={enterEditMode}
-          onCancelEdit={cancelEditMode}
-          onSave={handleSave}
-          onDuplicate={() => void duplicateSelectedTemplate()}
-          onDelete={() => void deleteSelectedTemplate()}
-        />
+        <AppShell {...appShellProps} />
       {/if}
     {/if}
-    {#if templatesStore.loadError}
+    {#if appErrors.banner}
       <div class="error-banner">
-        <span class="error-text">{templatesStore.loadError}</span>
-        <button class="error-close" aria-label="Dismiss error" onclick={() => (templatesStore.loadError = null)}>×</button>
+        <span class="error-text">{appErrors.banner}</span>
+        {#if templatesStore.settingsCorrupt && appErrors.loadError}
+          <button
+            class="error-reset"
+            onclick={() => void templatesStore.resetCorruptSettings()}
+          >Reset settings</button>
+        {/if}
+        <button class="error-close" aria-label="Dismiss error" onclick={() => appErrors.dismiss()}>×</button>
       </div>
     {/if}
     {#if undoToast}
-      <div class="undo-toast" style="bottom: {templatesStore.loadError ? 48 : 12}px">{undoToast}</div>
+      <div class="undo-toast" style="bottom: {appErrors.banner ? 48 : 12}px">{undoToast}</div>
     {/if}
   </div>
 </div>
 
 <ResizeHandles />
 
-{#if settingsOpen}
-  <SettingsModal
-    {settings}
-    currentVersion={appVersion}
-    tagCounts={settingsTagCounts}
-    onClose={() => (settingsOpen = false)}
-    onUpdate={handleSettingsUpdate}
-    onExportTemplates={handleExportTemplates}
-    onImportTemplates={handleImportTemplates}
-    onCheckUpdate={checkForUpdate}
-    onListBackups={listTemplateBackups}
-    onRestoreBackup={(name) => templatesStore.handleRestoreBackup(name)}
-    onRenameTag={handleRenameTag}
-    onDeleteTag={handleDeleteTag}
-    onOpenCheatSheet={() => {
-      settingsOpen = false;
-      cheatSheetOpen = true;
-    }}
-  />
-{/if}
-
-{#if cheatSheetOpen}
-  <CheatSheet
-    globalHotkey={settings.global_hotkey}
-    previewHotkey={settings.preview_hotkey}
-    onClose={() => (cheatSheetOpen = false)}
-  />
-{/if}
+<DialogsHost {appVersion} />
 
 {#if loaded && !settings.onboarding_complete}
   <OnboardingTour
@@ -1035,224 +313,7 @@
   />
 {/if}
 
-{#if bulkDeleteConfirmOpen}
-  <ConfirmDialog
-    title="Delete {selectionStore.bulkSelectedIds.size} templates?"
-    message="Ctrl+Z will restore them."
-    confirmLabel="Delete {selectionStore.bulkSelectedIds.size}"
-    danger
-    ariaLabel="Confirm bulk delete"
-    onConfirm={() => void confirmBulkDelete()}
-    onCancel={() => (bulkDeleteConfirmOpen = false)}
-  />
-{/if}
-
-{#if bulkTagPromptOpen}
-  <ConfirmDialog
-    title="Add tag to {selectionStore.bulkSelectedIds.size} templates"
-    confirmLabel="Add"
-    ariaLabel="Bulk add tag"
-    input
-    bind:inputValue={bulkTagDraft}
-    inputPlaceholder="tag name"
-    confirmDisabled={bulkTagDraft.trim().length === 0}
-    onConfirm={() => void confirmBulkTag()}
-    onCancel={() => {
-      bulkTagPromptOpen = false;
-      bulkTagDraft = "";
-    }}
-    onDismiss={() => (bulkTagPromptOpen = false)}
-  />
-{/if}
-
-{#if bulkRemoveTagPromptOpen}
-  <ConfirmDialog
-    title="Remove tag from {selectionStore.bulkSelectedIds.size} templates"
-    confirmLabel="Remove"
-    danger
-    ariaLabel="Bulk remove tag"
-    input
-    bind:inputValue={bulkTagDraft}
-    inputPlaceholder="tag name"
-    confirmDisabled={bulkTagDraft.trim().length === 0}
-    onConfirm={() => void confirmBulkRemoveTag()}
-    onCancel={() => {
-      bulkRemoveTagPromptOpen = false;
-      bulkTagDraft = "";
-    }}
-    onDismiss={() => (bulkRemoveTagPromptOpen = false)}
-  />
-{/if}
-
-{#if contextMenu}
-  <ContextMenu
-    x={contextMenu.x}
-    y={contextMenu.y}
-    items={contextMenu.items}
-    onClose={closeContextMenu}
-  />
-{/if}
-
-{#if contextDeleteTarget}
-  <ConfirmDialog
-    title="Delete template?"
-    name={contextDeleteTarget.name}
-    message="Ctrl+Z will restore it."
-    confirmLabel="Delete"
-    danger
-    onConfirm={() => void confirmContextDelete()}
-    onCancel={cancelContextDelete}
-  />
-{/if}
-
 <style>
-  :global(:root) {
-    --bg-base: #1c1c1e;
-    --bg-elevated: #18181a;
-    --bg-titlebar: #141416;
-    --bg-input: #121214;
-    --bg-hover: #25252a;
-    --bg-active: #2d2d33;
-    --border: #2a2a2e;
-    --border-strong: #3a3a40;
-    --border-focus: #5a5a62;
-    --text: #e8e6e3;
-    --text-strong: #f3f1ee;
-    --text-muted: #8c8a86;
-    --text-subtle: #6a6862;
-    --text-deemphasis: #7a7874;
-    --text-placeholder: #56544f;
-    --shadow: rgba(0, 0, 0, 0.6);
-    --backdrop: rgba(0, 0, 0, 0.5);
-    --accent-brand: #cc785c;
-    --accent-brand-hover: #d88a6f;
-    --accent-brand-soft: #3a2419;
-    --accent-brand-text: #f5d4c4;
-    --accent-positive-bg: #2a3a2a;
-    --accent-positive-border: #3a5a3a;
-    --accent-positive-text: #d0e0d0;
-    --accent-positive-hover: #34453a;
-    --accent-danger-bg: #3a2222;
-    --accent-danger-border: #5a3030;
-    --accent-danger-text: #ff9a9a;
-    --accent-warning-bg: #3a2a16;
-    --accent-warning-border: #5a4426;
-    --accent-warning-text: #f0d090;
-    --accent-warning-strong: #ffe0a0;
-    --accent-info-bg: #1a2a3a;
-    --accent-info-border: #2a4a6a;
-    --accent-info-text: #a8c8e8;
-  }
-
-  :global([data-theme="light"]) {
-    --bg-base: #f7f5f1;
-    --bg-elevated: #f1ede6;
-    --bg-titlebar: #ebe7df;
-    --bg-input: #fdfcf9;
-    --bg-hover: #e4dfd5;
-    --bg-active: #d8d2c5;
-    --border: #ddd6c8;
-    --border-strong: #c2bbac;
-    --border-focus: #8a8275;
-    --text: #2a2724;
-    --text-strong: #161310;
-    --text-muted: #5c5852;
-    --text-subtle: #8c8780;
-    --text-deemphasis: #6f6a62;
-    --text-placeholder: #b0aa9e;
-    --shadow: rgba(60, 50, 35, 0.18);
-    --backdrop: rgba(0, 0, 0, 0.3);
-    --accent-brand: #c5613e;
-    --accent-brand-hover: #b4542f;
-    --accent-brand-soft: #f5e0d4;
-    --accent-brand-text: #6d2c14;
-    --accent-positive-bg: #d4eada;
-    --accent-positive-border: #88c896;
-    --accent-positive-text: #1e5f2e;
-    --accent-positive-hover: #c0e0c8;
-    --accent-danger-bg: #fbe2e2;
-    --accent-danger-border: #e0a0a0;
-    --accent-danger-text: #9a2a2a;
-    --accent-warning-bg: #fbf0d8;
-    --accent-warning-border: #d8b870;
-    --accent-warning-text: #7a5510;
-    --accent-warning-strong: #5a3f00;
-    --accent-info-bg: #dde8f4;
-    --accent-info-border: #a0b8d0;
-    --accent-info-text: #2a4a6a;
-  }
-
-  :global(html) {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    background: transparent;
-    color: var(--text);
-    font-family: Inter, system-ui, sans-serif;
-    overflow: hidden;
-  }
-
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    height: 100vh;
-    background: transparent;
-    overflow: hidden;
-  }
-
-  :global(#svelte) {
-    height: 100%;
-  }
-
-  :global(::-webkit-scrollbar) {
-    width: 10px;
-    height: 10px;
-  }
-
-  :global(::-webkit-scrollbar-track) {
-    background: transparent;
-  }
-
-  :global(::-webkit-scrollbar-thumb) {
-    background: var(--border);
-    border-radius: 5px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-    min-height: 28px;
-  }
-
-  :global(::-webkit-scrollbar-thumb:hover) {
-    background: var(--border-strong);
-    background-clip: content-box;
-    border: 2px solid transparent;
-  }
-
-  :global(::-webkit-scrollbar-thumb:active) {
-    background: var(--border-focus);
-    background-clip: content-box;
-    border: 2px solid transparent;
-  }
-
-  :global(::-webkit-scrollbar-corner) {
-    background: transparent;
-  }
-
-  :global(:focus-visible) {
-    outline: 2px solid var(--accent-brand);
-    outline-offset: 1px;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    :global(*),
-    :global(*::before),
-    :global(*::after) {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
-    }
-  }
-
   .frame {
     display: flex;
     flex-direction: column;
@@ -1378,6 +439,22 @@
 
   .error-close:hover {
     opacity: 0.7;
+  }
+
+  .error-reset {
+    background: transparent;
+    border: 1px solid var(--accent-danger-border);
+    color: var(--accent-danger-text);
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    padding: 3px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .error-reset:hover {
+    opacity: 0.85;
   }
 
   .undo-toast {

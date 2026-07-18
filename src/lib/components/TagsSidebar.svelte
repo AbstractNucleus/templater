@@ -1,41 +1,26 @@
 <script lang="ts">
-  import type { Template } from "$lib/types";
   import { orderedTagCounts } from "$lib/tags";
   import { createDragReorder } from "$lib/dragReorder.svelte";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
+  import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
 
   let {
-    templates,
-    selectedTagIds,
-    excludedTagIds,
-    tagCombinator,
-    tagOrder,
     width,
-    onTagToggle,
-    onTagExclude,
-    onTagsClear,
-    onCombinatorToggle,
-    onContextEmpty,
-    onTagReorder,
   }: {
-    templates: Template[];
-    selectedTagIds: Set<string>;
-    excludedTagIds: Set<string>;
-    tagCombinator: "and" | "or";
-    /** Persisted order from drag-reorder. Tags not in this list fall back to count-desc. */
-    tagOrder: string[];
     width: number;
-    onTagToggle: (tag: string) => void;
-    onTagExclude: (tag: string) => void;
-    onTagsClear: () => void;
-    onCombinatorToggle: () => void;
-    onContextEmpty: (x: number, y: number) => void;
-    onTagReorder: (newOrder: string[]) => void;
   } = $props();
+
+  const templates = $derived(templatesStore.templates);
+  const selectedTagIds = $derived(selectionStore.selectedTagIds);
+  const excludedTagIds = $derived(selectionStore.excludedTagIds);
+  const tagCombinator = $derived(selectionStore.tagCombinator);
+  const tagOrder = $derived(templatesStore.settings.tag_order);
 
   function handleSidebarContext(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    onContextEmpty(e.clientX, e.clientY);
+    uiDialogs.openContextForEmpty(e.clientX, e.clientY);
   }
 
   const tagCounts = $derived(orderedTagCounts(templates, tagOrder));
@@ -44,19 +29,19 @@
   const showCombinator = $derived(selectedTagIds.size >= 2);
 
   function handleTagClick(tag: string) {
-    onTagToggle(tag);
+    selectionStore.toggleTag(tag);
   }
 
   function handleTagContext(e: MouseEvent, tag: string) {
     e.preventDefault();
     e.stopPropagation();
-    onTagExclude(tag);
+    selectionStore.excludeTag(tag);
   }
 
   const drag = createDragReorder({
     enabled: () => true,
     currentIds: () => tagCounts.map(([tag]) => tag),
-    onReorder: (next) => onTagReorder(next),
+    onReorder: (next) => void templatesStore.handleTagsReorder(next),
   });
 </script>
 
@@ -70,7 +55,7 @@
           title={tagCombinator === "and"
             ? "Matching all selected tags. Click to switch to any."
             : "Matching any selected tag. Click to switch to all."}
-          onclick={onCombinatorToggle}
+          onclick={() => selectionStore.toggleTagCombinator()}
         >
           <span class:on={tagCombinator === "and"}>ALL</span>
           <span class="sep">/</span>
@@ -78,7 +63,7 @@
         </button>
       {/if}
       {#if hasAnyFilter}
-        <button class="clear" title="Clear tag filters" onclick={onTagsClear}>Clear</button>
+        <button class="clear" title="Clear tag filters" onclick={() => selectionStore.clearTags()}>Clear</button>
       {/if}
     </div>
   </div>
@@ -110,7 +95,7 @@
           class="tag-exclude"
           title={excludedTagIds.has(tag) ? `Un-exclude ${tag}` : `Exclude ${tag}`}
           aria-label={excludedTagIds.has(tag) ? `Un-exclude ${tag}` : `Exclude ${tag}`}
-          onclick={(e) => { e.stopPropagation(); onTagExclude(tag); }}
+          onclick={(e) => { e.stopPropagation(); selectionStore.excludeTag(tag); }}
         >−</button>
       </li>
     {:else}

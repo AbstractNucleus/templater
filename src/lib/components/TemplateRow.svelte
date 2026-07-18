@@ -1,6 +1,6 @@
 <script lang="ts">
   import { highlightName, type SearchHit } from "$lib/search";
-  import type { SelectModifier } from "./TemplatesSidebar.svelte";
+  import type { SelectModifier } from "$lib/stores/selectionStore.svelte";
 
   let {
     hit,
@@ -10,7 +10,6 @@
     dragging = false,
     dragOverTop = false,
     dragOverBottom = false,
-    plainExcerpt = null,
     onSelect,
     onContext,
     onDragStart,
@@ -22,16 +21,10 @@
     hit: SearchHit;
     selected: boolean;
     bulkSelected?: boolean;
-    /** Drag/pin/highlight wiring is the "browse" path. Ranked mode renders a
-     *  plain row: pass `draggable={false}` (no handlers) and `plainExcerpt`. */
     draggable?: boolean;
     dragging?: boolean;
     dragOverTop?: boolean;
     dragOverBottom?: boolean;
-    /** Pre-sliced plain excerpt (ranked mode). When non-null it replaces the
-     *  highlighted body-hit excerpt and suppresses pin/drag markers so the row
-     *  matches the original ranked card byte-for-byte. */
-    plainExcerpt?: string | null;
     onSelect: (modifier: SelectModifier) => void;
     onContext: (e: MouseEvent) => void;
     onDragStart?: (e: DragEvent) => void;
@@ -46,70 +39,49 @@
     if (e.ctrlKey || e.metaKey) return "ctrl";
     return "none";
   }
-
-  // Ranked mode (plainExcerpt set) is a stripped row: no pin marker, no drag
-  // attribute/classes. Browse mode renders the full card.
-  const plain = $derived(plainExcerpt !== null);
 </script>
 
-{#if plain}
-  <button
-    class="template-item"
-    class:active={selected}
-    data-id={hit.template.id}
-    role="option"
-    aria-selected={selected}
-    onclick={(e) => onSelect(modifierOf(e))}
-    oncontextmenu={onContext}
-  >
-    <span class="name">{hit.template.name}</span>
-    {#if plainExcerpt!.length > 0}
-      <span class="excerpt">{plainExcerpt!.slice(0, 100)}{plainExcerpt!.length > 100 ? '…' : ''}</span>
+<button
+  class="template-item"
+  class:active={selected}
+  class:bulk={bulkSelected}
+  class:pinned={hit.template.pinned}
+  class:dragging
+  class:drag-over-top={dragOverTop}
+  class:drag-over-bottom={dragOverBottom}
+  data-id={hit.template.id}
+  role="option"
+  aria-selected={selected}
+  {draggable}
+  ondragstart={onDragStart}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+  ondragend={onDragEnd}
+  onclick={(e) => onSelect(modifierOf(e))}
+  oncontextmenu={onContext}
+>
+  <span class="name">
+    {#if hit.template.pinned}
+      <svg class="pin-mark" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-label="pinned" role="img"><title>Pinned</title>
+        <path d="M12 17v5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none" />
+        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+      </svg>
     {/if}
-  </button>
-{:else}
-  <button
-    class="template-item"
-    class:active={selected}
-    class:bulk={bulkSelected}
-    class:pinned={hit.template.pinned}
-    class:dragging
-    class:drag-over-top={dragOverTop}
-    class:drag-over-bottom={dragOverBottom}
-    data-id={hit.template.id}
-    role="option"
-    aria-selected={selected}
-    {draggable}
-    ondragstart={onDragStart}
-    ondragover={onDragOver}
-    ondragleave={onDragLeave}
-    ondrop={onDrop}
-    ondragend={onDragEnd}
-    onclick={(e) => onSelect(modifierOf(e))}
-    oncontextmenu={onContext}
-  >
-    <span class="name">
-      {#if hit.template.pinned}
-        <svg class="pin-mark" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-label="pinned" role="img"><title>Pinned</title>
-          <path d="M12 17v5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none" />
-          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
-        </svg>
+    {#each highlightName(hit.template.name, hit.nameHits) as seg}
+      {#if seg.hit}
+        <span class="hit">{seg.text}</span>
+      {:else}
+        {seg.text}
       {/if}
-      {#each highlightName(hit.template.name, hit.nameHits) as seg}
-        {#if seg.hit}
-          <span class="hit">{seg.text}</span>
-        {:else}
-          {seg.text}
-        {/if}
-      {/each}
+    {/each}
+  </span>
+  {#if hit.nameHits.length === 0 && hit.bodyHit}
+    <span class="excerpt">
+      {#each hit.bodyHit.segments as seg}{#if seg.hit}<span class="hit">{seg.text}</span>{:else}{seg.text}{/if}{/each}
     </span>
-    {#if hit.nameHits.length === 0 && hit.bodyHit}
-      <span class="excerpt">
-        {#each hit.bodyHit.segments as seg}{#if seg.hit}<span class="hit">{seg.text}</span>{:else}{seg.text}{/if}{/each}
-      </span>
-    {/if}
-  </button>
-{/if}
+  {/if}
+</button>
 
 <style>
   .template-item {
