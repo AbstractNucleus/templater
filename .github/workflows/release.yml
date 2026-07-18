@@ -51,11 +51,27 @@ jobs:
 
       - run: npm ci
 
+      # macOS: build .app + updater tarball first. Tauri bundles DMG before the
+      # updater artifact, and bundle_dmg.sh flakes on GHA (hdiutil) — a DMG
+      # failure would otherwise abort the job with no updater payload at all.
       - name: Build app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build
+        run: |
+          if [[ "${{ matrix.os }}" == macos-* ]]; then
+            npm run tauri -- build --bundles app
+          else
+            npm run tauri -- build
+          fi
+
+      - name: Bundle DMG (best-effort)
+        if: startsWith(matrix.os, 'macos')
+        continue-on-error: true
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles dmg
 
       - name: Upload bundle artifacts
         uses: actions/upload-artifact@v4
