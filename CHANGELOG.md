@@ -9,6 +9,7 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Release manifest arch mapping.** Infer updater platform arch from the CI artifact path when Tauri's default `Templater.app.tar.gz` omits it, so `latest.json` generation no longer fails on macOS builds.
+- **Translator paste duplication.** Prevent the browser's default paste insertion when the translator replaces source text, so pasted text is no longer doubled.
 
 ## [0.9.5] — 2026-07-18
 
