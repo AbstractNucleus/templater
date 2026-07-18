@@ -13,9 +13,9 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 static TRANSLATOR_WAS_OPEN: AtomicBool = AtomicBool::new(false);
 
 use commands::data::{
-    bulk_add_template_tag, bulk_delete_templates, bulk_remove_template_tag, export_template,
-    export_templates, export_templates_subset, import_templates, list_template_backups,
-    load_app_data, open_data_dir, open_path, restore_template_backup, save_app_data,
+    export_template, export_templates, export_templates_subset, list_template_backups,
+    load_app_data, open_data_dir, open_path, read_templates_export, restore_template_backup,
+    save_app_data,
 };
 use commands::translate::translate_text;
 use hotkey::set_hotkey;
@@ -341,10 +341,7 @@ pub fn run() {
             export_templates,
             export_template,
             export_templates_subset,
-            bulk_delete_templates,
-            bulk_add_template_tag,
-            bulk_remove_template_tag,
-            import_templates,
+            read_templates_export,
             list_template_backups,
             restore_template_backup,
             set_hotkey,

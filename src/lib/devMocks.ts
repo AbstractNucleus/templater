@@ -89,40 +89,11 @@ export function installDevMocks(): void {
           }));
         case "restore_template_backup":
           return data ?? seedData();
-        case "import_templates":
-          return { added: 0, overwritten: 0, skipped: 0, templates: data?.templates ?? [] };
+        case "read_templates_export":
+          return data?.templates ?? [];
         case "export_templates":
         case "export_templates_subset":
           return ((args.ids as string[] | undefined)?.length ?? data?.templates.length) ?? 0;
-        case "bulk_delete_templates": {
-          const ids = new Set(args.ids as string[]);
-          if (data) data = { ...data, templates: data.templates.filter((t) => !ids.has(t.id)) };
-          return data?.templates ?? [];
-        }
-        case "bulk_add_template_tag": {
-          const ids = new Set(args.ids as string[]);
-          const tag = args.tag as string;
-          if (data)
-            data = {
-              ...data,
-              templates: data.templates.map((t) =>
-                ids.has(t.id) && !t.tags.includes(tag) ? { ...t, tags: [...t.tags, tag] } : t,
-              ),
-            };
-          return data?.templates ?? [];
-        }
-        case "bulk_remove_template_tag": {
-          const ids = new Set(args.ids as string[]);
-          const tag = args.tag as string;
-          if (data)
-            data = {
-              ...data,
-              templates: data.templates.map((t) =>
-                ids.has(t.id) ? { ...t, tags: t.tags.filter((x) => x !== tag) } : t,
-              ),
-            };
-          return data?.templates ?? [];
-        }
 
         // ---- window/shell commands (no-ops in a browser) ---------------
         case "set_hotkey":

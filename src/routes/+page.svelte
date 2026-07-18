@@ -343,29 +343,9 @@
   }
 
   async function handleCreateDraft(draft: TemplateDraft): Promise<void> {
-    if (!isEditorMode) return;
-    templatesStore.pushUndo("create");
-    const now = new Date().toISOString();
-    const folder = draft.folder !== null && draft.folder.trim().length > 0
-      ? draft.folder.trim()
-      : null;
-    const newTemplate: Template = {
-      id: crypto.randomUUID(),
-      name: draft.name.trim() || "Untitled",
-      tags: draft.tags,
-      opening: draft.opening,
-      body: draft.body,
-      created_at: now,
-      updated_at: now,
-      pinned: false,
-      last_used_at: null,
-      copy_count: 0,
-      folder,
-      history: [],
-    };
-    const next = [newTemplate, ...templatesStore.templates];
-    await templatesStore.persist(next);
-    selectionStore.selectedTemplateId = newTemplate.id;
+    const id = await templatesStore.createTemplate(draft);
+    if (!id) return;
+    selectionStore.selectedTemplateId = id;
     creatingDraft = null;
   }
 
@@ -392,21 +372,12 @@
   }
 
   async function handleRenameTag(from: string, to: string): Promise<void> {
-    await templatesStore.handleRenameTag(
-      from,
-      to,
-      selectionStore.selectedTagIds,
-      selectionStore.excludedTagIds,
-    );
+    await templatesStore.handleRenameTag(from, to);
     selectionStore.remapTag(from, to);
   }
 
   async function handleDeleteTag(tag: string): Promise<void> {
-    await templatesStore.handleDeleteTag(
-      tag,
-      selectionStore.selectedTagIds,
-      selectionStore.excludedTagIds,
-    );
+    await templatesStore.handleDeleteTag(tag);
     selectionStore.removeTag(tag);
   }
 

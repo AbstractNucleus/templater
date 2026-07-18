@@ -38,18 +38,6 @@ export async function exportTemplatesSubset(ids: string[], path: string): Promis
   return await invoke<number>("export_templates_subset", { ids, path });
 }
 
-export async function bulkDeleteTemplates(ids: string[]): Promise<Template[]> {
-  return await invoke<Template[]>("bulk_delete_templates", { ids });
-}
-
-export async function bulkAddTemplateTag(ids: string[], tag: string): Promise<Template[]> {
-  return await invoke<Template[]>("bulk_add_template_tag", { ids, tag });
-}
-
-export async function bulkRemoveTemplateTag(ids: string[], tag: string): Promise<Template[]> {
-  return await invoke<Template[]>("bulk_remove_template_tag", { ids, tag });
-}
-
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -97,21 +85,9 @@ export async function getAppVersion(): Promise<string> {
   return await getVersion();
 }
 
-export interface ImportTemplatesResult {
-  added: number;
-  /** Number of duplicates whose content was replaced by the import file
-   *  (only nonzero when called with `overwrite = true`). */
-  overwritten: number;
-  /** Number of duplicates left untouched (nonzero only when `overwrite = false`). */
-  skipped: number;
-  templates: Template[];
-}
-
-export async function importTemplates(
-  path: string,
-  overwrite: boolean,
-): Promise<ImportTemplatesResult> {
-  return await invoke<ImportTemplatesResult>("import_templates", { path, overwrite });
+/** Read-only parse of a templates export file. Caller merges + persists. */
+export async function readTemplatesExport(path: string): Promise<Template[]> {
+  return await invoke<Template[]>("read_templates_export", { path });
 }
 
 export interface BackupEntry {

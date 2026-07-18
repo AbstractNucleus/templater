@@ -5,10 +5,7 @@ import {
   exportTemplate,
   exportTemplates,
   exportTemplatesSubset,
-  bulkAddTemplateTag,
-  bulkDeleteTemplates,
-  bulkRemoveTemplateTag,
-  importTemplates,
+  readTemplatesExport,
   restoreTemplateBackup,
 } from "$lib/api";
 import { starterTemplates } from "$lib/starterTemplates";
@@ -19,6 +16,7 @@ import {
   type PortResult,
   type Settings,
   type Template,
+  type TemplateDraft,
   type TemplateVersion,
 } from "$lib/types";
 
@@ -161,6 +159,30 @@ class TemplatesStore {
     this.#undoToastTimer = setTimeout(() => (this.undoToast = null), 2000);
   }
 
+  async createTemplate(draft: TemplateDraft): Promise<string | null> {
+    if (!this.isEditorMode) return null;
+    this.pushUndo("create");
+    const now = new Date().toISOString();
+    const folder =
+      draft.folder !== null && draft.folder.trim().length > 0 ? draft.folder.trim() : null;
+    const newTemplate: Template = {
+      id: crypto.randomUUID(),
+      name: draft.name.trim() || "Untitled",
+      tags: draft.tags,
+      opening: draft.opening,
+      body: draft.body,
+      created_at: now,
+      updated_at: now,
+      pinned: false,
+      last_used_at: null,
+      copy_count: 0,
+      folder,
+      history: [],
+    };
+    await this.persist([newTemplate, ...this.templates]);
+    return newTemplate.id;
+  }
+
   async handleSave(updated: Template): Promise<void> {
     if (!this.isEditorMode) return;
     this.pushUndo("edit");
@@ -254,16 +276,13 @@ class TemplatesStore {
   async bulkDelete(ids: Set<string>): Promise<void> {
     if (!this.isEditorMode || ids.size === 0) return;
     this.pushUndo(`delete ${ids.size}`);
-    const next = this.templates.filter((t) => !ids.has(t.id));
+    const nextTemplates = this.templates.filter((t) => !ids.has(t.id));
     const nextPlaceholders = { ...this.settings.placeholder_values };
     for (const id of ids) delete nextPlaceholders[id];
-    try {
-      const saved = await bulkDeleteTemplates([...ids]);
-      this.templates = saved;
-      this.settings = { ...this.settings, placeholder_values: nextPlaceholders };
-    } catch (e) {
-      this.loadError = `bulk delete failed: ${e}`;
-    }
+    await this.persist(nextTemplates, {
+      ...this.settings,
+      placeholder_values: nextPlaceholders,
+    });
   }
 
   async bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
@@ -273,11 +292,12 @@ class TemplatesStore {
     const trimmed = normalizeTag(tag);
     if (trimmed.length === 0) return;
     this.pushUndo(`tag ${ids.size}`);
-    try {
-      this.templates = await bulkAddTemplateTag([...ids], trimmed);
-    } catch (e) {
-      this.loadError = `bulk tag failed: ${e}`;
-    }
+    const next = this.templates.map((t) => {
+      if (!ids.has(t.id)) return t;
+      if (t.tags.some((existing) => existing.toLowerCase() === trimmed)) return t;
+      return { ...t, tags: [...t.tags, trimmed] };
+    });
+    await this.persist(next);
   }
 
   async bulkRemoveTag(ids: Set<string>, tag: string): Promise<void> {
@@ -285,11 +305,14 @@ class TemplatesStore {
     const trimmed = normalizeTag(tag);
     if (trimmed.length === 0) return;
     this.pushUndo(`untag ${ids.size}`);
-    try {
-      this.templates = await bulkRemoveTemplateTag([...ids], trimmed);
-    } catch (e) {
-      this.loadError = `bulk untag failed: ${e}`;
-    }
+    const next = this.templates.map((t) => {
+      if (!ids.has(t.id)) return t;
+      return {
+        ...t,
+        tags: t.tags.filter((existing) => existing.toLowerCase() !== trimmed),
+      };
+    });
+    await this.persist(next);
   }
 
   async moveToFolder(ids: Set<string>, folder: string | null): Promise<void> {
@@ -379,16 +402,9 @@ class TemplatesStore {
     void this.persist(this.templates, { ...this.settings, sort_mode: next });
   }
 
-  async handleRenameTag(
-    from: string,
-    to: string,
-    selectedTagIds: Set<string>,
-    excludedTagIds: Set<string>,
-  ): Promise<{ selected: Set<string>; excluded: Set<string> }> {
-    // Returns the (possibly remapped) filter sets so the caller can sync its
-    // own reactive state — the filter sets stay in +page.svelte.
-    if (!this.isEditorMode) return { selected: selectedTagIds, excluded: excludedTagIds };
-    if (from === to || to.length === 0) return { selected: selectedTagIds, excluded: excludedTagIds };
+  async handleRenameTag(from: string, to: string): Promise<void> {
+    if (!this.isEditorMode) return;
+    if (from === to || to.length === 0) return;
     this.pushUndo("rename tag");
     const next = this.templates.map((t) =>
       t.tags.includes(from)
@@ -397,41 +413,17 @@ class TemplatesStore {
     );
     // Update tag_order so the renamed tag keeps its position.
     const newOrder = this.settings.tag_order.map((t) => (t === from ? to : t));
-    // Mirror into the active filter sets — without this, a tag selected as a
-    // filter keeps its old name in the set and silently matches zero rows.
-    let nextSelected = selectedTagIds;
-    let nextExcluded = excludedTagIds;
-    if (selectedTagIds.has(from)) {
-      nextSelected = new Set(selectedTagIds);
-      nextSelected.delete(from);
-      nextSelected.add(to);
-    }
-    if (excludedTagIds.has(from)) {
-      nextExcluded = new Set(excludedTagIds);
-      nextExcluded.delete(from);
-      nextExcluded.add(to);
-    }
     await this.persist(next, { ...this.settings, tag_order: dedupe(newOrder) });
-    return { selected: nextSelected, excluded: nextExcluded };
   }
 
-  async handleDeleteTag(
-    tag: string,
-    selectedTagIds: Set<string>,
-    excludedTagIds: Set<string>,
-  ): Promise<{ selected: Set<string>; excluded: Set<string> }> {
-    if (!this.isEditorMode) return { selected: selectedTagIds, excluded: excludedTagIds };
+  async handleDeleteTag(tag: string): Promise<void> {
+    if (!this.isEditorMode) return;
     this.pushUndo("remove tag");
     const next = this.templates.map((t) =>
       t.tags.includes(tag) ? { ...t, tags: t.tags.filter((x) => x !== tag) } : t,
     );
     const newOrder = this.settings.tag_order.filter((t) => t !== tag);
-    const nextSelected = new Set(selectedTagIds);
-    nextSelected.delete(tag);
-    const nextExcluded = new Set(excludedTagIds);
-    nextExcluded.delete(tag);
     await this.persist(next, { ...this.settings, tag_order: newOrder });
-    return { selected: nextSelected, excluded: nextExcluded };
   }
 
   async handleRestoreBackup(name: string): Promise<void> {
@@ -491,6 +483,50 @@ export async function handleExportTemplates(): Promise<PortResult> {
   }
 }
 
+function mergeImportedTemplates(
+  existing: Template[],
+  incoming: Template[],
+  overwrite: boolean,
+): { templates: Template[]; added: number; overwritten: number; skipped: number } {
+  const index = new Map(existing.map((t, i) => [t.id, i]));
+  const now = new Date().toISOString();
+  const next = [...existing];
+  const additions: Template[] = [];
+  let overwritten = 0;
+  let skipped = 0;
+
+  for (const tpl of incoming) {
+    const i = index.get(tpl.id);
+    if (i === undefined) {
+      additions.push(tpl);
+    } else if (!overwrite) {
+      skipped += 1;
+    } else {
+      const local = next[i];
+      next[i] = {
+        ...local,
+        name: tpl.name,
+        tags: tpl.tags,
+        folder: tpl.folder,
+        opening: tpl.opening,
+        body: tpl.body,
+        updated_at: now,
+        history: pushHistorySnapshot(local, now),
+      };
+      overwritten += 1;
+    }
+  }
+
+  // Prepend new additions in file order so the imported chunk lands at the
+  // top and keeps its internal ordering. Overwrites stayed in place above.
+  return {
+    templates: [...additions, ...next],
+    added: additions.length,
+    overwritten,
+    skipped,
+  };
+}
+
 export async function handleImportTemplates(overwrite: boolean): Promise<PortResult> {
   if (!templatesStore.isEditorMode) return { kind: "err", error: "import disabled in User mode" };
   try {
@@ -500,9 +536,9 @@ export async function handleImportTemplates(overwrite: boolean): Promise<PortRes
     });
     if (path === null || Array.isArray(path)) return { kind: "cancelled" };
     templatesStore.pushUndo("import");
-    const result = await importTemplates(path, overwrite);
-    // Rust has already persisted the merged list; just sync local state.
-    templatesStore.templates = result.templates;
+    const incoming = await readTemplatesExport(path);
+    const result = mergeImportedTemplates(templatesStore.templates, incoming, overwrite);
+    await templatesStore.persist(result.templates);
     const notes: string[] = [];
     if (result.overwritten > 0) notes.push(`${pluralise(result.overwritten, "duplicate")} overwritten`);
     if (result.skipped > 0) notes.push(`${pluralise(result.skipped, "duplicate")} skipped`);

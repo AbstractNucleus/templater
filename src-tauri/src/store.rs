@@ -323,17 +323,6 @@ impl Store {
 
         Ok(())
     }
-
-    /// Load-or-default, run `f` against the merged [`AppData`], persist, and
-    /// return `f`'s result. Centralizes the read-modify-write-save pattern used
-    /// by the bulk/import commands. A missing data file defaults to empty,
-    /// matching those commands' prior behavior.
-    pub fn mutate<R>(&self, f: impl FnOnce(&mut AppData) -> Result<R, String>) -> Result<R, String> {
-        let mut data = self.load()?.unwrap_or_else(|| AppData::new(Vec::new()));
-        let result = f(&mut data)?;
-        self.save(&data)?;
-        Ok(result)
-    }
 }
 
 fn read_templates_file(path: &Path) -> Result<TemplatesFileRead, String> {
