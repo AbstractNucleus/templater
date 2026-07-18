@@ -10,18 +10,25 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
-import { join, relative } from "path";
+import { join, basename } from "path";
 
 const args = process.argv.slice(2);
 const inputDirIdx = args.indexOf("--input-dir");
 if (inputDirIdx === -1) {
-  console.error("Usage: make-release-manifest.mjs --input-dir <dir>");
+  console.error("Usage: make-release-manifest.mjs --input-dir <dir> --download-base-url <url>");
   process.exit(1);
 }
 
 const inputDir = args[inputDirIdx + 1];
 if (!inputDir || !existsSync(inputDir)) {
   console.error(`input directory not found: ${inputDir}`);
+  process.exit(1);
+}
+
+const downloadBaseUrlIdx = args.indexOf("--download-base-url");
+const downloadBaseUrl = downloadBaseUrlIdx === -1 ? "" : args[downloadBaseUrlIdx + 1];
+if (!downloadBaseUrl) {
+  console.error("missing --download-base-url");
   process.exit(1);
 }
 
@@ -50,11 +57,11 @@ function walk(dir) {
         continue;
       }
       const signature = readFileSync(sigPath, "utf-8").trim();
-      const url = guessPlatformUrl(artifactPath);
-      if (url) {
-        platforms.set(url.platform, {
+      const platform = guessPlatform(artifactPath);
+      if (platform) {
+        platforms.set(platform, {
           signature,
-          url: url.url,
+          url: `${downloadBaseUrl.replace(/\/$/, "")}/${encodeURIComponent(basename(artifactPath))}`,
         });
       } else {
         console.warn(`  skipping ${artifactPath}: unknown platform`);
@@ -63,7 +70,7 @@ function walk(dir) {
   }
 }
 
-function guessPlatformUrl(artifactPath) {
+function guessPlatform(artifactPath) {
   const name = artifactPath.toLowerCase();
   const ext = artifactPath.split(".").pop();
   const isNsis = name.includes(".exe") || name.endsWith(".exe");
@@ -73,13 +80,13 @@ function guessPlatformUrl(artifactPath) {
   // We can't map every artifact to a unique platform key, but we try.
   // The updater only cares about the key matching the client's platform.
   if (isNsis && isWindows) {
-    return { platform: "windows-x86_64", url: artifactPath };
+    return "windows-x86_64";
   }
   if (isDmg) {
-    return { platform: "darwin-aarch64", url: artifactPath };
+    return "darwin-aarch64";
   }
   if (isAppTar) {
-    return { platform: "darwin-aarch64", url: artifactPath };
+    return "darwin-aarch64";
   }
   return null;
 }
