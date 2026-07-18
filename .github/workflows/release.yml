@@ -91,10 +91,11 @@ jobs:
             exit 1
           fi
 
+      # Keep per-matrix artifact dirs (bundle-macos-aarch64/…) so arch is
+      # visible in the path — Tauri's default Templater.app.tar.gz omits it.
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
 
       - name: Generate latest.json
         run: |
@@ -111,9 +112,9 @@ jobs:
           TAG="v${VERSION}"
           REPO="${{ github.repository }}"
           FILES=()
-          for f in artifacts/nsis/*.exe artifacts/nsis/*.exe.sig \
-                   artifacts/macos/*.app.tar.gz artifacts/macos/*.app.tar.gz.sig \
-                   artifacts/dmg/*.dmg \
+          for f in artifacts/*/nsis/*.exe artifacts/*/nsis/*.exe.sig \
+                   artifacts/*/macos/*.app.tar.gz artifacts/*/macos/*.app.tar.gz.sig \
+                   artifacts/*/dmg/*.dmg \
                    artifacts/latest.json; do
             [ -e "$f" ] && FILES+=("$f")
           done

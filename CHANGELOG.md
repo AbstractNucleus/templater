@@ -4,6 +4,12 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] — 2026-07-18
+
+### Fixed
+
+- **Release manifest arch mapping.** Infer updater platform arch from the CI artifact path when Tauri's default `Templater.app.tar.gz` omits it, so `latest.json` generation no longer fails on macOS builds.
+
 ## [0.9.5] — 2026-07-18
 
 ### Fixed

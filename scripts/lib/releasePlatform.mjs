@@ -1,7 +1,9 @@
 /**
  * Map a Tauri updater artifact filename to a platform key
  * (`windows-x86_64`, `darwin-aarch64`, …). Fail loud on ambiguity —
- * never guess arch from extension alone.
+ * never guess arch from extension alone. Arch may appear in the
+ * basename or in a parent path segment (e.g. CI artifact dirs like
+ * `bundle-macos-aarch64/macos/Templater.app.tar.gz`).
  */
 
 import { basename } from "path";
@@ -12,6 +14,9 @@ import { basename } from "path";
  */
 export function platformFromArtifact(artifactPath) {
   const name = basename(artifactPath).toLowerCase();
+  // Full path: CI keeps arch in the artifact directory name when files
+  // themselves omit it (Tauri's default Templater.app.tar.gz).
+  const haystack = artifactPath.replace(/\\/g, "/").toLowerCase();
 
   /** @type {"windows" | "darwin" | "linux" | null} */
   let os = null;
@@ -30,9 +35,9 @@ export function platformFromArtifact(artifactPath) {
 
   /** @type {"x86_64" | "aarch64" | null} */
   let arch = null;
-  if (/aarch64|arm64/.test(name)) {
+  if (/aarch64|arm64/.test(haystack)) {
     arch = "aarch64";
-  } else if (/x86_64|amd64|(^|[^a-z])x64([^0-9]|$)/.test(name)) {
+  } else if (/x86_64|amd64|(^|[^a-z])x64([^0-9]|$)/.test(haystack)) {
     arch = "x86_64";
   }
 

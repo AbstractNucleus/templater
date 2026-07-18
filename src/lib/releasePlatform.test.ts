@@ -23,9 +23,21 @@ describe("platformFromArtifact", () => {
     });
   });
 
+  it("maps Darwin app.tar.gz by arch in a parent path segment", () => {
+    expect(
+      platformFromArtifact("artifacts/bundle-macos-aarch64/macos/Templater.app.tar.gz"),
+    ).toEqual({ platform: "darwin-aarch64" });
+    expect(
+      platformFromArtifact("artifacts\\bundle-macos-aarch64\\macos\\Templater.app.tar.gz"),
+    ).toEqual({ platform: "darwin-aarch64" });
+  });
+
   it("fails loud when arch is missing (no silent darwin-aarch64 default)", () => {
     expect(platformFromArtifact("Templater.dmg")).toMatchObject({ error: expect.any(String) });
     expect(platformFromArtifact("Templater.app.tar.gz")).toMatchObject({
+      error: expect.any(String),
+    });
+    expect(platformFromArtifact("artifacts/macos/Templater.app.tar.gz")).toMatchObject({
       error: expect.any(String),
     });
   });
