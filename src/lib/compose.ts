@@ -1,7 +1,7 @@
 import type { Template } from "./types";
 
 // Source of truth for the text put on the clipboard. Shared by the Copy
-// button in MainPanel and the Enter-from-search shortcut in +page.svelte so
+// button in AppShell / TemplateView and the Enter-from-search shortcut in +page.svelte so
 // both paths produce identical output.
 export function composeText(
   template: Template,
@@ -42,8 +42,8 @@ export interface ParsedPlaceholder {
 }
 
 // Resolve a `<kind>` / `<kind>:<format>` token into its format + display
-// label, or null if `trimmed` isn't this kind. Unknown formats fall back to
-// `def`. Shared by the date and time cases below so they can't drift.
+// label, or null if `trimmed` isn't this kind. Unknown formats are rejected
+// (caller treats the token as free text) — never silently coerce.
 function parseFormatToken<F extends string>(
   trimmed: string,
   kind: string,
@@ -53,7 +53,8 @@ function parseFormatToken<F extends string>(
   if (trimmed === kind) return { format: def, label: kind };
   if (trimmed.startsWith(`${kind}:`)) {
     const fmt = trimmed.slice(kind.length + 1).trim();
-    const format = formats.find((f) => f === fmt) ?? def;
+    const format = formats.find((f) => f === fmt);
+    if (!format) return null;
     return { format, label: `${kind} (${format})` };
   }
   return null;
@@ -145,12 +146,16 @@ function resolveValue(
   return null;
 }
 
-export function splitPlaceholders(
-  text: string,
-  values: Record<string, string> = {},
-  now: Date = new Date(),
-  snippets: Record<string, string> = {},
-): ComposedSegment[] {
+export interface ComposeOpts {
+  values?: Record<string, string>;
+  now?: Date;
+  snippets?: Record<string, string>;
+}
+
+export function splitPlaceholders(text: string, opts: ComposeOpts = {}): ComposedSegment[] {
+  const values = opts.values ?? {};
+  const now = opts.now ?? new Date();
+  const snippets = opts.snippets ?? {};
   const segments: ComposedSegment[] = [];
   let cursor = 0;
   for (const m of text.matchAll(PLACEHOLDER_RE)) {
@@ -169,13 +174,8 @@ export function splitPlaceholders(
 // text/choice fall through to the raw token if no value is set. Built on
 // splitPlaceholders so the substitution rules can never diverge between the
 // preview (segments) and the copied text (this).
-export function applyValues(
-  text: string,
-  values: Record<string, string>,
-  now: Date = new Date(),
-  snippets: Record<string, string> = {},
-): string {
-  return splitPlaceholders(text, values, now, snippets)
+export function applyValues(text: string, opts: ComposeOpts = {}): string {
+  return splitPlaceholders(text, opts)
     .map((s) => s.text)
     .join("");
 }

@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { untrack, type Snippet } from "svelte";
+  import { type Snippet } from "svelte";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import type { Template } from "$lib/types";
-  import { composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
+  import { applyValues, composeText, splitPlaceholders, extractPlaceholders } from "$lib/compose";
+  import { composeSession } from "$lib/stores/composeSession.svelte";
   import CopyButton from "./CopyButton.svelte";
   import PlaceholderFills from "./PlaceholderFills.svelte";
 
@@ -20,7 +21,7 @@
     onToggleSignature,
     onCopySuccess,
     onPlaceholderValuesChange,
-    copyTrigger = 0,
+    registerForShortcuts = false,
     showTags = true,
     showCopyKbd = true,
     valuesRevision,
@@ -38,8 +39,8 @@
     onToggleSignature: (v: boolean) => void;
     onCopySuccess: (templateId: string) => void;
     onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
-    /** Bump from parent to run the same copy flow as the Copy button. */
-    copyTrigger?: number;
+    /** When true, register with composeSession so Enter / page shortcuts copy. */
+    registerForShortcuts?: boolean;
     showTags?: boolean;
     showCopyKbd?: boolean;
     /** Bump to re-seed fills from `savedPlaceholderValues` without changing
@@ -93,12 +94,17 @@
   const composed = $derived(
     composeText(template, includeOpening, includeSignature, globalSignature),
   );
-  const previewSegments = $derived(
-    splitPlaceholders(composed, placeholderValues, new Date(), snippets),
-  );
-  // The copied text is exactly the preview with each segment flattened — one
-  // parse and one `now`, so the clipboard output can't drift from what's shown.
-  const composedFilled = $derived(previewSegments.map((s) => s.text).join(""));
+  // One clock for preview segments + clipboard so they cannot drift.
+  const composedView = $derived.by(() => {
+    const now = new Date();
+    const opts = { values: placeholderValues, now, snippets };
+    return {
+      segments: splitPlaceholders(composed, opts),
+      filled: applyValues(composed, opts),
+    };
+  });
+  const previewSegments = $derived(composedView.segments);
+  const composedFilled = $derived(composedView.filled);
   const placeholders = $derived(extractPlaceholders(composed, snippets));
 
   async function copyToClipboard(): Promise<void> {
@@ -122,22 +128,10 @@
     copyTimer = setTimeout(() => (copyState = "idle"), 1500);
   }
 
-  // Bumping `copyTrigger` from the parent runs the same copy flow as the
-  // Copy button — keeps the "Copied"/"Copy failed" feedback shared.
-  //
-  // Copy ONLY when the counter actually increments. The effect must not pick
-  // up any other dependency: copyToClipboard reads `template` and
-  // `composedFilled` synchronously, and recordCopy replaces the template
-  // object after every copy — tracked, that re-fires the effect and copies
-  // forever. `untrack` keeps the dep set to {copyTrigger}; the equality guard
-  // ignores spurious re-runs (e.g. sibling fields of the parent's spread
-  // props changing); seeding from the current value makes remounts inert.
-  let lastCopyTrigger = untrack(() => copyTrigger);
+  // Enter / page shortcuts call composeSession.requestCopy() — main view only.
   $effect(() => {
-    const t = copyTrigger;
-    if (t === lastCopyTrigger) return;
-    lastCopyTrigger = t;
-    untrack(() => void copyToClipboard());
+    if (!registerForShortcuts) return;
+    return composeSession.registerCopyHandler(() => copyToClipboard());
   });
 </script>
 

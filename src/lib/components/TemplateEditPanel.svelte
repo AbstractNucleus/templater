@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Template, TemplateDraft } from "$lib/types";
   import TemplateForm from "./TemplateForm.svelte";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
 
   const EMPTY_DRAFT: TemplateDraft = {
     name: "",
@@ -24,17 +25,19 @@
         onSave: (t: Template) => void;
       };
 
-  let {
-    mode,
-    canEdit,
-    availableTags,
-    availableFolders,
-  }: {
-    mode: EditMode;
-    canEdit: boolean;
-    availableTags: string[];
-    availableFolders: string[];
-  } = $props();
+  let { mode }: { mode: EditMode } = $props();
+
+  const canEdit = $derived(templatesStore.isEditorMode);
+  const availableTags = $derived.by(() => {
+    const set = new Set<string>();
+    for (const t of templatesStore.templates) for (const tag of t.tags) set.add(tag);
+    return [...set].sort();
+  });
+  const availableFolders = $derived.by(() => {
+    const set = new Set<string>();
+    for (const t of templatesStore.templates) if (t.folder !== null) set.add(t.folder);
+    return [...set].sort();
+  });
 
   // Draft state — used by both edit and create flows.
   let draft = $state<TemplateDraft>({ ...EMPTY_DRAFT });

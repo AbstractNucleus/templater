@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { UpdateInfo } from "$lib/api";
+  import { relaunch } from "@tauri-apps/plugin-process";
+  import type { UpdateInfo } from "$lib/api/updater";
 
   type UpdateState =
     | { kind: "idle" }
@@ -39,6 +40,9 @@
         updateState = { kind: "downloading", received, total };
       });
       updateState = { kind: "installing" };
+      // Most Windows installers relaunch themselves; explicit relaunch covers
+      // the edge case. Policy lives here (settings UI), not in the API façade.
+      await relaunch();
     } catch (e) {
       updateState = { kind: "error", error: String(e) };
     }

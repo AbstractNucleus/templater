@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { listen } from "@tauri-apps/api/event";
-  import { emit } from "@tauri-apps/api/event";
+  import { listen, emit } from "@tauri-apps/api/event";
   import { translateText } from "$lib/api";
+  import PopoutFrame from "$lib/components/PopoutFrame.svelte";
   import type { TranslatorPayload } from "$lib/stores/popouts.svelte";
 
   let payload = $state<TranslatorPayload | null>(null);
@@ -32,17 +32,12 @@
   });
 
   async function doTranslate(): Promise<void> {
-    const p = payload;
-    if (!p || sourceText.trim().length === 0) return;
-    if (!p.openrouterApiKey) {
-      error = "OpenRouter API key not configured. Add it in Settings → Translation.";
-      return;
-    }
+    if (sourceText.trim().length === 0) return;
     translating = true;
     error = null;
     translatedText = "";
     try {
-      const result = await translateText(sourceText, p.openrouterApiKey, p.translationModel);
+      const result = await translateText(sourceText);
       translatedText = result;
     } catch (e) {
       error = String(e);
@@ -71,12 +66,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="frame">
-  <header class="titlebar" data-tauri-drag-region>
-    <span class="brand" data-tauri-drag-region>Translate</span>
-    <span class="drag-spacer" data-tauri-drag-region></span>
-  </header>
-
+<PopoutFrame title="Translate">
   <div class="body">
     <!-- Translated output pane (top) -->
     <div class="pane-label">English translation</div>
@@ -110,44 +100,9 @@
       onpaste={handlePaste}
     ></textarea>
   </div>
-</div>
+</PopoutFrame>
 
 <style>
-  .frame {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--bg-base);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 4px 24px var(--shadow), 0 0 0 1px rgba(0, 0, 0, 0.2);
-    overflow: hidden;
-  }
-
-  .titlebar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 36px;
-    padding: 0 12px;
-    background: var(--bg-titlebar);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    user-select: none;
-  }
-
-  .brand {
-    color: var(--text-strong);
-    font-size: 0.85rem;
-    font-weight: 600;
-  }
-
-  .drag-spacer {
-    flex: 1;
-    align-self: stretch;
-    min-width: 8px;
-  }
-
   .body {
     flex: 1;
     display: flex;
@@ -237,7 +192,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .error {

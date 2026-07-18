@@ -1,22 +1,15 @@
 <script lang="ts">
   import TagsSidebar from "$lib/components/TagsSidebar.svelte";
-  import TemplatesSidebar, { type SelectModifier } from "$lib/components/TemplatesSidebar.svelte";
-  import MainPanel from "$lib/components/MainPanel.svelte";
+  import TemplatesSidebar from "$lib/components/TemplatesSidebar.svelte";
+  import AppShell from "$lib/components/AppShell.svelte";
   import TitleBar from "$lib/components/TitleBar.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
   import DialogsHost from "$lib/components/DialogsHost.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
-  import { readText } from "@tauri-apps/plugin-clipboard-manager";
+  import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
-  import { searchTemplates } from "$lib/search";
-  import {
-    canReorder,
-    filterByTags,
-    groupPinnedHits,
-    sortTemplates,
-  } from "$lib/browse";
-  import { buildContextMenu } from "$lib/contextMenu";
+  import { bindContextMenuItems, buildContextMenu } from "$lib/contextMenu";
   import { bootstrapApp } from "$lib/appBootstrap";
   import {
     applyMinimalGeometry,
@@ -25,10 +18,13 @@
   import { DEFAULT_COLUMN_WIDTHS } from "$lib/types";
   import { templatesStore } from "$lib/stores/templatesStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { browseSession } from "$lib/stores/browseSession.svelte";
   import { editorSession } from "$lib/stores/editorSession.svelte";
   import { popouts } from "$lib/stores/popouts.svelte";
   import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
+  import { appErrors } from "$lib/stores/appErrors.svelte";
   import { createGlobalKeydownHandler } from "$lib/keyboard";
+  import { composeSession } from "$lib/stores/composeSession.svelte";
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2.0;
@@ -41,26 +37,31 @@
 
   let tagsWidth = $state(DEFAULT_COLUMN_WIDTHS.tags);
   let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
-  let searchInput: HTMLInputElement | undefined = $state();
   let appVersion = $state("0.0.0");
-  let searchQuery = $state("");
   let includeOpening = $state(true);
   let includeSignature = $state(true);
-  let copyTrigger = $state(0);
 
   const minimalGeo = createMinimalGeometryState();
-
-  function clearSearch(): void {
-    searchQuery = "";
-    searchInput?.focus();
-  }
 
   function handleGlobalContextMenu(e: MouseEvent): void {
     const result = buildContextMenu(e);
     if (result.action === "default") return;
     e.preventDefault();
     if (result.action === "menu") {
-      uiDialogs.contextMenu = { x: e.clientX, y: e.clientY, items: result.items };
+      uiDialogs.contextMenu = {
+        x: e.clientX,
+        y: e.clientY,
+        items: bindContextMenuItems(result.items, {
+          readText: async () => {
+            try {
+              return await readText();
+            } catch {
+              return null;
+            }
+          },
+          writeText: (text) => writeText(text),
+        }),
+      };
     }
   }
 
@@ -71,13 +72,9 @@
     void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, zoom: clamped });
   }
 
-  function moveSelection(delta: number): void {
-    selectionStore.moveSelection(visibleTemplateIds, delta);
-  }
-
   function copySelected(): void {
     if (selectionStore.selectedTemplateId === null) return;
-    copyTrigger++;
+    composeSession.requestCopy();
   }
 
   function startResize(target: "tags" | "templates"): (e: PointerEvent) => void {
@@ -120,90 +117,25 @@
     };
   }
 
-  // Read-only aliases keep template + derivation code readable. Mutations go
-  // directly through the stores so reactivity propagates back.
-  const templates = $derived(templatesStore.templates);
   const settings = $derived(templatesStore.settings);
   const loaded = $derived(templatesStore.loaded);
   const undoToast = $derived(templatesStore.undoToast);
-
-  const selectedTemplate = $derived(
-    templates.find((t) => t.id === selectionStore.selectedTemplateId) ?? null,
-  );
-
   const isEditorMode = $derived(templatesStore.isEditorMode);
   const isMinimal = $derived(settings.minimal);
 
-  const availableTags = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of templates) for (const tag of t.tags) set.add(tag);
-    return [...set].sort();
-  });
-
-  const availableFolders = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of templates) if (t.folder !== null) set.add(t.folder);
-    return [...set].sort();
-  });
-
-  const browseOrdered = $derived(sortTemplates(templates, settings.sort_mode));
-
-  const tagFiltered = $derived(
-    filterByTags(
-      browseOrdered,
-      selectionStore.selectedTagIds,
-      selectionStore.excludedTagIds,
-      selectionStore.tagCombinator,
-    ),
-  );
-
-  const rawHits = $derived(searchTemplates(searchQuery, tagFiltered));
-
-  // Group pinned to the top regardless of search score. Within each tier the
-  // searchTemplates ordering (full-match → score → name) is preserved.
-  const searchResults = $derived(groupPinnedHits(rawHits));
-
-  // Drag-reorder is only safe when the visible order IS the underlying array
-  // order. Any filter, search, or paste-mode ranking breaks that invariant.
-  const canReorderTemplates = $derived(
-    canReorder({
-      isEditorMode,
-      searchQuery,
-      selectedTagIds: selectionStore.selectedTagIds,
-      excludedTagIds: selectionStore.excludedTagIds,
-      sortMode: settings.sort_mode,
-    }),
-  );
-
-  // Props the MainPanel takes identically in all three render modes.
-  const sharedMainPanelProps = $derived({
-    globalSignature: settings.global_signature,
-    snippets: settings.snippets,
-    canEdit: isEditorMode,
-    availableTags,
-    availableFolders,
-    copyTrigger,
-    savedPlaceholderValues: settings.placeholder_values,
+  // Session UI for AppShell (compose toggles). Store data is read inside.
+  const appShellProps = $derived({
     includeOpening,
     includeSignature,
     onToggleOpening: (v: boolean) => (includeOpening = v),
     onToggleSignature: (v: boolean) => (includeSignature = v),
-    onCopySuccess: (id: string) => void templatesStore.recordCopy(id),
-    onPlaceholderValuesChange: (id: string, vals: Record<string, string>) =>
-      void templatesStore.recordPlaceholderValues(id, vals),
-    onRevertHistory: (id: string, idx: number) => void templatesStore.revertHistory(id, idx),
   });
-
-  // Ordered IDs the user can step through with ↑/↓. Only browse search results.
-  const visibleTemplateIds = $derived(
-    searchResults.map((h) => h.template.id),
-  );
 
   // Snap selection to the first visible row when the current pick drops out
   // of the result set. Skip during editing where the selection is locked.
   $effect(() => {
     if (editorSession.isActive) return;
-    selectionStore.ensureSelection(visibleTemplateIds);
+    selectionStore.ensureSelection(browseSession.visibleIds);
   });
 
   $effect(() => {
@@ -217,19 +149,10 @@
         // Surface the error and leave templates empty — DON'T fall back to
         // starter templates here. Any subsequent persist would overwrite the
         // user's (presumably recoverable) on-disk file with the starter set.
-        templatesStore.loadError = String(e);
+        appErrors.setLoad(String(e));
       }
     })();
   });
-
-  function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
-    editorSession.clearEditOnSelect();
-    selectionStore.selectTemplate(id, visibleTemplateIds, modifier);
-  }
-
-  function handleSearchChange(q: string): void {
-    searchQuery = q;
-  }
 
   // The Rust handler emits this when the quick-capture hotkey is pressed.
   $effect(() => {
@@ -275,13 +198,23 @@
     getZoom: () => templatesStore.settings.zoom ?? 1,
     setZoom,
     zoomStep: ZOOM_STEP,
-    getSearchInput: () => searchInput,
-    getSearchQuery: () => searchQuery,
-    clearSearch,
+    getSearchInput: () => browseSession.searchInputEl,
+    getSearchQuery: () => browseSession.searchQuery,
+    clearSearch: () => browseSession.clearSearch(),
     isEditing: () => editorSession.isActive,
-    moveSelection,
+    moveSelection: (delta) => browseSession.moveSelection(delta),
     copySelected,
     isMinimal: () => isMinimal,
+    blocksShortcuts: () => uiDialogs.blocksShortcuts,
+    cheatSheetOpen: () => uiDialogs.cheatSheetOpen,
+    toggleCheatSheet: () => {
+      uiDialogs.cheatSheetOpen = !uiDialogs.cheatSheetOpen;
+    },
+    togglePreview: () => void popouts.togglePreview(),
+    toggleTranslator: () => void popouts.toggleTranslator(),
+    getPreviewHotkey: () => templatesStore.settings.preview_hotkey,
+    canUndo: () => templatesStore.isEditorMode,
+    performUndo: () => void templatesStore.performUndo(),
   });
 
   // Popouts own push + listeners; page only mounts the lifecycle once.
@@ -298,10 +231,10 @@
   <TitleBar
     onOpenSettings={() => (uiDialogs.settingsOpen = true)}
     showSearch={!editorSession.isActive}
-    {searchQuery}
-    onSearchChange={handleSearchChange}
-    onClearSearch={clearSearch}
-    onSearchInputMount={(el) => (searchInput = el ?? undefined)}
+    searchQuery={browseSession.searchQuery}
+    onSearchChange={(q) => browseSession.setSearchQuery(q)}
+    onClearSearch={() => browseSession.clearSearch()}
+    onSearchInputMount={(el) => (browseSession.searchInputEl = el ?? undefined)}
     minimal={isMinimal}
     previewOpen={popouts.previewOpen}
     onTogglePreview={() => void popouts.togglePreview()}
@@ -325,75 +258,17 @@
         <div class="skel-line"></div>
         <div class="skel-block"></div>
       </section>
-    {:else if editorSession.creatingDraft !== null}
-      <MainPanel
-        {...sharedMainPanelProps}
-        mode={{
-          kind: "create",
-          draft: editorSession.creatingDraft,
-          onCancel: () => editorSession.cancelCreate(),
-          onCreate: (d) => editorSession.create(d),
-        }}
-      />
-    {:else if editorSession.editing && selectedTemplate}
-      <MainPanel
-        {...sharedMainPanelProps}
-        mode={{
-          kind: "edit",
-          template: selectedTemplate,
-          onCancel: () => editorSession.cancelEdit(),
-          onSave: (t) => editorSession.save(t),
-          onDuplicate: () => void editorSession.duplicate(selectedTemplate),
-          onDelete: () => void editorSession.delete(selectedTemplate),
-        }}
-      />
+    {:else if editorSession.isActive}
+      <AppShell {...appShellProps} />
     {:else}
-      <TagsSidebar
-        {templates}
-        selectedTagIds={selectionStore.selectedTagIds}
-        excludedTagIds={selectionStore.excludedTagIds}
-        tagCombinator={selectionStore.tagCombinator}
-        tagOrder={settings.tag_order}
-        width={tagsWidth}
-        onTagToggle={(tag) => selectionStore.toggleTag(tag)}
-        onTagExclude={(tag) => selectionStore.excludeTag(tag)}
-        onTagsClear={() => selectionStore.clearTags()}
-        onCombinatorToggle={() => selectionStore.toggleTagCombinator()}
-        onContextEmpty={(x, y) => uiDialogs.openContextForEmpty(x, y)}
-        onTagReorder={(next) => void templatesStore.handleTagsReorder(next)}
-      />
+      <TagsSidebar width={tagsWidth} />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="col-resize"
         title="Drag to resize"
         onpointerdown={startResize("tags")}
       ></div>
-      <TemplatesSidebar
-        {searchResults}
-        {templates}
-        selectedTemplateId={selectionStore.selectedTemplateId}
-        bulkSelectedIds={selectionStore.bulkSelectedIds}
-        width={templatesWidth}
-        flex={isMinimal}
-        canCreate={isEditorMode}
-        canReorder={canReorderTemplates}
-        sortMode={settings.sort_mode}
-        onTemplateSelect={handleTemplateSelect}
-        onNew={() => editorSession.startCreate()}
-        onClearFilters={() => {
-          selectionStore.clearTags();
-          clearSearch();
-        }}
-        onContextTemplate={(id, x, y) => uiDialogs.openContextForTemplate(id, x, y)}
-        onContextEmpty={(x, y) => uiDialogs.openContextForEmpty(x, y)}
-        onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
-        onMoveToFolder={(ids, folder) => void templatesStore.moveToFolder(ids, folder)}
-        onSortModeToggle={() => templatesStore.handleSortModeToggle()}
-        onBulkAddTag={() => (uiDialogs.bulkTagPromptOpen = true)}
-        onBulkRemoveTag={() => (uiDialogs.bulkRemoveTagPromptOpen = true)}
-        onBulkExport={() => void templatesStore.bulkExport(selectionStore.bulkSelectedIds)}
-        onBulkDelete={() => (uiDialogs.bulkDeleteConfirmOpen = true)}
-      />
+      <TemplatesSidebar width={templatesWidth} flex={isMinimal} />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       {#if !isMinimal}
         <div
@@ -401,27 +276,23 @@
           title="Drag to resize"
           onpointerdown={startResize("templates")}
         ></div>
-        <MainPanel
-          {...sharedMainPanelProps}
-          mode={{
-            kind: "browse",
-            template: selectedTemplate,
-            onEnterEdit: () => editorSession.enterEdit(),
-            onSave: (t) => editorSession.save(t),
-            onDuplicate: () => void editorSession.duplicate(selectedTemplate),
-            onDelete: () => void editorSession.delete(selectedTemplate),
-          }}
-        />
+        <AppShell {...appShellProps} />
       {/if}
     {/if}
-    {#if templatesStore.loadError}
+    {#if appErrors.banner}
       <div class="error-banner">
-        <span class="error-text">{templatesStore.loadError}</span>
-        <button class="error-close" aria-label="Dismiss error" onclick={() => (templatesStore.loadError = null)}>×</button>
+        <span class="error-text">{appErrors.banner}</span>
+        {#if templatesStore.settingsCorrupt && appErrors.loadError}
+          <button
+            class="error-reset"
+            onclick={() => void templatesStore.resetCorruptSettings()}
+          >Reset settings</button>
+        {/if}
+        <button class="error-close" aria-label="Dismiss error" onclick={() => appErrors.dismiss()}>×</button>
       </div>
     {/if}
     {#if undoToast}
-      <div class="undo-toast" style="bottom: {templatesStore.loadError ? 48 : 12}px">{undoToast}</div>
+      <div class="undo-toast" style="bottom: {appErrors.banner ? 48 : 12}px">{undoToast}</div>
     {/if}
   </div>
 </div>
@@ -568,6 +439,22 @@
 
   .error-close:hover {
     opacity: 0.7;
+  }
+
+  .error-reset {
+    background: transparent;
+    border: 1px solid var(--accent-danger-border);
+    color: var(--accent-danger-text);
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    padding: 3px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .error-reset:hover {
+    opacity: 0.85;
   }
 
   .undo-toast {

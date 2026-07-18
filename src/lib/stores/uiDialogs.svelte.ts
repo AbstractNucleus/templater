@@ -1,7 +1,8 @@
 import type { Template } from "$lib/types";
-import { openDataDir } from "$lib/api";
+import { openDataDir } from "$lib/api/windows";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
+import { appErrors } from "$lib/stores/appErrors.svelte";
 
 export type DialogMenuItem = {
   label: string;
@@ -18,19 +19,24 @@ class UiDialogs {
   bulkDeleteConfirmOpen = $state(false);
   bulkTagPromptOpen = $state(false);
   bulkRemoveTagPromptOpen = $state(false);
-  contextDeleteTarget = $state<Template | null>(null);
+  /** Shared single-template delete confirm (toolbar + context menu). */
+  deleteConfirmTarget = $state<Template | null>(null);
   contextMenu = $state<{ x: number; y: number; items: DialogMenuItem[] } | null>(null);
   bulkTagDraft = $state("");
 
   /** Confirm/settings/bulk prompts that own Escape/Enter themselves. */
   get blocksShortcuts(): boolean {
     return (
-      this.contextDeleteTarget !== null ||
+      this.deleteConfirmTarget !== null ||
       this.settingsOpen ||
       this.bulkDeleteConfirmOpen ||
       this.bulkTagPromptOpen ||
       this.bulkRemoveTagPromptOpen
     );
+  }
+
+  requestDelete(template: Template): void {
+    this.deleteConfirmTarget = template;
   }
 
   openContextForTemplate(id: string, x: number, y: number): void {
@@ -45,11 +51,11 @@ class UiDialogs {
       if (isEditorMode) {
         items.push({
           label: `Add tag to ${count}…`,
-          onClick: () => (this.bulkTagPromptOpen = true),
+          onClick: () => this.openBulkTagPrompt(),
         });
         items.push({
           label: `Remove tag from ${count}…`,
-          onClick: () => (this.bulkRemoveTagPromptOpen = true),
+          onClick: () => this.openBulkRemoveTagPrompt(),
         });
       }
       items.push({ label: `Export ${count}…`, onClick: () => void templatesStore.bulkExport(bulk) });
@@ -72,10 +78,7 @@ class UiDialogs {
       });
       items.push({
         label: "Duplicate",
-        onClick: async () => {
-          const copyId = await templatesStore.duplicateTemplateById(id);
-          if (copyId) selectionStore.selectedTemplateId = copyId;
-        },
+        onClick: () => void templatesStore.duplicateId(id),
       });
     }
     items.push({ label: "Export…", onClick: () => void templatesStore.exportSingleTemplate(id) });
@@ -83,7 +86,7 @@ class UiDialogs {
       items.push({
         label: "Delete",
         danger: true,
-        onClick: () => (this.contextDeleteTarget = tpl),
+        onClick: () => this.requestDelete(tpl),
       });
     }
     this.contextMenu = { x, y, items };
@@ -97,11 +100,31 @@ class UiDialogs {
         {
           label: "Open data folder",
           onClick: () => {
-            openDataDir().catch((e) => (templatesStore.loadError = `open folder failed: ${e}`));
+            openDataDir().catch((e) => appErrors.setAction(`open folder failed: ${e}`));
           },
         },
       ],
     };
+  }
+
+  openBulkTagPrompt(): void {
+    this.bulkTagDraft = "";
+    this.bulkTagPromptOpen = true;
+  }
+
+  openBulkRemoveTagPrompt(): void {
+    this.bulkTagDraft = "";
+    this.bulkRemoveTagPromptOpen = true;
+  }
+
+  closeBulkTagPrompt(): void {
+    this.bulkTagPromptOpen = false;
+    this.bulkTagDraft = "";
+  }
+
+  closeBulkRemoveTagPrompt(): void {
+    this.bulkRemoveTagPromptOpen = false;
+    this.bulkTagDraft = "";
   }
 
   closeContextMenu(): void {
@@ -111,11 +134,7 @@ class UiDialogs {
   async confirmBulkDelete(): Promise<void> {
     const ids = new Set(selectionStore.bulkSelectedIds);
     this.bulkDeleteConfirmOpen = false;
-    await templatesStore.bulkDelete(ids);
-    selectionStore.bulkSelectedIds = new Set();
-    if (selectionStore.selectedTemplateId !== null && ids.has(selectionStore.selectedTemplateId)) {
-      selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
-    }
+    await templatesStore.deleteIds(ids);
   }
 
   async confirmBulkTag(): Promise<void> {
@@ -134,15 +153,11 @@ class UiDialogs {
     await templatesStore.bulkRemoveTag(selectionStore.bulkSelectedIds, tag);
   }
 
-  async confirmContextDelete(): Promise<void> {
-    if (!this.contextDeleteTarget) return;
-    const id = this.contextDeleteTarget.id;
-    this.contextDeleteTarget = null;
-    await templatesStore.deleteTemplateById(id);
-    selectionStore.pruneBulkSelection(new Set([id]));
-    if (selectionStore.selectedTemplateId === id) {
-      selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
-    }
+  async confirmDelete(): Promise<void> {
+    if (!this.deleteConfirmTarget) return;
+    const id = this.deleteConfirmTarget.id;
+    this.deleteConfirmTarget = null;
+    await templatesStore.deleteIds([id]);
   }
 }
 

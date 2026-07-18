@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildTemplateList,
   canReorder,
   filterByTags,
   groupPinnedHits,
@@ -68,6 +69,13 @@ describe("sortTemplates", () => {
       last_used_at: "2026-01-01T00:00:00Z",
     });
     const never = mk({ id: "never", name: "Never" });
+    // copy_count===0 alone counts as never_used (ignore stale last_used_at).
+    const staleStamp = mk({
+      id: "stale",
+      name: "Stale",
+      copy_count: 0,
+      last_used_at: "2026-01-01T00:00:00Z",
+    });
     const pinnedUsed = mk({
       id: "pin",
       name: "Pin",
@@ -75,11 +83,9 @@ describe("sortTemplates", () => {
       copy_count: 1,
       last_used_at: "2026-01-01T00:00:00Z",
     });
-    expect(sortTemplates([used, never, pinnedUsed], "never_used").map((t) => t.id)).toEqual([
-      "pin",
-      "never",
-      "used",
-    ]);
+    expect(
+      sortTemplates([used, never, staleStamp, pinnedUsed], "never_used").map((t) => t.id),
+    ).toEqual(["pin", "never", "stale", "used"]);
   });
 });
 
@@ -130,6 +136,53 @@ describe("groupPinnedHits", () => {
       "a",
       "c",
     ]);
+  });
+});
+
+describe("buildTemplateList", () => {
+  it("browse path sorts and skips search scoring", () => {
+    const pinned = mk({ id: "p", name: "Pinned", pinned: true });
+    const newer = mk({ id: "n", name: "Newer", last_used_at: "2026-02-01T00:00:00Z" });
+    const older = mk({ id: "o", name: "Older", last_used_at: "2026-01-01T00:00:00Z" });
+    const hits = buildTemplateList({
+      templates: [older, newer, pinned],
+      sortMode: "recent",
+      selectedTagIds: new Set(),
+      excludedTagIds: new Set(),
+      combinator: "and",
+      query: "",
+    });
+    expect(hits.map((h) => h.template.id)).toEqual(["p", "n", "o"]);
+    expect(hits.every((h) => h.score === 0)).toBe(true);
+  });
+
+  it("search path ranks without browse sort and pin-groups", () => {
+    const weakPinned = mk({ id: "wp", name: "zzz", body: "needle here", pinned: true });
+    const strong = mk({ id: "s", name: "needle", body: "" });
+    const hits = buildTemplateList({
+      templates: [weakPinned, strong],
+      sortMode: "manual",
+      selectedTagIds: new Set(),
+      excludedTagIds: new Set(),
+      combinator: "and",
+      query: "needle",
+    });
+    expect(hits.map((h) => h.template.id)).toEqual(["wp", "s"]);
+    expect(hits[1].score).toBeGreaterThan(0);
+  });
+
+  it("applies tag filter before browse or search", () => {
+    const keep = mk({ id: "k", name: "Keep", tags: ["x"] });
+    const drop = mk({ id: "d", name: "Drop", tags: ["y"] });
+    const hits = buildTemplateList({
+      templates: [keep, drop],
+      sortMode: "manual",
+      selectedTagIds: new Set(["x"]),
+      excludedTagIds: new Set(),
+      combinator: "and",
+      query: "",
+    });
+    expect(hits.map((h) => h.template.id)).toEqual(["k"]);
   });
 });
 

@@ -4,10 +4,10 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
+    Emitter,
 };
 
-use crate::{save_window_geometry, toggle_main_window};
+use crate::windows::{save_window_geometry, show_main_window, toggle_main_window};
 
 /// Build and install the "main-tray" icon during app setup.
 pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -30,16 +30,10 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "show" => {
                 // Menu items do what the label says — only the
                 // left-click tray icon toggles visibility.
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window(app);
             }
             "settings" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window(app);
                 let _ = app.emit("open-settings", ());
             }
             "quit" => {

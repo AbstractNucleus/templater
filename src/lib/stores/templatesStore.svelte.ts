@@ -1,37 +1,22 @@
-import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   loadAppData,
   saveAppData,
-  exportTemplates,
-  readTemplatesExport,
+  resetCorruptSettings,
   readTemplateBackup,
-} from "$lib/api";
+} from "$lib/api/data";
 import { starterTemplates } from "$lib/starterTemplates";
+import { pushHistorySnapshot } from "$lib/templateHistory";
 import { normalizeTag } from "$lib/tags";
+import { selectionStore } from "$lib/stores/selectionStore.svelte";
+import { appErrors } from "$lib/stores/appErrors.svelte";
+import { captureUndoSnapshot, UndoStack } from "$lib/stores/undoStack";
+import { exportTemplatesToDialog, slugify } from "$lib/templateIo";
 import {
   DEFAULT_SETTINGS,
-  TEMPLATE_HISTORY_CAP,
-  type PortResult,
   type Settings,
   type Template,
   type TemplateDraft,
-  type TemplateVersion,
 } from "$lib/types";
-
-const DATA_VERSION = 1;
-const MAX_UNDO = 20;
-
-interface UndoSnapshot {
-  templates: Template[];
-  placeholderValues: Record<string, Record<string, string>>;
-  label: string;
-}
-
-function omitKey<T extends object>(obj: T, key: string): T {
-  const copy = { ...obj } as Record<string, unknown>;
-  delete copy[key];
-  return copy as T;
-}
 
 function dedupe(items: string[]): string[] {
   const seen = new Set<string>();
@@ -44,50 +29,64 @@ function dedupe(items: string[]): string[] {
   return out;
 }
 
-function pushHistorySnapshot(cur: Template, savedAt: string): TemplateVersion[] {
-  if (cur.opening.length === 0 && cur.body.length === 0 && cur.tags.length === 0) return cur.history;
-  const snapshot = { saved_at: savedAt, opening: cur.opening, body: cur.body, tags: [...cur.tags] };
-  const next = [...cur.history, snapshot];
-  return next.length > TEMPLATE_HISTORY_CAP ? next.slice(-TEMPLATE_HISTORY_CAP) : next;
-}
-
 class TemplatesStore {
   templates = $state<Template[]>([]);
   settings = $state<Settings>({ ...DEFAULT_SETTINGS });
   loaded = $state(false);
-  loadError = $state<string | null>(null);
+  /** Saves refused until user resets settings (matches Rust fail-closed lock). */
+  settingsCorrupt = $state(false);
   undoToast = $state<string | null>(null);
 
-  #undoStack: UndoSnapshot[] = $state([]);
+  #undo = new UndoStack();
   #undoToastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Serialize disk writes so concurrent persist callers cannot last-write-wins drop mutations. */
+  #writeChain: Promise<void> = Promise.resolve();
 
   get isEditorMode(): boolean {
     return this.settings.mode === "editor";
   }
 
-  /** Initial load. Returns the on-disk record (or null for fresh installs)
-   *  so the caller can react to first-run state. */
+  /** Snapshot (optional) then persist. `label: null` skips undo (usage/settings noise). */
+  async apply(
+    label: string | null,
+    next: { templates?: Template[]; settings?: Settings },
+  ): Promise<void> {
+    if (label !== null) {
+      this.#undo.push(captureUndoSnapshot(this.templates, this.settings, label));
+    }
+    await this.persist(next.templates ?? this.templates, next.settings ?? this.settings);
+  }
+
   async load(): Promise<void> {
     try {
-      const data = await loadAppData();
-      if (data === null) {
+      const outcome = await loadAppData();
+      if (outcome.status === "empty") {
         this.templates = starterTemplates;
         this.settings = { ...DEFAULT_SETTINGS };
+        this.settingsCorrupt = false;
+        appErrors.clearLoad();
         await saveAppData({
-          version: DATA_VERSION,
           templates: starterTemplates,
           settings: this.settings,
         });
+      } else if (outcome.status === "settings_corrupt") {
+        this.templates = outcome.templates;
+        this.settings = { ...DEFAULT_SETTINGS };
+        this.settingsCorrupt = true;
+        appErrors.setLoad(
+          `Settings file is corrupt (${outcome.message}). Saves are blocked until you reset settings.`,
+        );
       } else {
-        this.templates = data.templates;
-        this.settings = data.settings;
+        this.templates = outcome.data.templates;
+        this.settings = outcome.data.settings;
+        this.settingsCorrupt = false;
+        appErrors.clearLoad();
         // Existing users who dismissed the legacy "minimises to tray" banner
         // shouldn't be surprised by the new onboarding tour. Auto-graduate
         // them so the tour only fires for genuinely fresh installs.
         if (this.settings.close_hint_shown && !this.settings.onboarding_complete) {
           this.settings = { ...this.settings, onboarding_complete: true };
           await saveAppData({
-            version: DATA_VERSION,
             templates: this.templates,
             settings: this.settings,
           });
@@ -97,9 +96,20 @@ class TemplatesStore {
       // Surface the error and leave templates empty — DON'T fall back to
       // starter templates here. Any subsequent persist would overwrite the
       // user's (presumably recoverable) on-disk file with the starter set.
-      this.loadError = String(e);
+      appErrors.setLoad(String(e));
     } finally {
       this.loaded = true;
+    }
+  }
+
+  async resetCorruptSettings(): Promise<void> {
+    try {
+      await resetCorruptSettings();
+      this.settings = { ...DEFAULT_SETTINGS };
+      this.settingsCorrupt = false;
+      appErrors.clearLoad();
+    } catch (e) {
+      appErrors.setAction(`reset settings failed: ${e}`);
     }
   }
 
@@ -107,6 +117,12 @@ class TemplatesStore {
     nextTemplates: Template[],
     nextSettings: Settings = this.settings,
   ): Promise<void> {
+    if (this.settingsCorrupt) {
+      appErrors.setLoad(
+        "Saves blocked: settings file is corrupt. Reset settings to continue.",
+      );
+      return;
+    }
     // Rust's ColumnWidths is u32. Pointer events emit fractional pixel deltas
     // on high-DPI displays, so coerce here as the last line of defence before
     // serde rejects the save with "expected u32".
@@ -118,35 +134,44 @@ class TemplatesStore {
         templates: Math.round(cw.templates),
       },
     };
+    const prevTemplates = this.templates;
+    const prevSettings = this.settings;
     this.templates = nextTemplates;
     this.settings = safeSettings;
-    try {
-      await saveAppData({
-        version: DATA_VERSION,
-        templates: nextTemplates,
-        settings: safeSettings,
-      });
-    } catch (e) {
-      this.loadError = `save failed: ${e}`;
-    }
-  }
 
-  pushUndo(label: string): void {
-    const snapshot: UndoSnapshot = {
-      templates: [...this.templates],
-      placeholderValues: { ...this.settings.placeholder_values },
-      label,
+    const run = async () => {
+      try {
+        await saveAppData({
+          templates: nextTemplates,
+          settings: safeSettings,
+        });
+      } catch (e) {
+        // Roll back only if nothing newer has replaced our optimistic assign.
+        if (this.templates === nextTemplates && this.settings === safeSettings) {
+          this.templates = prevTemplates;
+          this.settings = prevSettings;
+        }
+        appErrors.setAction(`save failed: ${e}`);
+      }
     };
-    this.#undoStack = [...this.#undoStack.slice(-(MAX_UNDO - 1)), snapshot];
+
+    // Keep the chain alive after failures so later persists still serialize.
+    const queued = this.#writeChain.then(run, run);
+    this.#writeChain = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    await queued;
   }
 
   async performUndo(): Promise<void> {
-    if (this.#undoStack.length === 0) return;
-    const snap = this.#undoStack[this.#undoStack.length - 1];
-    this.#undoStack = this.#undoStack.slice(0, -1);
+    const snap = this.#undo.pop();
+    if (!snap) return;
     await this.persist(snap.templates, {
       ...this.settings,
       placeholder_values: snap.placeholderValues,
+      tag_order: snap.tagOrder,
+      sort_mode: snap.sortMode,
     });
     this.#showUndoToast(`Undid ${snap.label}`);
   }
@@ -159,7 +184,6 @@ class TemplatesStore {
 
   async createTemplate(draft: TemplateDraft): Promise<string | null> {
     if (!this.isEditorMode) return null;
-    this.pushUndo("create");
     const now = new Date().toISOString();
     const folder =
       draft.folder !== null && draft.folder.trim().length > 0 ? draft.folder.trim() : null;
@@ -177,16 +201,12 @@ class TemplatesStore {
       folder,
       history: [],
     };
-    await this.persist([newTemplate, ...this.templates]);
+    await this.apply("create", { templates: [newTemplate, ...this.templates] });
     return newTemplate.id;
   }
 
   async handleSave(updated: Template): Promise<void> {
     if (!this.isEditorMode) return;
-    this.pushUndo("edit");
-    // Snapshot the pre-edit opening+body+tags so per-template history can revert.
-    // Only when something actually changed — otherwise a no-op save would
-    // shove an identical entry into the ring.
     const prior = this.templates.find((t) => t.id === updated.id);
     let withHistory = updated;
     if (
@@ -198,14 +218,13 @@ class TemplatesStore {
       withHistory = { ...updated, history: pushHistorySnapshot(prior, updated.updated_at) };
     }
     const next = this.templates.map((t) => (t.id === updated.id ? withHistory : t));
-    await this.persist(next);
+    await this.apply("edit", { templates: next });
   }
 
-  async duplicateTemplateById(id: string): Promise<string | null> {
+  async duplicateId(id: string): Promise<string | null> {
     if (!this.isEditorMode) return null;
     const src = this.templates.find((t) => t.id === id);
     if (!src) return null;
-    this.pushUndo("duplicate");
     const now = new Date().toISOString();
     const copy: Template = {
       ...src,
@@ -217,92 +236,73 @@ class TemplatesStore {
     const idx = this.templates.findIndex((t) => t.id === id);
     const next = [...this.templates];
     next.splice(idx + 1, 0, copy);
-    await this.persist(next);
+    await this.apply("duplicate", { templates: next });
+    selectionStore.selectedTemplateId = copy.id;
     return copy.id;
   }
 
-  async deleteTemplateById(id: string): Promise<void> {
+  async deleteIds(ids: Iterable<string>): Promise<void> {
     if (!this.isEditorMode) return;
-    const idx = this.templates.findIndex((t) => t.id === id);
-    if (idx < 0) return;
-    this.pushUndo("delete");
-    const next = this.templates.filter((t) => t.id !== id);
-    const nextSettings = this.settings.placeholder_values[id] !== undefined
-      ? { ...this.settings, placeholder_values: omitKey(this.settings.placeholder_values, id) }
-      : this.settings;
-    await this.persist(next, nextSettings);
+    const idSet = ids instanceof Set ? ids : new Set(ids);
+    if (idSet.size === 0) return;
+    if (!this.templates.some((t) => idSet.has(t.id))) return;
+    const nextTemplates = this.templates.filter((t) => !idSet.has(t.id));
+    const nextPlaceholders = { ...this.settings.placeholder_values };
+    for (const id of idSet) delete nextPlaceholders[id];
+    await this.apply(idSet.size === 1 ? "delete" : `delete ${idSet.size}`, {
+      templates: nextTemplates,
+      settings: { ...this.settings, placeholder_values: nextPlaceholders },
+    });
+    selectionStore.syncAfterRemoval(idSet, nextTemplates[0]?.id ?? null);
   }
 
   async togglePin(id: string): Promise<void> {
     if (!this.isEditorMode) return;
-    this.pushUndo("pin");
     const next = this.templates.map((t) =>
       t.id === id ? { ...t, pinned: !t.pinned } : t,
     );
-    await this.persist(next);
+    await this.apply("pin", { templates: next });
   }
 
-  // Drag-reorder writes through the templates array directly. Sort mode is
-  // forced to "manual" here — if a user explicitly drags, they expect that
-  // order to stick over the recency sort.
   async handleTemplatesReorder(newOrderIds: string[]): Promise<void> {
     if (!this.isEditorMode) return;
-    this.pushUndo("reorder");
     const byId = new Map(this.templates.map((t) => [t.id, t]));
     const next: Template[] = [];
     for (const id of newOrderIds) {
       const t = byId.get(id);
       if (t) next.push(t);
     }
-    // Defensive: any id that fell out of the new order keeps its trailing
-    // position so we never lose a template.
     for (const t of this.templates) if (!newOrderIds.includes(t.id)) next.push(t);
-    await this.persist(next, { ...this.settings, sort_mode: "manual" });
+    await this.apply("reorder", {
+      templates: next,
+      settings: { ...this.settings, sort_mode: "manual" },
+    });
   }
 
-  // Bumped from MainPanel after a successful copy. Updates last_used_at so
-  // the browse-order sort surfaces recently-used templates near the top, and
-  // increments copy_count for the "most-used" sort.
   async recordCopy(id: string): Promise<void> {
     const now = new Date().toISOString();
     const next = this.templates.map((t) =>
       t.id === id ? { ...t, last_used_at: now, copy_count: t.copy_count + 1 } : t,
     );
-    await this.persist(next);
-  }
-
-  async bulkDelete(ids: Set<string>): Promise<void> {
-    if (!this.isEditorMode || ids.size === 0) return;
-    this.pushUndo(`delete ${ids.size}`);
-    const nextTemplates = this.templates.filter((t) => !ids.has(t.id));
-    const nextPlaceholders = { ...this.settings.placeholder_values };
-    for (const id of ids) delete nextPlaceholders[id];
-    await this.persist(nextTemplates, {
-      ...this.settings,
-      placeholder_values: nextPlaceholders,
-    });
+    await this.apply(null, { templates: next });
   }
 
   async bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
     if (!this.isEditorMode || ids.size === 0) return;
-    // Mirror TagPicker's normalization so bulk-add doesn't create case-variant
-    // duplicates (e.g. "Email" alongside an existing "email").
     const trimmed = normalizeTag(tag);
     if (trimmed.length === 0) return;
-    this.pushUndo(`tag ${ids.size}`);
     const next = this.templates.map((t) => {
       if (!ids.has(t.id)) return t;
       if (t.tags.some((existing) => existing.toLowerCase() === trimmed)) return t;
       return { ...t, tags: [...t.tags, trimmed] };
     });
-    await this.persist(next);
+    await this.apply(`tag ${ids.size}`, { templates: next });
   }
 
   async bulkRemoveTag(ids: Set<string>, tag: string): Promise<void> {
     if (!this.isEditorMode || ids.size === 0) return;
     const trimmed = normalizeTag(tag);
     if (trimmed.length === 0) return;
-    this.pushUndo(`untag ${ids.size}`);
     const next = this.templates.map((t) => {
       if (!ids.has(t.id)) return t;
       return {
@@ -310,67 +310,53 @@ class TemplatesStore {
         tags: t.tags.filter((existing) => existing.toLowerCase() !== trimmed),
       };
     });
-    await this.persist(next);
+    await this.apply(`untag ${ids.size}`, { templates: next });
   }
 
   async moveToFolder(ids: Set<string>, folder: string | null): Promise<void> {
     if (!this.isEditorMode || ids.size === 0) return;
-    this.pushUndo("move folder");
     const normalized = folder !== null && folder.trim().length > 0 ? folder.trim() : null;
     const next = this.templates.map((t) =>
       ids.has(t.id) ? { ...t, folder: normalized, updated_at: new Date().toISOString() } : t,
     );
-    await this.persist(next);
+    await this.apply("move folder", { templates: next });
   }
 
   async bulkExport(ids: Set<string>): Promise<void> {
     if (ids.size === 0) return;
     try {
       const today = new Date().toISOString().slice(0, 10);
-      const path = await saveDialog({
-        defaultPath: `templates-bulk-${today}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!path) return;
       const subset = this.templates.filter((t) => ids.has(t.id));
-      await exportTemplates(path, subset);
+      await exportTemplatesToDialog(subset, `templates-bulk-${today}.json`);
     } catch (e) {
-      this.loadError = `bulk export failed: ${e}`;
+      appErrors.setAction(`bulk export failed: ${e}`);
     }
   }
 
-  // Restore a prior version of a template. Treated as a regular edit — the
-  // current state is pushed onto history first so revert is itself revertible.
   async revertHistory(templateId: string, versionIdx: number): Promise<void> {
     if (!this.isEditorMode) return;
     const cur = this.templates.find((t) => t.id === templateId);
     if (!cur) return;
     const v = cur.history[versionIdx];
     if (!v) return;
-    this.pushUndo("revert");
     const now = new Date().toISOString();
-    const newHistory = pushHistorySnapshot(cur, now);
     const restored: Template = {
       ...cur,
       opening: v.opening,
       body: v.body,
       tags: [...v.tags],
       updated_at: now,
-      history: newHistory,
+      history: pushHistorySnapshot(cur, now),
     };
     const next = this.templates.map((t) => (t.id === templateId ? restored : t));
-    await this.persist(next);
+    await this.apply("revert", { templates: next });
   }
 
   async recordPlaceholderValues(
     templateId: string,
     values: Record<string, string>,
   ): Promise<void> {
-    // The debounced flush from MainPanel can fire AFTER the template is
-    // deleted (handleDelete races the persistTimer). Skip to avoid
-    // resurrecting a placeholder entry for a template that no longer exists.
     if (!this.templates.some((t) => t.id === templateId)) return;
-    // Strip empty entries to keep the persisted map lean.
     const cleaned: Record<string, string> = {};
     for (const [k, v] of Object.entries(values)) {
       if (v.length > 0) cleaned[k] = v;
@@ -381,15 +367,18 @@ class TemplatesStore {
     } else {
       nextMap[templateId] = cleaned;
     }
-    await this.persist(this.templates, { ...this.settings, placeholder_values: nextMap });
+    await this.apply(null, {
+      settings: { ...this.settings, placeholder_values: nextMap },
+    });
   }
 
   async handleTagsReorder(newOrder: string[]): Promise<void> {
-    await this.persist(this.templates, { ...this.settings, tag_order: newOrder });
+    await this.apply(null, {
+      settings: { ...this.settings, tag_order: newOrder },
+    });
   }
 
   handleSortModeToggle(): void {
-    // Cycle manual → recent → most_used → never_used → manual.
     const next =
       this.settings.sort_mode === "manual"
         ? "recent"
@@ -397,155 +386,61 @@ class TemplatesStore {
           ? "most_used"
           : this.settings.sort_mode === "most_used"
             ? "never_used"
-          : "manual";
-    void this.persist(this.templates, { ...this.settings, sort_mode: next });
+            : "manual";
+    void this.apply(null, {
+      settings: { ...this.settings, sort_mode: next },
+    });
   }
 
   async handleRenameTag(from: string, to: string): Promise<void> {
     if (!this.isEditorMode) return;
     if (from === to || to.length === 0) return;
-    this.pushUndo("rename tag");
     const next = this.templates.map((t) =>
       t.tags.includes(from)
         ? { ...t, tags: dedupe(t.tags.map((tag) => (tag === from ? to : tag))) }
         : t,
     );
-    // Update tag_order so the renamed tag keeps its position.
     const newOrder = this.settings.tag_order.map((t) => (t === from ? to : t));
-    await this.persist(next, { ...this.settings, tag_order: dedupe(newOrder) });
+    await this.apply("rename tag", {
+      templates: next,
+      settings: { ...this.settings, tag_order: dedupe(newOrder) },
+    });
+    selectionStore.remapTag(from, to);
   }
 
   async handleDeleteTag(tag: string): Promise<void> {
     if (!this.isEditorMode) return;
-    this.pushUndo("remove tag");
     const next = this.templates.map((t) =>
       t.tags.includes(tag) ? { ...t, tags: t.tags.filter((x) => x !== tag) } : t,
     );
     const newOrder = this.settings.tag_order.filter((t) => t !== tag);
-    await this.persist(next, { ...this.settings, tag_order: newOrder });
+    await this.apply("remove tag", {
+      templates: next,
+      settings: { ...this.settings, tag_order: newOrder },
+    });
+    selectionStore.removeTag(tag);
   }
 
   async handleRestoreBackup(name: string): Promise<void> {
-    this.pushUndo("restore");
     const templates = await readTemplateBackup(name);
-    // Settings stay as-is; persist creates a fresh backup of the live file.
-    await this.persist(templates);
+    await this.apply("restore", { templates });
   }
 
   async exportSingleTemplate(id: string): Promise<void> {
     const tpl = this.templates.find((t) => t.id === id);
     if (!tpl) return;
     try {
-      const path = await saveDialog({
-        defaultPath: `template-${slugify(tpl.name)}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!path) return;
-      await exportTemplates(path, [tpl]);
+      await exportTemplatesToDialog([tpl], `template-${slugify(tpl.name)}.json`);
     } catch (e) {
-      this.loadError = `export failed: ${e}`;
+      appErrors.setAction(`export failed: ${e}`);
     }
   }
-}
-
-function slugify(s: string): string {
-  const slug = s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
-  return slug.length > 0 ? slug : "template";
 }
 
 export const templatesStore = new TemplatesStore();
 
-function pluralise(n: number, word: string): string {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
-/** Wraps the OS save dialog + `exportTemplates`. Returned tagged-union mirrors
- *  the original +page.svelte handler so SettingsModal still gets a uniform
- *  shape for the "Exported N templates." status line. */
-export async function handleExportTemplates(): Promise<PortResult> {
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const path = await saveDialog({
-      defaultPath: `templates-export-${today}.json`,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (!path) return { kind: "cancelled" };
-    const count = await exportTemplates(path, templatesStore.templates);
-    return { kind: "ok", message: `Exported ${pluralise(count, "template")}.` };
-  } catch (e) {
-    return { kind: "err", error: String(e) };
-  }
-}
-
-function mergeImportedTemplates(
-  existing: Template[],
-  incoming: Template[],
-  overwrite: boolean,
-): { templates: Template[]; added: number; overwritten: number; skipped: number } {
-  const index = new Map(existing.map((t, i) => [t.id, i]));
-  const now = new Date().toISOString();
-  const next = [...existing];
-  const additions: Template[] = [];
-  let overwritten = 0;
-  let skipped = 0;
-
-  for (const tpl of incoming) {
-    const i = index.get(tpl.id);
-    if (i === undefined) {
-      additions.push(tpl);
-    } else if (!overwrite) {
-      skipped += 1;
-    } else {
-      const local = next[i];
-      next[i] = {
-        ...local,
-        name: tpl.name,
-        tags: tpl.tags,
-        folder: tpl.folder,
-        opening: tpl.opening,
-        body: tpl.body,
-        updated_at: now,
-        history: pushHistorySnapshot(local, now),
-      };
-      overwritten += 1;
-    }
-  }
-
-  // Prepend new additions in file order so the imported chunk lands at the
-  // top and keeps its internal ordering. Overwrites stayed in place above.
-  return {
-    templates: [...additions, ...next],
-    added: additions.length,
-    overwritten,
-    skipped,
-  };
-}
-
-export async function handleImportTemplates(overwrite: boolean): Promise<PortResult> {
-  if (!templatesStore.isEditorMode) return { kind: "err", error: "import disabled in User mode" };
-  try {
-    const path = await openDialog({
-      multiple: false,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    if (path === null || Array.isArray(path)) return { kind: "cancelled" };
-    templatesStore.pushUndo("import");
-    const incoming = await readTemplatesExport(path);
-    const result = mergeImportedTemplates(templatesStore.templates, incoming, overwrite);
-    await templatesStore.persist(result.templates);
-    const notes: string[] = [];
-    if (result.overwritten > 0) notes.push(`${pluralise(result.overwritten, "duplicate")} overwritten`);
-    if (result.skipped > 0) notes.push(`${pluralise(result.skipped, "duplicate")} skipped`);
-    const suffix = notes.length > 0 ? ` (${notes.join(", ")})` : "";
-    return {
-      kind: "ok",
-      message: `Imported ${pluralise(result.added, "template")}${suffix}.`,
-    };
-  } catch (e) {
-    return { kind: "err", error: String(e) };
-  }
-}
+// Re-export ports so existing DialogsHost imports keep working.
+export {
+  handleExportTemplates,
+  handleImportTemplates,
+} from "$lib/stores/templatePorts";

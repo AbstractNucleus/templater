@@ -1,15 +1,9 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import {
-  closePreviewWindow,
-  closeTranslatorWindow,
-  isPreviewOpen,
-  isTranslatorOpen,
-  openPreviewWindow,
-  openTranslatorWindow,
-} from "$lib/api";
+import { isSatellite, setSatellite, type SatelliteKind } from "$lib/api/windows";
 import type { Template, Theme } from "$lib/types";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
+import { appErrors } from "$lib/stores/appErrors.svelte";
 
 export type PreviewPayload = {
   template: Template | null;
@@ -22,8 +16,6 @@ export type PreviewPayload = {
 };
 
 export type TranslatorPayload = {
-  openrouterApiKey: string;
-  translationModel: string;
   theme: Theme;
 };
 
@@ -49,50 +41,47 @@ class Popouts {
   }
 
   buildTranslatorPayload(): TranslatorPayload {
-    const s = templatesStore.settings;
     return {
-      openrouterApiKey: s.openrouter_api_key,
-      translationModel: s.translation_model,
-      theme: s.theme,
+      theme: templatesStore.settings.theme,
     };
   }
 
-  async togglePreview(): Promise<void> {
-    if (this.previewOpen) {
+  async #toggle(kind: SatelliteKind): Promise<void> {
+    const open = kind === "preview" ? this.previewOpen : this.translatorOpen;
+    if (open) {
       try {
-        await closePreviewWindow();
-      } catch {
-        /* ignore */
+        await setSatellite(kind, false);
+        // Backend closed event also clears; set after success so failed close
+        // doesn't lie about the window state.
+        if (kind === "preview") this.previewOpen = false;
+        else this.translatorOpen = false;
+      } catch (e) {
+        appErrors.setAction(`close ${kind} failed: ${e}`);
+        await this.syncOpenFlags();
       }
-      this.previewOpen = false;
       return;
     }
     try {
-      await openPreviewWindow();
-      this.previewOpen = true;
-      void emit("preview-payload", this.buildPreviewPayload());
+      await setSatellite(kind, true);
+      // Only flip local open after backend succeeds (backend is authority).
+      if (kind === "preview") {
+        this.previewOpen = true;
+        void emit("preview-payload", this.buildPreviewPayload());
+      } else {
+        this.translatorOpen = true;
+        void emit("translator-payload", this.buildTranslatorPayload());
+      }
     } catch (e) {
-      templatesStore.loadError = `open preview failed: ${e}`;
+      appErrors.setAction(`open ${kind} failed: ${e}`);
     }
   }
 
+  async togglePreview(): Promise<void> {
+    await this.#toggle("preview");
+  }
+
   async toggleTranslator(): Promise<void> {
-    if (this.translatorOpen) {
-      try {
-        await closeTranslatorWindow();
-      } catch {
-        /* ignore */
-      }
-      this.translatorOpen = false;
-      return;
-    }
-    try {
-      await openTranslatorWindow();
-      this.translatorOpen = true;
-      void emit("translator-payload", this.buildTranslatorPayload());
-    } catch (e) {
-      templatesStore.loadError = `open translator failed: ${e}`;
-    }
+    await this.#toggle("translator");
   }
 
   pushPreview(payload: PreviewPayload): void {
@@ -107,12 +96,12 @@ class Popouts {
 
   async syncOpenFlags(): Promise<void> {
     try {
-      this.previewOpen = await isPreviewOpen();
+      this.previewOpen = await isSatellite("preview");
     } catch {
       this.previewOpen = false;
     }
     try {
-      this.translatorOpen = await isTranslatorOpen();
+      this.translatorOpen = await isSatellite("translator");
     } catch {
       this.translatorOpen = false;
     }
@@ -120,8 +109,14 @@ class Popouts {
 
   closePreviewForMinimalOff(): void {
     if (!this.previewOpen) return;
-    void closePreviewWindow().catch(() => {});
-    this.previewOpen = false;
+    void setSatellite("preview", false)
+      .then(() => {
+        this.previewOpen = false;
+      })
+      .catch((e) => {
+        appErrors.setAction(`close preview failed: ${e}`);
+        void this.syncOpenFlags();
+      });
   }
 
   /** Event bridge: payload requests, copy/placeholder mirror, closed flags. */
@@ -142,8 +137,14 @@ class Popouts {
       this.previewOpen = false;
     });
     const unlistenRequestClose = listen("preview-request-close", () => {
-      void closePreviewWindow().catch(() => {});
-      this.previewOpen = false;
+      void setSatellite("preview", false)
+        .then(() => {
+          this.previewOpen = false;
+        })
+        .catch((e) => {
+          appErrors.setAction(`close preview failed: ${e}`);
+          void this.syncOpenFlags();
+        });
     });
     const unlistenTranslatorRequest = listen("translator-request-payload", () => {
       void emit("translator-payload", this.buildTranslatorPayload());
@@ -183,10 +184,7 @@ class Popouts {
         this.pushPreview(this.buildPreviewPayload());
       });
       $effect(() => {
-        const s = templatesStore.settings;
-        void s.openrouter_api_key;
-        void s.translation_model;
-        void s.theme;
+        void templatesStore.settings.theme;
         this.pushTranslator(this.buildTranslatorPayload());
       });
       $effect(() => {

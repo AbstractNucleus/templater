@@ -1,17 +1,19 @@
 <script lang="ts">
   import type { PortResult, Settings } from "$lib/types";
-  import { setHotkey, type BackupEntry, type UpdateInfo } from "$lib/api";
+  import type { BackupEntry, UpdateInfo } from "$lib/api";
   import TagsSection from "./settings/TagsSection.svelte";
   import BackupsSection from "./settings/BackupsSection.svelte";
   import WindowSection from "./settings/WindowSection.svelte";
   import HotkeySection from "./settings/HotkeySection.svelte";
   import UpdatesSection from "./settings/UpdatesSection.svelte";
   import GeneralSection from "./settings/GeneralSection.svelte";
+  import TranslationSection from "./settings/TranslationSection.svelte";
   import SnippetsSection from "./settings/SnippetsSection.svelte";
   import ImportExportSection from "./settings/ImportExportSection.svelte";
 
   type TabId =
     | "general"
+    | "translation"
     | "shortcuts"
     | "snippets"
     | "templates"
@@ -34,7 +36,6 @@
   }: {
     settings: Settings;
     currentVersion: string;
-    /** Tag name → number of templates using it, sorted by display order. */
     tagCounts: [string, number][];
     onClose: () => void;
     onUpdate: (next: Settings) => void;
@@ -43,56 +44,35 @@
     onCheckUpdate: () => Promise<UpdateInfo | null>;
     onListBackups: () => Promise<BackupEntry[]>;
     onRestoreBackup: (name: string) => Promise<void>;
-    /** Rename `from` to `to` across every template that uses it. */
     onRenameTag: (from: string, to: string) => Promise<void>;
-    /** Strip `tag` from every template that has it. */
     onDeleteTag: (tag: string) => Promise<void>;
     onOpenCheatSheet: () => void;
   } = $props();
 
   let activeTab = $state<TabId>("general");
 
-  // Sidebar groups: visual divider between groups, no labels.
   const TAB_GROUPS: { id: TabId; label: string }[][] = [
     [
       { id: "general", label: "General" },
+      { id: "translation", label: "Translation" },
       { id: "shortcuts", label: "Shortcuts" },
     ],
-    [
-      { id: "snippets", label: "Snippets" },
-    ],
-    [
-      { id: "templates", label: "Templates" },
-    ],
-    [
-      { id: "about", label: "About" },
-    ],
+    [{ id: "snippets", label: "Snippets" }],
+    [{ id: "templates", label: "Templates" }],
+    [{ id: "about", label: "About" }],
   ];
 
   const TAB_TITLES: Record<TabId, string> = {
     general: "General",
+    translation: "Translation",
     shortcuts: "Shortcuts",
     snippets: "Signature & snippets",
     templates: "Templates",
     about: "About",
   };
 
-  // Hotkey capture state lives at the parent level: the window-level keydown
-  // handler below drains Escape across the modal (capture → rename → delete
-  // confirm → close), and it has to mutate this state directly.
-  let capturing = $state(false);
-  let captureError = $state<string | null>(null);
-  // Which binding is being captured. "preview" allows bare keys (no modifier
-  // required) since the pop-out toggle is an in-app shortcut, not a global OS
-  // one. "main" keeps the modifier-required rule for the global hotkey.
-  let captureCapturing = $state<"none" | "main" | "preview">("none");
-
-  // Tag management state owned here so the Escape handler can drain it before
-  // closing the modal. The TagsSection child binds to these via $bindable.
+  let hotkeyCapturing = $state(false);
   let renamingTag = $state<string | null>(null);
-  // Two-step delete: a tag delete strips it from every template that has it,
-  // which can be 50+ rows. Undo covers it but isn't discoverable enough for a
-  // silent destructive action — require an explicit second click.
   let confirmingDeleteTag = $state<string | null>(null);
 
   function handleBackdrop(e: MouseEvent): void {
@@ -101,7 +81,6 @@
 
   let modalEl = $state<HTMLDivElement | undefined>();
 
-  // Restore focus to the control that opened Settings once it closes.
   $effect(() => {
     const prev = document.activeElement;
     modalEl?.querySelector<HTMLElement>(".sidebar-tab.active")?.focus();
@@ -110,10 +89,6 @@
     };
   });
 
-  // Minimal focus trap. Escape is handled by the window-level
-  // handleCaptureKeydown, which drains nested states (hotkey capture, tag
-  // rename/delete) before closing — so the backdrop must NOT close on Escape
-  // itself or it would slam the modal shut mid-capture.
   function trapTab(e: KeyboardEvent): void {
     if (e.key !== "Tab" || !modalEl) return;
     const nodes = modalEl.querySelectorAll<HTMLElement>(
@@ -131,79 +106,21 @@
     }
   }
 
-  const MODIFIER_PREFIXES = ["Control", "Shift", "Alt", "Meta", "OS"];
-
-  function isModifierKey(code: string): boolean {
-    return MODIFIER_PREFIXES.some((p) => code.startsWith(p));
-  }
-
-  function startCapture(target: "main" | "preview" = "main"): void {
-    captureCapturing = target;
-    capturing = true;
-    captureError = null;
-  }
-
-  async function handleCaptureKeydown(e: KeyboardEvent): Promise<void> {
-    // Escape lives at the window level so it works without the user clicking
-    // into the modal first. Drains nested states (capture → rename → delete
-    // confirm) before closing the modal itself.
-    if (e.key === "Escape") {
-      if (captureCapturing !== "none") {
-        captureCapturing = "none";
-        capturing = false;
-        e.preventDefault();
-        return;
-      }
-      // The rename input has its own Escape handler — let it run.
-      if (renamingTag) return;
-      if (confirmingDeleteTag) {
-        confirmingDeleteTag = null;
-        e.preventDefault();
-        return;
-      }
+  function handleModalKeydown(e: KeyboardEvent): void {
+    if (e.key !== "Escape") return;
+    if (hotkeyCapturing) return;
+    if (renamingTag) return;
+    if (confirmingDeleteTag) {
+      confirmingDeleteTag = null;
       e.preventDefault();
-      onClose();
       return;
     }
-    if (captureCapturing === "none") return;
     e.preventDefault();
-    e.stopPropagation();
-    if (isModifierKey(e.code)) return;
-
-    const parts: string[] = [];
-    if (e.ctrlKey) parts.push("Ctrl");
-    if (e.shiftKey) parts.push("Shift");
-    if (e.altKey) parts.push("Alt");
-    if (e.metaKey) parts.push("Cmd");
-    const allowBare = captureCapturing === "preview";
-    if (parts.length === 0 && !allowBare) {
-      captureError = "Hotkey must include at least one modifier (Ctrl, Shift, Alt, Cmd).";
-      captureCapturing = "none";
-      capturing = false;
-      return;
-    }
-    parts.push(e.code);
-    const accelerator = parts.join("+");
-
-    const target = captureCapturing;
-    const settingsField = target === "preview" ? "preview_hotkey" : "global_hotkey";
-    try {
-      if (target === "main") {
-        // Global hotkey must be registered with the OS before we persist it.
-        await setHotkey(accelerator);
-      }
-      onUpdate({ ...settings, [settingsField]: accelerator });
-      captureError = null;
-    } catch (err) {
-      captureError = String(err);
-    } finally {
-      captureCapturing = "none";
-      capturing = false;
-    }
+    onClose();
   }
 </script>
 
-<svelte:window onkeydown={handleCaptureKeydown} />
+<svelte:window onkeydown={handleModalKeydown} />
 
 <div
   class="backdrop"
@@ -251,14 +168,12 @@
           <WindowSection {settings} {onUpdate} />
         {/if}
 
+        {#if activeTab === "translation"}
+          <TranslationSection {settings} {onUpdate} />
+        {/if}
+
         {#if activeTab === "shortcuts"}
-          <HotkeySection
-            {settings}
-            {captureCapturing}
-            bind:captureError
-            {onUpdate}
-            onStartCapture={(target) => startCapture(target)}
-          />
+          <HotkeySection {settings} {onUpdate} bind:capturing={hotkeyCapturing} />
 
           <section>
             <div class="section-label">Keyboard shortcuts</div>

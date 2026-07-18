@@ -53,16 +53,12 @@ class EditorSession {
 
   async duplicate(template: Template | null): Promise<void> {
     if (!template) return;
-    const id = await templatesStore.duplicateTemplateById(template.id);
-    if (id) selectionStore.selectedTemplateId = id;
+    await templatesStore.duplicateId(template.id);
   }
 
   async delete(template: Template | null): Promise<void> {
     if (!template) return;
-    const id = template.id;
-    await templatesStore.deleteTemplateById(id);
-    selectionStore.pruneBulkSelection(new Set([id]));
-    selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
+    await templatesStore.deleteIds([template.id]);
   }
 }
 

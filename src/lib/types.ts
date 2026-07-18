@@ -33,7 +33,7 @@ export interface Template {
 }
 
 /** The editable subset of a template. Shared between the inline edit form
- *  (`MainPanel`) and the new-template form. The hosting component owns
+ *  (`AppShell`) and the new-template form. The hosting component owns
  *  id/timestamps/history/etc. */
 export interface TemplateDraft {
   name: string;
@@ -61,6 +61,12 @@ export type Mode = "editor" | "user";
 
 export type SortMode = "manual" | "recent" | "most_used" | "never_used";
 
+/**
+ * Persisted settings blob (mirrors Rust `Settings`). UI is split into tab
+ * sections; further type-splitting is deferred — one serde shape stays the
+ * disk/IPC contract. Disk defaults live in Rust `Settings::default()`; the FE
+ * `DEFAULT_SETTINGS` below is a UI-seed mirror only (empty / corrupt paths).
+ */
 export interface Settings {
   always_on_top_default: boolean;
   global_hotkey: string;
@@ -90,7 +96,8 @@ export interface Settings {
    *  are allowed — the pop-out only matters when Templater has focus, so a
    *  global OS shortcut would be overkill. */
   preview_hotkey: string;
-  /** OpenRouter API key for the translation pop-out. Empty string = not configured. */
+  /** OpenRouter API key for the translation pop-out. Empty string = not configured.
+   *  Stored in settings.json (OS secret store deferred — key never crosses translate IPC). */
   openrouter_api_key: string;
   /** OpenRouter model identifier for translation, e.g. "openrouter/free". */
   translation_model: string;
@@ -102,10 +109,17 @@ export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
 };
 
 export interface AppData {
-  version: number;
+  /** Echoed from Rust on load. Omitted/ignored on save — Rust stamps DATA_VERSION. */
+  version?: number;
   templates: Template[];
   settings: Settings;
 }
+
+/** Mirrors Rust `LoadOutcome` from `load_app_data`. */
+export type LoadAppDataResult =
+  | { status: "empty" }
+  | { status: "ready"; data: AppData }
+  | { status: "settings_corrupt"; templates: Template[]; message: string };
 
 /** Tagged result for export/import dialog flows (Settings → Import/Export). */
 export type PortResult =
@@ -113,6 +127,7 @@ export type PortResult =
   | { kind: "cancelled" }
   | { kind: "err"; error: string };
 
+/** UI / seed defaults only — Rust `Settings::default` owns the on-disk schema. */
 export const DEFAULT_SETTINGS: Settings = {
   always_on_top_default: false,
   global_hotkey: "Ctrl+Shift+Backslash",

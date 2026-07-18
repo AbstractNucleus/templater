@@ -5,11 +5,17 @@
 // import. Inside the real Tauri webview `__TAURI_INTERNALS__` already exists
 // and the layout guard skips installation entirely.
 //
-// `?fresh=1` simulates a first run: load_app_data returns null, so the app
+// `?fresh=1` simulates a first run: load_app_data returns { status: "empty" }, so the app
 // seeds starter templates and shows the onboarding tour.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { starterTemplates } from "./starterTemplates";
-import { DEFAULT_SETTINGS, type AppData, type Template } from "./types";
+import {
+  DEFAULT_SETTINGS,
+  type AppData,
+  type LoadAppDataResult,
+  type Settings,
+  type Template,
+} from "./types";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -66,6 +72,18 @@ function seedData(): AppData {
   };
 }
 
+type DialogOpenOpts = { directory?: boolean };
+type SaveAppPayload = { data: { templates: Template[]; settings: Settings } };
+type ExportPayload = { path?: string; templates?: Template[] };
+type BackupPayload = { name?: string };
+type TranslatePayload = { text?: string };
+type ClipboardPayload = { text?: string };
+type DialogPayload = { options?: DialogOpenOpts };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
 export function installDevMocks(): void {
   const fresh = new URLSearchParams(window.location.search).has("fresh");
   let data: AppData | null = fresh ? null : seedData();
@@ -73,13 +91,29 @@ export function installDevMocks(): void {
   mockWindows("main");
   mockIPC(
     async (cmd, payload) => {
-      const args = (payload ?? {}) as Record<string, unknown>;
       switch (cmd) {
         // ---- store -----------------------------------------------------
-        case "load_app_data":
-          return data;
-        case "save_app_data":
-          data = args.data as AppData;
+        case "load_app_data": {
+          const result: LoadAppDataResult = data
+            ? { status: "ready", data }
+            : { status: "empty" };
+          return result;
+        }
+        case "save_app_data": {
+          const args = (isRecord(payload) ? payload : {}) as SaveAppPayload;
+          if (args.data) {
+            data = {
+              version: data?.version ?? 1,
+              templates: args.data.templates,
+              settings: args.data.settings,
+            };
+          }
+          return null;
+        }
+        case "reset_corrupt_settings":
+          if (data) {
+            data = { ...data, settings: { ...DEFAULT_SETTINGS } };
+          }
           return null;
         case "list_template_backups":
           return [1, 2, 3].map((n) => ({
@@ -87,44 +121,51 @@ export function installDevMocks(): void {
             timestamp_secs: Math.floor(Date.now() / 1000) - n * 86_400,
             size: 48_120 - n * 900,
           }));
-        case "read_template_backup":
+        case "read_template_backup": {
+          const args = (isRecord(payload) ? payload : {}) as BackupPayload;
+          void args.name;
           return data?.templates ?? [];
+        }
         case "read_templates_export":
           return data?.templates ?? [];
-        case "export_templates":
-          return (args.templates as unknown[] | undefined)?.length ?? data?.templates.length ?? 0;
+        case "export_templates": {
+          const args = (isRecord(payload) ? payload : {}) as ExportPayload;
+          return args.templates?.length ?? data?.templates.length ?? 0;
+        }
 
         // ---- window/shell commands (no-ops in a browser) ---------------
         case "set_hotkey":
         case "open_data_dir":
         case "open_path":
         case "reset_window_position":
-        case "open_translator_window":
-        case "close_translator_window":
+        case "set_satellite":
           return null;
 
-        case "is_translator_open":
+        case "is_satellite":
           return false;
 
         case "translate_text": {
-          const text = args.text as string;
+          const args = (isRecord(payload) ? payload : {}) as TranslatePayload;
+          const text = args.text ?? "";
           await sleep(600);
           return `[DEV MOCK] Translated to English:\n\n${text}`;
         }
 
         // ---- plugins ---------------------------------------------------
-        case "plugin:clipboard-manager|write_text":
+        case "plugin:clipboard-manager|write_text": {
+          const args = (isRecord(payload) ? payload : {}) as ClipboardPayload;
           try {
-            await navigator.clipboard.writeText(args.text as string);
+            if (args.text) await navigator.clipboard.writeText(args.text);
           } catch {
             /* browser clipboard needs focus; treat as success anyway */
           }
           return null;
+        }
         case "plugin:clipboard-manager|read_text":
           return "Hey Noel — quick one: a player is asking why their withdrawable balance is lower than their total balance after claiming the casino bonus. Can you send the usual explanation?";
         case "plugin:dialog|open": {
-          const opts = (args.options ?? {}) as { directory?: boolean };
-          return opts.directory ? "C:\\dev-mock\\notes-extra" : null;
+          const args = (isRecord(payload) ? payload : {}) as DialogPayload;
+          return args.options?.directory ? "C:\\dev-mock\\notes-extra" : null;
         }
         case "plugin:dialog|save":
           return null; // behave like a cancelled save dialog

@@ -1,47 +1,27 @@
 <script lang="ts">
   import type { Template } from "$lib/types";
-  import ConfirmDialog from "./ConfirmDialog.svelte";
   import HistoryPanel from "./HistoryPanel.svelte";
   import TemplatePreview from "./TemplatePreview.svelte";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
+  import { editorSession } from "$lib/stores/editorSession.svelte";
+  import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
 
   let {
     template,
     includeOpening,
     includeSignature,
-    globalSignature,
-    snippets,
-    canEdit,
-    copyTrigger,
-    savedPlaceholderValues,
     onToggleOpening,
     onToggleSignature,
-    onEnterEdit,
-    onSave,
-    onDuplicate,
-    onDelete,
-    onCopySuccess,
-    onPlaceholderValuesChange,
-    onRevertHistory,
   }: {
     template: Template;
     includeOpening: boolean;
     includeSignature: boolean;
-    globalSignature: string;
-    snippets: Record<string, string>;
-    canEdit: boolean;
-    copyTrigger: number;
-    /** Persisted per-template fill-ins. Outer key: template id. */
-    savedPlaceholderValues: Record<string, Record<string, string>>;
     onToggleOpening: (v: boolean) => void;
     onToggleSignature: (v: boolean) => void;
-    onEnterEdit: () => void;
-    onSave: (t: Template) => void;
-    onDuplicate: () => void;
-    onDelete: () => void;
-    onCopySuccess: (templateId: string) => void;
-    onPlaceholderValuesChange: (templateId: string, values: Record<string, string>) => void;
-    onRevertHistory: (templateId: string, versionIdx: number) => void;
   } = $props();
+
+  const canEdit = $derived(templatesStore.isEditorMode);
+  const settings = $derived(templatesStore.settings);
 
   let historyOpen = $state(false);
 
@@ -61,7 +41,7 @@
     }
     const trimmed = renameDraft.trim();
     if (trimmed.length > 0 && trimmed !== template.name) {
-      onSave({
+      void editorSession.save({
         ...template,
         name: trimmed,
         updated_at: new Date().toISOString(),
@@ -105,22 +85,6 @@
       day: "numeric",
       ...(sameYear ? {} : { year: "numeric" }),
     });
-  }
-
-  let confirmingDelete = $state(false);
-
-  function handleDelete(): void {
-    if (!template) return;
-    confirmingDelete = true;
-  }
-
-  function confirmDelete(): void {
-    confirmingDelete = false;
-    onDelete();
-  }
-
-  function cancelDelete(): void {
-    confirmingDelete = false;
   }
 </script>
 
@@ -169,19 +133,19 @@
   </div>
   {#if canEdit}
     <div class="actions">
-      <button class="icon-action" onclick={onEnterEdit} title="Edit (or click the body to inline-edit)" aria-label="Edit template">
+      <button class="icon-action" onclick={() => editorSession.enterEdit()} title="Edit (or click the body to inline-edit)" aria-label="Edit template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 20h9" />
           <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
         </svg>
       </button>
-      <button class="icon-action" onclick={onDuplicate} title="Duplicate" aria-label="Duplicate template">
+      <button class="icon-action" onclick={() => void editorSession.duplicate(template)} title="Duplicate" aria-label="Duplicate template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="9" y="9" width="13" height="13" rx="2" />
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </svg>
       </button>
-      <button class="icon-action danger" onclick={handleDelete} title="Delete" aria-label="Delete template">
+      <button class="icon-action danger" onclick={() => uiDialogs.requestDelete(template)} title="Delete" aria-label="Delete template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M3 6h18" />
           <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -196,19 +160,23 @@
   {template}
   {includeOpening}
   {includeSignature}
-  {globalSignature}
-  {snippets}
-  {savedPlaceholderValues}
+  globalSignature={settings.global_signature}
+  snippets={settings.snippets}
+  savedPlaceholderValues={settings.placeholder_values}
   {onToggleOpening}
   {onToggleSignature}
-  {onCopySuccess}
-  {onPlaceholderValuesChange}
-  {copyTrigger}
+  onCopySuccess={(id) => void templatesStore.recordCopy(id)}
+  onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
+  registerForShortcuts
   showTags={false}
 >
   {#snippet afterFills()}
     {#if canEdit}
-      <HistoryPanel {template} open={historyOpen} {onRevertHistory} />
+      <HistoryPanel
+        {template}
+        open={historyOpen}
+        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
+      />
     {/if}
   {/snippet}
   {#snippet footerLeading()}
@@ -223,18 +191,6 @@
     {/if}
   {/snippet}
 </TemplatePreview>
-
-{#if confirmingDelete && template}
-  <ConfirmDialog
-    title="Delete template?"
-    name={template.name}
-    message="Ctrl+Z will restore it."
-    confirmLabel="Delete"
-    danger
-    onConfirm={confirmDelete}
-    onCancel={cancelDelete}
-  />
-{/if}
 
 <style>
   .header-row {
