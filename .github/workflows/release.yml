@@ -54,16 +54,19 @@ jobs:
       # macOS: build .app + updater tarball first. Tauri bundles DMG before the
       # updater artifact, and bundle_dmg.sh flakes on GHA (hdiutil) — a DMG
       # failure would otherwise abort the job with no updater payload at all.
-      - name: Build app
+      - name: Build app (Windows)
+        if: startsWith(matrix.os, 'windows')
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          if [[ "${{ matrix.os }}" == macos-* ]]; then
-            npm run tauri -- build --bundles app
-          else
-            npm run tauri -- build
-          fi
+        run: npm run tauri -- build
+
+      - name: Build app (macOS)
+        if: startsWith(matrix.os, 'macos')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles app
 
       - name: Bundle DMG (best-effort)
         if: startsWith(matrix.os, 'macos')
