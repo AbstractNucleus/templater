@@ -87,20 +87,18 @@ export function installDevMocks(): void {
             timestamp_secs: Math.floor(Date.now() / 1000) - n * 86_400,
             size: 48_120 - n * 900,
           }));
-        case "restore_template_backup":
-          return data ?? seedData();
+        case "read_template_backup":
+          return data?.templates ?? [];
         case "read_templates_export":
           return data?.templates ?? [];
         case "export_templates":
-        case "export_templates_subset":
-          return ((args.ids as string[] | undefined)?.length ?? data?.templates.length) ?? 0;
+          return (args.templates as unknown[] | undefined)?.length ?? data?.templates.length ?? 0;
 
         // ---- window/shell commands (no-ops in a browser) ---------------
         case "set_hotkey":
         case "open_data_dir":
         case "open_path":
         case "reset_window_position":
-        case "export_template":
         case "open_translator_window":
         case "close_translator_window":
           return null;

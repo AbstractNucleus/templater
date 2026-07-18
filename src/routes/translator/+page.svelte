@@ -2,12 +2,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { emit } from "@tauri-apps/api/event";
   import { translateText } from "$lib/api";
-
-  interface TranslatorPayload {
-    openrouterApiKey: string;
-    translationModel: string;
-    theme: "dark" | "light";
-  }
+  import type { TranslatorPayload } from "$lib/stores/popouts.svelte";
 
   let payload = $state<TranslatorPayload | null>(null);
 

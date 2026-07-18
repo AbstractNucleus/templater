@@ -2,11 +2,9 @@ import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialo
 import {
   loadAppData,
   saveAppData,
-  exportTemplate,
   exportTemplates,
-  exportTemplatesSubset,
   readTemplatesExport,
-  restoreTemplateBackup,
+  readTemplateBackup,
 } from "$lib/api";
 import { starterTemplates } from "$lib/starterTemplates";
 import { normalizeTag } from "$lib/tags";
@@ -334,7 +332,8 @@ class TemplatesStore {
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!path) return;
-      await exportTemplatesSubset([...ids], path);
+      const subset = this.templates.filter((t) => ids.has(t.id));
+      await exportTemplates(path, subset);
     } catch (e) {
       this.loadError = `bulk export failed: ${e}`;
     }
@@ -428,10 +427,9 @@ class TemplatesStore {
 
   async handleRestoreBackup(name: string): Promise<void> {
     this.pushUndo("restore");
-    const data = await restoreTemplateBackup(name);
-    // Rust already wrote the restored data to disk; sync local state.
-    this.templates = data.templates;
-    this.settings = data.settings;
+    const templates = await readTemplateBackup(name);
+    // Settings stay as-is; persist creates a fresh backup of the live file.
+    await this.persist(templates);
   }
 
   async exportSingleTemplate(id: string): Promise<void> {
@@ -443,7 +441,7 @@ class TemplatesStore {
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!path) return;
-      await exportTemplate(id, path);
+      await exportTemplates(path, [tpl]);
     } catch (e) {
       this.loadError = `export failed: ${e}`;
     }
@@ -476,7 +474,7 @@ export async function handleExportTemplates(): Promise<PortResult> {
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
     if (!path) return { kind: "cancelled" };
-    const count = await exportTemplates(path);
+    const count = await exportTemplates(path, templatesStore.templates);
     return { kind: "ok", message: `Exported ${pluralise(count, "template")}.` };
   } catch (e) {
     return { kind: "err", error: String(e) };

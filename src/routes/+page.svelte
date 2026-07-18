@@ -3,15 +3,11 @@
   import TemplatesSidebar, { type SelectModifier } from "$lib/components/TemplatesSidebar.svelte";
   import MainPanel from "$lib/components/MainPanel.svelte";
   import TitleBar from "$lib/components/TitleBar.svelte";
-  import SettingsModal from "$lib/components/SettingsModal.svelte";
   import ResizeHandles from "$lib/components/ResizeHandles.svelte";
-  import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
-  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
-  import CheatSheet from "$lib/components/CheatSheet.svelte";
+  import DialogsHost from "$lib/components/DialogsHost.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import { readText } from "@tauri-apps/plugin-clipboard-manager";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
   import { searchTemplates } from "$lib/search";
   import {
@@ -20,26 +16,16 @@
     groupPinnedHits,
     sortTemplates,
   } from "$lib/browse";
-  import { orderedTagCounts } from "$lib/tags";
   import { buildContextMenu } from "$lib/contextMenu";
+  import { bootstrapApp } from "$lib/appBootstrap";
   import {
-    getAppVersion,
-    openDataDir,
-    checkForUpdate,
-    listTemplateBackups,
-  } from "$lib/api";
-  import {
-    DEFAULT_COLUMN_WIDTHS,
-    type Settings,
-    type Template,
-    type TemplateDraft,
-  } from "$lib/types";
-  import {
-    templatesStore,
-    handleExportTemplates,
-    handleImportTemplates,
-  } from "$lib/stores/templatesStore.svelte";
+    applyMinimalGeometry,
+    createMinimalGeometryState,
+  } from "$lib/minimalGeometry";
+  import { DEFAULT_COLUMN_WIDTHS } from "$lib/types";
+  import { templatesStore } from "$lib/stores/templatesStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
+  import { editorSession } from "$lib/stores/editorSession.svelte";
   import { popouts } from "$lib/stores/popouts.svelte";
   import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
   import { createGlobalKeydownHandler } from "$lib/keyboard";
@@ -56,9 +42,13 @@
   let tagsWidth = $state(DEFAULT_COLUMN_WIDTHS.tags);
   let templatesWidth = $state(DEFAULT_COLUMN_WIDTHS.templates);
   let searchInput: HTMLInputElement | undefined = $state();
+  let appVersion = $state("0.0.0");
+  let searchQuery = $state("");
+  let includeOpening = $state(true);
+  let includeSignature = $state(true);
+  let copyTrigger = $state(0);
 
-  // New-template flow state. When non-null, the template form opens for creation.
-  let creatingDraft = $state<TemplateDraft | null>(null);
+  const minimalGeo = createMinimalGeometryState();
 
   function clearSearch(): void {
     searchQuery = "";
@@ -70,7 +60,7 @@
     if (result.action === "default") return;
     e.preventDefault();
     if (result.action === "menu") {
-      contextMenu = { x: e.clientX, y: e.clientY, items: result.items };
+      uiDialogs.contextMenu = { x: e.clientX, y: e.clientY, items: result.items };
     }
   }
 
@@ -79,15 +69,6 @@
     const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(next * 10) / 10));
     if (clamped === templatesStore.settings.zoom) return;
     void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, zoom: clamped });
-  }
-
-  function isInputFocused(): boolean {
-    const ae = document.activeElement;
-    if (!ae || ae === document.body) return false;
-    const tag = ae.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return true;
-    if ((ae as HTMLElement).isContentEditable) return true;
-    return false;
   }
 
   function moveSelection(delta: number): void {
@@ -107,14 +88,8 @@
       const widthOf = (t: typeof target): number =>
         t === "tags" ? tagsWidth : templatesWidth;
       const startWidth = widthOf(target);
-      const min =
-        target === "tags"
-          ? TAGS_MIN
-          : TEMPLATES_MIN;
-      const max =
-        target === "tags"
-          ? TAGS_MAX
-          : TEMPLATES_MAX;
+      const min = target === "tags" ? TAGS_MIN : TEMPLATES_MIN;
+      const max = target === "tags" ? TAGS_MAX : TEMPLATES_MAX;
       handle.setPointerCapture(e.pointerId);
       handle.classList.add("dragging");
 
@@ -145,18 +120,6 @@
     };
   }
 
-  let appVersion = $state("0.0.0");
-
-  let searchQuery = $state("");
-  let includeOpening = $state(true);
-  let includeSignature = $state(true);
-  let editing = $state(false);
-
-  let copyTrigger = $state(0);
-
-  let contextMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
-  let bulkTagDraft = $state("");
-
   // Read-only aliases keep template + derivation code readable. Mutations go
   // directly through the stores so reactivity propagates back.
   const templates = $derived(templatesStore.templates);
@@ -169,7 +132,6 @@
   );
 
   const isEditorMode = $derived(templatesStore.isEditorMode);
-
   const isMinimal = $derived(settings.minimal);
 
   const availableTags = $derived.by(() => {
@@ -213,14 +175,7 @@
     }),
   );
 
-  // Tag counts shared between the Tags sidebar UI and the SettingsModal tag
-  // manager.
-  const settingsTagCounts = $derived(orderedTagCounts(templates, settings.tag_order));
-
-  // Props the MainPanel takes identically in all three render modes (create /
-  // edit / browse). Spread at each site with `{...sharedMainPanelProps}`;
-  // per-branch props (template, editing, creatingDraft, action callbacks) are
-  // passed explicitly alongside the spread.
+  // Props the MainPanel takes identically in all three render modes.
   const sharedMainPanelProps = $derived({
     globalSignature: settings.global_signature,
     snippets: settings.snippets,
@@ -245,25 +200,19 @@
   );
 
   // Snap selection to the first visible row when the current pick drops out
-  // of the result set (e.g. user typed and the previous selection no longer
-  // matches). Skip during editing where the selection is locked.
+  // of the result set. Skip during editing where the selection is locked.
   $effect(() => {
-    if (editing || creatingDraft) return;
+    if (editorSession.isActive) return;
     selectionStore.ensureSelection(visibleTemplateIds);
   });
 
   $effect(() => {
     void (async () => {
       try {
-        const [version] = await Promise.all([
-          getAppVersion().catch(() => "0.0.0"),
-        ]);
-        appVersion = version;
-        await templatesStore.load();
-        selectionStore.selectInitial(templatesStore.templates);
-        const s = templatesStore.settings;
-        tagsWidth = s.column_widths.tags;
-        templatesWidth = s.column_widths.templates;
+        const boot = await bootstrapApp();
+        appVersion = boot.appVersion;
+        tagsWidth = boot.tagsWidth;
+        templatesWidth = boot.templatesWidth;
       } catch (e) {
         // Surface the error and leave templates empty — DON'T fall back to
         // starter templates here. Any subsequent persist would overwrite the
@@ -274,9 +223,7 @@
   });
 
   function handleTemplateSelect(id: string, modifier: SelectModifier = "none"): void {
-    if (editing) {
-      editing = false;
-    }
+    editorSession.clearEditOnSelect();
     selectionStore.selectTemplate(id, visibleTemplateIds, modifier);
   }
 
@@ -285,8 +232,6 @@
   }
 
   // The Rust handler emits this when the quick-capture hotkey is pressed.
-  // Read the clipboard and open the new-template form with the body
-  // pre-filled. Skipped in User mode (no template creation allowed).
   $effect(() => {
     const unlisten = listen("quick-capture", async () => {
       if (!isEditorMode) return;
@@ -296,194 +241,12 @@
       } catch {
         text = "";
       }
-      handleNew(text);
+      editorSession.startCreate(text);
     });
     return () => {
       void unlisten.then((u) => u());
     };
   });
-
-  async function handleSave(updated: Template): Promise<void> {
-    await templatesStore.handleSave(updated);
-    editing = false;
-  }
-
-  function enterEditMode(): void {
-    if (!selectedTemplate) return;
-    editing = true;
-  }
-
-  function cancelEditMode(): void {
-    editing = false;
-  }
-
-  async function handleNew(prefilledBody: string = ""): Promise<void> {
-    if (!isEditorMode) return;
-    creatingDraft = {
-      name: "",
-      tags: [],
-      opening: "Hello,",
-      body: prefilledBody,
-      folder: null,
-    };
-  }
-
-  async function handleCreateDraft(draft: TemplateDraft): Promise<void> {
-    const id = await templatesStore.createTemplate(draft);
-    if (!id) return;
-    selectionStore.selectedTemplateId = id;
-    creatingDraft = null;
-  }
-
-  function cancelCreateDraft(): void {
-    creatingDraft = null;
-  }
-
-  async function duplicateSelectedTemplate(): Promise<void> {
-    if (!selectedTemplate) return;
-    const id = await templatesStore.duplicateTemplateById(selectedTemplate.id);
-    if (id) selectionStore.selectedTemplateId = id;
-  }
-
-  async function deleteSelectedTemplate(): Promise<void> {
-    if (!selectedTemplate) return;
-    const id = selectedTemplate.id;
-    await templatesStore.deleteTemplateById(id);
-    selectionStore.pruneBulkSelection(new Set([id]));
-    selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
-  }
-
-  async function handleSettingsUpdate(next: Settings): Promise<void> {
-    await templatesStore.persist(templatesStore.templates, next);
-  }
-
-  async function handleRenameTag(from: string, to: string): Promise<void> {
-    await templatesStore.handleRenameTag(from, to);
-    selectionStore.remapTag(from, to);
-  }
-
-  async function handleDeleteTag(tag: string): Promise<void> {
-    await templatesStore.handleDeleteTag(tag);
-    selectionStore.removeTag(tag);
-  }
-
-  function openContextForTemplate(id: string, x: number, y: number): void {
-    const tpl = templates.find((t) => t.id === id);
-    if (!tpl) return;
-
-    // Bulk menu: when the right-clicked row is part of a >1 selection, show
-    // bulk actions instead of per-template ones. Otherwise fall through to
-    // the single-template menu.
-    const bulk = selectionStore.bulkSelectedIds;
-    if (bulk.size > 1 && bulk.has(id)) {
-      const count = bulk.size;
-      const items: ContextMenuItem[] = [];
-      if (isEditorMode) {
-        items.push({
-          label: `Add tag to ${count}…`,
-          onClick: () => (uiDialogs.bulkTagPromptOpen = true),
-        });
-        items.push({
-          label: `Remove tag from ${count}…`,
-          onClick: () => (uiDialogs.bulkRemoveTagPromptOpen = true),
-        });
-      }
-      items.push({ label: `Export ${count}…`, onClick: () => void templatesStore.bulkExport(bulk) });
-      if (isEditorMode) {
-        items.push({
-          label: `Delete ${count}`,
-          danger: true,
-          onClick: () => (uiDialogs.bulkDeleteConfirmOpen = true),
-        });
-      }
-      contextMenu = { x, y, items };
-      return;
-    }
-
-    const items: ContextMenuItem[] = [];
-    if (isEditorMode) {
-      items.push({
-        label: tpl.pinned ? "Unpin" : "Pin",
-        onClick: () => void templatesStore.togglePin(id),
-      });
-      items.push({
-        label: "Duplicate",
-        onClick: async () => {
-          const copyId = await templatesStore.duplicateTemplateById(id);
-          if (copyId) selectionStore.selectedTemplateId = copyId;
-        },
-      });
-    }
-    items.push({ label: "Export…", onClick: () => void templatesStore.exportSingleTemplate(id) });
-    if (isEditorMode) {
-      items.push({
-        label: "Delete",
-        danger: true,
-        onClick: () => (uiDialogs.contextDeleteTarget = tpl),
-      });
-    }
-    contextMenu = { x, y, items };
-  }
-
-  async function confirmBulkDelete(): Promise<void> {
-    const ids = new Set(selectionStore.bulkSelectedIds);
-    uiDialogs.bulkDeleteConfirmOpen = false;
-    await templatesStore.bulkDelete(ids);
-    selectionStore.bulkSelectedIds = new Set();
-    if (selectionStore.selectedTemplateId !== null && ids.has(selectionStore.selectedTemplateId)) {
-      selectionStore.selectedTemplateId = templates[0]?.id ?? null;
-    }
-  }
-
-  async function confirmBulkTag(): Promise<void> {
-    const tag = bulkTagDraft.trim();
-    if (tag.length === 0) return;
-    uiDialogs.bulkTagPromptOpen = false;
-    bulkTagDraft = "";
-    await templatesStore.bulkAddTag(selectionStore.bulkSelectedIds, tag);
-  }
-
-  async function confirmBulkRemoveTag(): Promise<void> {
-    const tag = bulkTagDraft.trim();
-    if (tag.length === 0) return;
-    uiDialogs.bulkRemoveTagPromptOpen = false;
-    bulkTagDraft = "";
-    await templatesStore.bulkRemoveTag(selectionStore.bulkSelectedIds, tag);
-  }
-
-  function openContextForEmpty(x: number, y: number): void {
-    contextMenu = {
-      x,
-      y,
-      items: [
-        {
-          label: "Open data folder",
-          onClick: () => {
-            openDataDir().catch((e) => (templatesStore.loadError = `open folder failed: ${e}`));
-          },
-        },
-      ],
-    };
-  }
-
-  function closeContextMenu(): void {
-    contextMenu = null;
-  }
-
-  async function confirmContextDelete(): Promise<void> {
-    if (!uiDialogs.contextDeleteTarget) return;
-    const id = uiDialogs.contextDeleteTarget.id;
-    uiDialogs.contextDeleteTarget = null;
-    await templatesStore.deleteTemplateById(id);
-    selectionStore.pruneBulkSelection(new Set([id]));
-    if (selectionStore.selectedTemplateId === id) {
-      selectionStore.selectedTemplateId = templatesStore.templates[0]?.id ?? null;
-    }
-  }
-
-  function cancelContextDelete(): void {
-    uiDialogs.contextDeleteTarget = null;
-  }
 
   $effect(() => {
     if (typeof document !== "undefined") {
@@ -515,94 +278,18 @@
     getSearchInput: () => searchInput,
     getSearchQuery: () => searchQuery,
     clearSearch,
-    isEditing: () => editing || creatingDraft !== null,
-    isInputFocused,
+    isEditing: () => editorSession.isActive,
     moveSelection,
     copySelected,
     isMinimal: () => isMinimal,
   });
 
-  function previewPayload() {
-    return popouts.buildPreviewPayload(isEditorMode, selectedTemplate);
-  }
-
-  // Push the current template to the pop-out whenever the selection or any
-  // relevant setting changes — but only while the pop-out is open.
-  $effect(() => {
-    void selectedTemplate;
-    void settings.global_signature;
-    void settings.snippets;
-    void settings.placeholder_values;
-    void settings.theme;
-    void settings.preview_hotkey;
-    popouts.pushPreview(previewPayload());
-  });
+  // Popouts own push + listeners; page only mounts the lifecycle once.
+  $effect(() => popouts.startLifecycle());
 
   $effect(() => {
-    void settings.openrouter_api_key;
-    void settings.translation_model;
-    void settings.theme;
-    popouts.pushTranslator(popouts.buildTranslatorPayload());
+    applyMinimalGeometry(minimalGeo, isMinimal, tagsWidth, templatesWidth);
   });
-
-  $effect(() => {
-    return popouts.mountListeners({
-      getPreviewPayload: previewPayload,
-      getTranslatorPayload: () => popouts.buildTranslatorPayload(),
-    });
-  });
-
-  // When minimal mode turns off, hide any stray preview window so the toggle
-  // state can't dangle open without the affordance that controls it.
-  $effect(() => {
-    if (!isMinimal) popouts.closePreviewForMinimalOff();
-  });
-
-  // Shrink the main window to just Tags + Templates when minimal mode engages,
-  // and restore the prior width when it disengages. Fires only on transitions,
-  // not on the initial mount — `prevMinimal` is undefined until the effect has
-  // run once, so the first run just primes the flag.
-  let prevMinimal: boolean | undefined;
-  let preMinimalWidth: number | null = null;
-  $effect(() => {
-    if (prevMinimal === undefined) {
-      prevMinimal = isMinimal;
-      return;
-    }
-    if (isMinimal === prevMinimal) return;
-    prevMinimal = isMinimal;
-    void (async () => {
-      try {
-        const win = getCurrentWindow();
-        if (isMinimal) {
-          const size = await win.outerSize();
-          const factor = await win.scaleFactor().catch(() => 1);
-          const logicalW = size.width / factor;
-          // Account for the OS frame's vertical chrome; only width matters.
-          const minimalW = tagsWidth + templatesWidth + 6 /* col-resize */ + 2 /* frame borders */;
-          // Only stash if the window is actually wider than the minimal target —
-          // otherwise restoring later would grow a window the user already had narrow.
-          if (logicalW > minimalW + 8) {
-            preMinimalWidth = logicalW;
-          }
-          await win.setSize(new LogicalSize(minimalW, size.height / factor));
-        } else if (preMinimalWidth !== null) {
-          const size = await win.outerSize();
-          const factor = await win.scaleFactor().catch(() => 1);
-          await win.setSize(new LogicalSize(preMinimalWidth, size.height / factor));
-          preMinimalWidth = null;
-        }
-      } catch {
-        /* best-effort */
-      }
-    })();
-  });
-
-  // On first load, query whether satellite windows are already open.
-  $effect(() => {
-    void popouts.syncOpenFlags();
-  });
-
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} oncontextmenu={handleGlobalContextMenu} />
@@ -610,18 +297,16 @@
 <div class="frame">
   <TitleBar
     onOpenSettings={() => (uiDialogs.settingsOpen = true)}
-    showSearch={!editing && creatingDraft === null}
+    showSearch={!editorSession.isActive}
     {searchQuery}
     onSearchChange={handleSearchChange}
     onClearSearch={clearSearch}
     onSearchInputMount={(el) => (searchInput = el ?? undefined)}
     minimal={isMinimal}
     previewOpen={popouts.previewOpen}
-    onTogglePreview={() => void popouts.togglePreview(previewPayload)}
+    onTogglePreview={() => void popouts.togglePreview()}
     translatorOpen={popouts.translatorOpen}
-    onToggleTranslator={() =>
-      void popouts.toggleTranslator(() => popouts.buildTranslatorPayload())
-    }
+    onToggleTranslator={() => void popouts.toggleTranslator()}
   />
   <div class="shell">
     {#if !loaded}
@@ -640,26 +325,26 @@
         <div class="skel-line"></div>
         <div class="skel-block"></div>
       </section>
-    {:else if creatingDraft !== null}
+    {:else if editorSession.creatingDraft !== null}
       <MainPanel
         {...sharedMainPanelProps}
         mode={{
           kind: "create",
-          draft: creatingDraft,
-          onCancel: cancelCreateDraft,
-          onCreate: handleCreateDraft,
+          draft: editorSession.creatingDraft,
+          onCancel: () => editorSession.cancelCreate(),
+          onCreate: (d) => editorSession.create(d),
         }}
       />
-    {:else if editing && selectedTemplate}
+    {:else if editorSession.editing && selectedTemplate}
       <MainPanel
         {...sharedMainPanelProps}
         mode={{
           kind: "edit",
           template: selectedTemplate,
-          onCancel: cancelEditMode,
-          onSave: handleSave,
-          onDuplicate: () => void duplicateSelectedTemplate(),
-          onDelete: () => void deleteSelectedTemplate(),
+          onCancel: () => editorSession.cancelEdit(),
+          onSave: (t) => editorSession.save(t),
+          onDuplicate: () => void editorSession.duplicate(selectedTemplate),
+          onDelete: () => void editorSession.delete(selectedTemplate),
         }}
       />
     {:else}
@@ -674,7 +359,7 @@
         onTagExclude={(tag) => selectionStore.excludeTag(tag)}
         onTagsClear={() => selectionStore.clearTags()}
         onCombinatorToggle={() => selectionStore.toggleTagCombinator()}
-        onContextEmpty={openContextForEmpty}
+        onContextEmpty={(x, y) => uiDialogs.openContextForEmpty(x, y)}
         onTagReorder={(next) => void templatesStore.handleTagsReorder(next)}
       />
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -694,13 +379,13 @@
         canReorder={canReorderTemplates}
         sortMode={settings.sort_mode}
         onTemplateSelect={handleTemplateSelect}
-        onNew={() => void handleNew()}
+        onNew={() => editorSession.startCreate()}
         onClearFilters={() => {
           selectionStore.clearTags();
           clearSearch();
         }}
-        onContextTemplate={openContextForTemplate}
-        onContextEmpty={openContextForEmpty}
+        onContextTemplate={(id, x, y) => uiDialogs.openContextForTemplate(id, x, y)}
+        onContextEmpty={(x, y) => uiDialogs.openContextForEmpty(x, y)}
         onReorder={(ids) => void templatesStore.handleTemplatesReorder(ids)}
         onMoveToFolder={(ids, folder) => void templatesStore.moveToFolder(ids, folder)}
         onSortModeToggle={() => templatesStore.handleSortModeToggle()}
@@ -721,10 +406,10 @@
           mode={{
             kind: "browse",
             template: selectedTemplate,
-            onEnterEdit: enterEditMode,
-            onSave: handleSave,
-            onDuplicate: () => void duplicateSelectedTemplate(),
-            onDelete: () => void deleteSelectedTemplate(),
+            onEnterEdit: () => editorSession.enterEdit(),
+            onSave: (t) => editorSession.save(t),
+            onDuplicate: () => void editorSession.duplicate(selectedTemplate),
+            onDelete: () => void editorSession.delete(selectedTemplate),
           }}
         />
       {/if}
@@ -743,34 +428,7 @@
 
 <ResizeHandles />
 
-{#if uiDialogs.settingsOpen}
-  <SettingsModal
-    {settings}
-    currentVersion={appVersion}
-    tagCounts={settingsTagCounts}
-    onClose={() => (uiDialogs.settingsOpen = false)}
-    onUpdate={handleSettingsUpdate}
-    onExportTemplates={handleExportTemplates}
-    onImportTemplates={handleImportTemplates}
-    onCheckUpdate={checkForUpdate}
-    onListBackups={listTemplateBackups}
-    onRestoreBackup={(name) => templatesStore.handleRestoreBackup(name)}
-    onRenameTag={handleRenameTag}
-    onDeleteTag={handleDeleteTag}
-    onOpenCheatSheet={() => {
-      uiDialogs.settingsOpen = false;
-      uiDialogs.cheatSheetOpen = true;
-    }}
-  />
-{/if}
-
-{#if uiDialogs.cheatSheetOpen}
-  <CheatSheet
-    globalHotkey={settings.global_hotkey}
-    previewHotkey={settings.preview_hotkey}
-    onClose={() => (uiDialogs.cheatSheetOpen = false)}
-  />
-{/if}
+<DialogsHost {appVersion} />
 
 {#if loaded && !settings.onboarding_complete}
   <OnboardingTour
@@ -781,76 +439,6 @@
         close_hint_shown: true,
       });
     }}
-  />
-{/if}
-
-{#if uiDialogs.bulkDeleteConfirmOpen}
-  <ConfirmDialog
-    title="Delete {selectionStore.bulkSelectedIds.size} templates?"
-    message="Ctrl+Z will restore them."
-    confirmLabel="Delete {selectionStore.bulkSelectedIds.size}"
-    danger
-    ariaLabel="Confirm bulk delete"
-    onConfirm={() => void confirmBulkDelete()}
-    onCancel={() => (uiDialogs.bulkDeleteConfirmOpen = false)}
-  />
-{/if}
-
-{#if uiDialogs.bulkTagPromptOpen}
-  <ConfirmDialog
-    title="Add tag to {selectionStore.bulkSelectedIds.size} templates"
-    confirmLabel="Add"
-    ariaLabel="Bulk add tag"
-    input
-    bind:inputValue={bulkTagDraft}
-    inputPlaceholder="tag name"
-    confirmDisabled={bulkTagDraft.trim().length === 0}
-    onConfirm={() => void confirmBulkTag()}
-    onCancel={() => {
-      uiDialogs.bulkTagPromptOpen = false;
-      bulkTagDraft = "";
-    }}
-    onDismiss={() => (uiDialogs.bulkTagPromptOpen = false)}
-  />
-{/if}
-
-{#if uiDialogs.bulkRemoveTagPromptOpen}
-  <ConfirmDialog
-    title="Remove tag from {selectionStore.bulkSelectedIds.size} templates"
-    confirmLabel="Remove"
-    danger
-    ariaLabel="Bulk remove tag"
-    input
-    bind:inputValue={bulkTagDraft}
-    inputPlaceholder="tag name"
-    confirmDisabled={bulkTagDraft.trim().length === 0}
-    onConfirm={() => void confirmBulkRemoveTag()}
-    onCancel={() => {
-      uiDialogs.bulkRemoveTagPromptOpen = false;
-      bulkTagDraft = "";
-    }}
-    onDismiss={() => (uiDialogs.bulkRemoveTagPromptOpen = false)}
-  />
-{/if}
-
-{#if contextMenu}
-  <ContextMenu
-    x={contextMenu.x}
-    y={contextMenu.y}
-    items={contextMenu.items}
-    onClose={closeContextMenu}
-  />
-{/if}
-
-{#if uiDialogs.contextDeleteTarget}
-  <ConfirmDialog
-    title="Delete template?"
-    name={uiDialogs.contextDeleteTarget.name}
-    message="Ctrl+Z will restore it."
-    confirmLabel="Delete"
-    danger
-    onConfirm={() => void confirmContextDelete()}
-    onCancel={cancelContextDelete}
   />
 {/if}
 

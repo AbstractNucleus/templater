@@ -30,21 +30,19 @@ export type TranslatorPayload = {
 class Popouts {
   previewOpen = $state(false);
   translatorOpen = $state(false);
+  #lifecycleStarted = false;
 
-  /** Prefer an explicit template (page effects); otherwise resolve selection. */
-  buildPreviewPayload(canEdit: boolean, selected?: Template | null): PreviewPayload {
+  /** Resolve selection from stores — single payload path for page + keyboard. */
+  buildPreviewPayload(): PreviewPayload {
     const template =
-      selected !== undefined
-        ? selected
-        : (templatesStore.templates.find((t) => t.id === selectionStore.selectedTemplateId) ??
-          null);
+      templatesStore.templates.find((t) => t.id === selectionStore.selectedTemplateId) ?? null;
     const s = templatesStore.settings;
     return {
       template,
       globalSignature: s.global_signature,
       snippets: s.snippets,
       placeholderValues: (template && s.placeholder_values[template.id]) ?? {},
-      canEdit,
+      canEdit: templatesStore.isEditorMode,
       theme: s.theme,
       previewHotkey: s.preview_hotkey,
     };
@@ -59,7 +57,7 @@ class Popouts {
     };
   }
 
-  async togglePreview(getPayload: () => PreviewPayload): Promise<void> {
+  async togglePreview(): Promise<void> {
     if (this.previewOpen) {
       try {
         await closePreviewWindow();
@@ -72,13 +70,13 @@ class Popouts {
     try {
       await openPreviewWindow();
       this.previewOpen = true;
-      void emit("preview-payload", getPayload());
+      void emit("preview-payload", this.buildPreviewPayload());
     } catch (e) {
       templatesStore.loadError = `open preview failed: ${e}`;
     }
   }
 
-  async toggleTranslator(getPayload: () => TranslatorPayload): Promise<void> {
+  async toggleTranslator(): Promise<void> {
     if (this.translatorOpen) {
       try {
         await closeTranslatorWindow();
@@ -91,7 +89,7 @@ class Popouts {
     try {
       await openTranslatorWindow();
       this.translatorOpen = true;
-      void emit("translator-payload", getPayload());
+      void emit("translator-payload", this.buildTranslatorPayload());
     } catch (e) {
       templatesStore.loadError = `open translator failed: ${e}`;
     }
@@ -127,12 +125,9 @@ class Popouts {
   }
 
   /** Event bridge: payload requests, copy/placeholder mirror, closed flags. */
-  mountListeners(opts: {
-    getPreviewPayload: () => PreviewPayload;
-    getTranslatorPayload: () => TranslatorPayload;
-  }): () => void {
+  mountListeners(): () => void {
     const unlistenRequest = listen("preview-request-payload", () => {
-      void emit("preview-payload", opts.getPreviewPayload());
+      void emit("preview-payload", this.buildPreviewPayload());
     });
     const unlistenCopy = listen<{ templateId: string }>("preview-copy-success", (e) => {
       void templatesStore.recordCopy(e.payload.templateId);
@@ -151,7 +146,7 @@ class Popouts {
       this.previewOpen = false;
     });
     const unlistenTranslatorRequest = listen("translator-request-payload", () => {
-      void emit("translator-payload", opts.getTranslatorPayload());
+      void emit("translator-payload", this.buildTranslatorPayload());
     });
     const unlistenTranslatorClosed = listen("translator-closed", () => {
       this.translatorOpen = false;
@@ -165,6 +160,45 @@ class Popouts {
       void unlistenTranslatorRequest.then((u) => u());
       void unlistenTranslatorClosed.then((u) => u());
     };
+  }
+
+  /**
+   * Owns reactive push + listeners + open-flag sync. Call once from the main
+   * route; returns a teardown for the effect root.
+   */
+  startLifecycle(): () => void {
+    if (this.#lifecycleStarted) return () => {};
+    this.#lifecycleStarted = true;
+    return $effect.root(() => {
+      $effect(() => {
+        void selectionStore.selectedTemplateId;
+        void templatesStore.templates;
+        void templatesStore.isEditorMode;
+        const s = templatesStore.settings;
+        void s.global_signature;
+        void s.snippets;
+        void s.placeholder_values;
+        void s.theme;
+        void s.preview_hotkey;
+        this.pushPreview(this.buildPreviewPayload());
+      });
+      $effect(() => {
+        const s = templatesStore.settings;
+        void s.openrouter_api_key;
+        void s.translation_model;
+        void s.theme;
+        this.pushTranslator(this.buildTranslatorPayload());
+      });
+      $effect(() => {
+        if (!templatesStore.settings.minimal) this.closePreviewForMinimalOff();
+      });
+      const unlisten = this.mountListeners();
+      void this.syncOpenFlags();
+      return () => {
+        unlisten();
+        this.#lifecycleStarted = false;
+      };
+    });
   }
 }
 

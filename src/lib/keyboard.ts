@@ -1,3 +1,4 @@
+import { isInputFocused } from "$lib/domFocus";
 import { popouts } from "$lib/stores/popouts.svelte";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
 import { uiDialogs } from "$lib/stores/uiDialogs.svelte";
@@ -12,7 +13,6 @@ export interface GlobalKeydownDeps {
   getSearchQuery: () => string;
   clearSearch: () => void;
   isEditing: () => boolean;
-  isInputFocused: () => boolean;
   moveSelection: (delta: number) => void;
   copySelected: () => void;
   isMinimal: () => boolean;
@@ -53,7 +53,7 @@ export function createGlobalKeydownHandler(
     // ? toggles the cheat sheet — runs before the cheatSheetOpen guard so the
     // same key both opens AND closes. Skip when typing in an input so Shift+/
     // still types literally.
-    if (e.key === "?" && !deps.isInputFocused()) {
+    if (e.key === "?" && !isInputFocused()) {
       e.preventDefault();
       uiDialogs.cheatSheetOpen = !uiDialogs.cheatSheetOpen;
       return;
@@ -104,9 +104,7 @@ export function createGlobalKeydownHandler(
       deps.isMinimal()
     ) {
       e.preventDefault();
-      void popouts.togglePreview(() =>
-        popouts.buildPreviewPayload(templatesStore.isEditorMode),
-      );
+      void popouts.togglePreview();
       return;
     }
     // Configurable in-app shortcut: toggle the preview pop-out in minimal
@@ -115,14 +113,12 @@ export function createGlobalKeydownHandler(
     // trigger it.
     if (
       deps.isMinimal() &&
-      !deps.isInputFocused() &&
+      !isInputFocused() &&
       document.activeElement !== deps.getSearchInput() &&
       matchesAccelerator(e, templatesStore.settings.preview_hotkey)
     ) {
       e.preventDefault();
-      void popouts.togglePreview(() =>
-        popouts.buildPreviewPayload(templatesStore.isEditorMode),
-      );
+      void popouts.togglePreview();
       return;
     }
     // Ctrl+Shift+T: toggle the translator pop-out (always available).
@@ -134,7 +130,7 @@ export function createGlobalKeydownHandler(
       e.key.toLowerCase() === "t"
     ) {
       e.preventDefault();
-      void popouts.toggleTranslator(() => popouts.buildTranslatorPayload());
+      void popouts.toggleTranslator();
       return;
     }
     // Esc in the search box clears it — matches the Gmail/Slack convention.
@@ -151,7 +147,7 @@ export function createGlobalKeydownHandler(
 
     if (deps.isEditing()) return;
     const inSearch = document.activeElement === deps.getSearchInput();
-    if (!inSearch && deps.isInputFocused()) return;
+    if (!inSearch && isInputFocused()) return;
 
     // Ctrl/Cmd+Z: undo the last template-list mutation. Native text undo wins
     // inside inputs — including the search box, which we let through the

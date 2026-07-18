@@ -10,59 +10,58 @@
     folder: null,
   };
 
+  type EditMode =
+    | {
+        kind: "create";
+        draft: TemplateDraft;
+        onCancel: () => void;
+        onCreate: (draft: TemplateDraft) => void;
+      }
+    | {
+        kind: "edit";
+        template: Template;
+        onCancel: () => void;
+        onSave: (t: Template) => void;
+      };
+
   let {
-    template,
-    editing,
+    mode,
     canEdit,
     availableTags,
     availableFolders,
-    creatingDraft = null,
-    onCancelEdit,
-    onSave,
-    onCreate = () => {},
   }: {
-    template: Template | null;
-    editing: boolean;
+    mode: EditMode;
     canEdit: boolean;
     availableTags: string[];
     availableFolders: string[];
-    /** When non-null, the panel renders the new-template form seeded from this
-     *  draft (instead of an existing template). Parent must hold a stable
-     *  reference for the form's lifetime. */
-    creatingDraft?: TemplateDraft | null;
-    onCancelEdit: () => void;
-    onSave: (t: Template) => void;
-    onCreate?: (draft: TemplateDraft) => void;
   } = $props();
 
   // Draft state — used by both edit and create flows.
   let draft = $state<TemplateDraft>({ ...EMPTY_DRAFT });
 
   // Seed draft whenever we enter edit/create mode or switch templates.
-  // Reference identity on `template` and `creatingDraft` keeps this stable
+  // Reference identity on `mode.draft` / `mode.template` keeps this stable
   // during ongoing edits — the effect only refires when the parent swaps
   // the source.
   $effect(() => {
-    if (creatingDraft) {
-      draft = { ...creatingDraft };
+    if (mode.kind === "create") {
+      draft = { ...mode.draft };
       return;
     }
-    if (editing && template) {
-      draft = {
-        name: template.name,
-        tags: [...template.tags],
-        opening: template.opening,
-        body: template.body,
-        folder: template.folder,
-      };
-    }
+    draft = {
+      name: mode.template.name,
+      tags: [...mode.template.tags],
+      opening: mode.template.opening,
+      body: mode.template.body,
+      folder: mode.template.folder,
+    };
   });
 
   function handleSave(): void {
-    if (!template) return;
+    if (mode.kind !== "edit") return;
     const folder = draft.folder !== null && draft.folder.trim().length > 0 ? draft.folder.trim() : null;
-    onSave({
-      ...template,
+    mode.onSave({
+      ...mode.template,
       name: draft.name.trim() || "Untitled",
       tags: draft.tags,
       opening: draft.opening,
@@ -73,25 +72,25 @@
   }
 
   function handleCreate(): void {
-    onCreate(draft);
+    if (mode.kind !== "create") return;
+    mode.onCreate(draft);
   }
 
   function handleFormSubmit(): void {
-    if (creatingDraft) handleCreate();
+    if (mode.kind === "create") handleCreate();
     else handleSave();
   }
 
   function handleFormKey(e: KeyboardEvent): void {
     if (!canEdit) return;
-    if (!creatingDraft && !editing) return;
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleFormSubmit();
-    } else if (e.key === "Escape" && creatingDraft) {
+    } else if (e.key === "Escape" && mode.kind === "create") {
       // Mirrors the old SaveAsModal cancel-on-Escape. Pickers stopPropagation
       // when their dropdown is open, so this only fires from "outside" focus.
       e.preventDefault();
-      onCancelEdit();
+      mode.onCancel();
     }
   }
 </script>
@@ -99,9 +98,9 @@
 <svelte:window onkeydown={handleFormKey} />
 
 <div class="header-row">
-  <div class="breadcrumb">{creatingDraft ? "new template" : "editing"}</div>
+  <div class="breadcrumb">{mode.kind === "create" ? "new template" : "editing"}</div>
   <div class="actions">
-    <button class="icon-btn" onclick={onCancelEdit}>Cancel</button>
+    <button class="icon-btn" onclick={mode.onCancel}>Cancel</button>
     <button class="icon-btn primary" onclick={handleFormSubmit}>Save</button>
   </div>
 </div>
@@ -111,7 +110,7 @@
   {availableTags}
   {availableFolders}
   bodyGrow
-  autofocusName={!!creatingDraft}
+  autofocusName={mode.kind === "create"}
   onChange={(next) => (draft = next)}
 />
 

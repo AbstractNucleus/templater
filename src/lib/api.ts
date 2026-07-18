@@ -26,16 +26,8 @@ export async function resetWindowPosition(): Promise<void> {
   await invoke<void>("reset_window_position");
 }
 
-export async function exportTemplates(path: string): Promise<number> {
-  return await invoke<number>("export_templates", { path });
-}
-
-export async function exportTemplate(id: string, path: string): Promise<void> {
-  await invoke<void>("export_template", { id, path });
-}
-
-export async function exportTemplatesSubset(ids: string[], path: string): Promise<number> {
-  return await invoke<number>("export_templates_subset", { ids, path });
+export async function exportTemplates(path: string, templates: Template[]): Promise<number> {
+  return await invoke<number>("export_templates", { path, templates });
 }
 
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
@@ -100,8 +92,9 @@ export async function listTemplateBackups(): Promise<BackupEntry[]> {
   return await invoke<BackupEntry[]>("list_template_backups");
 }
 
-export async function restoreTemplateBackup(name: string): Promise<AppData> {
-  return await invoke<AppData>("restore_template_backup", { name });
+/** Read templates from a named backup. Caller persists (mirrors import). */
+export async function readTemplateBackup(name: string): Promise<Template[]> {
+  return await invoke<Template[]>("read_template_backup", { name });
 }
 
 export async function openPreviewWindow(): Promise<void> {

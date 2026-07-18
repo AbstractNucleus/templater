@@ -1,21 +1,9 @@
 <script lang="ts">
   import { listen, emit } from "@tauri-apps/api/event";
-  import type { Template } from "$lib/types";
   import TemplatePreview from "$lib/components/TemplatePreview.svelte";
   import { matchesAccelerator } from "$lib/keyboard";
-
-  /** Payload pushed from the main window whenever the selection or relevant
-   *  settings change. The pop-out renders directly from this; it owns no
-   *  template state of its own. */
-  interface PreviewPayload {
-    template: Template | null;
-    globalSignature: string;
-    snippets: Record<string, string>;
-    placeholderValues: Record<string, string>;
-    canEdit: boolean;
-    theme: "dark" | "light";
-    previewHotkey: string;
-  }
+  import { isInputFocused } from "$lib/domFocus";
+  import type { PreviewPayload } from "$lib/stores/popouts.svelte";
 
   let payload = $state<PreviewPayload | null>(null);
   /** Bumped on each payload so TemplatePreview re-seeds fills from the store. */
@@ -73,15 +61,6 @@
   // shortcut. Without this, opening the pop-out grabs focus and leaves the
   // user stranded (Space in the main window no longer fires). Gated on no
   // input being focused so the placeholder/checkbox fields keep working.
-  function isInputFocused(): boolean {
-    const ae = document.activeElement;
-    if (!ae || ae === document.body) return false;
-    const tag = ae.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return true;
-    if ((ae as HTMLElement).isContentEditable) return true;
-    return false;
-  }
-
   function handlePreviewKeydown(e: KeyboardEvent): void {
     if (
       !isInputFocused() &&
@@ -146,68 +125,6 @@
 
   :global(#svelte) {
     height: 100%;
-  }
-
-  :global(:root) {
-    --bg-base: #1c1c1e;
-    --bg-elevated: #18181a;
-    --bg-titlebar: #141416;
-    --bg-input: #121214;
-    --bg-hover: #25252a;
-    --bg-active: #2d2d33;
-    --border: #2a2a2e;
-    --border-strong: #3a3a40;
-    --border-focus: #5a5a62;
-    --text: #e8e6e3;
-    --text-strong: #f3f1ee;
-    --text-muted: #8c8a86;
-    --text-subtle: #6a6862;
-    --text-placeholder: #56544f;
-    --shadow: rgba(0, 0, 0, 0.6);
-    --accent-brand: #cc785c;
-    --accent-brand-hover: #d88a6f;
-    --accent-brand-soft: #3a2419;
-    --accent-brand-text: #f5d4c4;
-    --accent-positive-bg: #2a3a2a;
-    --accent-positive-border: #3a5a3a;
-    --accent-positive-text: #d0e0d0;
-    --accent-danger-bg: #3a2222;
-    --accent-danger-border: #5a3030;
-    --accent-danger-text: #ff9a9a;
-    --accent-info-bg: #1a2a3a;
-    --accent-info-border: #2a4a6a;
-    --accent-info-text: #a8c8e8;
-  }
-
-  :global([data-theme="light"]) {
-    --bg-base: #f7f5f1;
-    --bg-elevated: #f1ede6;
-    --bg-titlebar: #ebe7df;
-    --bg-input: #fdfcf9;
-    --bg-hover: #e4dfd5;
-    --bg-active: #d8d2c5;
-    --border: #ddd6c8;
-    --border-strong: #c2bbac;
-    --border-focus: #8a8275;
-    --text: #2a2724;
-    --text-strong: #161310;
-    --text-muted: #5c5852;
-    --text-subtle: #8c8780;
-    --text-placeholder: #b0aa9e;
-    --shadow: rgba(60, 50, 35, 0.18);
-    --accent-brand: #c5613e;
-    --accent-brand-hover: #b4542f;
-    --accent-brand-soft: #f5e0d4;
-    --accent-brand-text: #6d2c14;
-    --accent-positive-bg: #d4eada;
-    --accent-positive-border: #88c896;
-    --accent-positive-text: #1e5f2e;
-    --accent-danger-bg: #fbe2e2;
-    --accent-danger-border: #e0a0a0;
-    --accent-danger-text: #9a2a2a;
-    --accent-info-bg: #dde8f4;
-    --accent-info-border: #a0b8d0;
-    --accent-info-text: #2a4a6a;
   }
 
   .frame {

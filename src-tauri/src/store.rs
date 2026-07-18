@@ -227,16 +227,6 @@ pub struct AppData {
     pub settings: Settings,
 }
 
-impl AppData {
-    pub fn new(templates: Vec<Template>) -> Self {
-        Self {
-            version: DATA_VERSION,
-            templates,
-            settings: Settings::default(),
-        }
-    }
-}
-
 /// On-disk shape for `templates.json`. The optional `legacy_settings` field is
 /// only used during the unified → split migration; it's accepted on read,
 /// dropped on write.
@@ -520,10 +510,9 @@ impl Store {
         Ok(out)
     }
 
-    /// Replace `templates.json` with the contents of the named backup. The
-    /// current file is preserved as a fresh backup (via the standard save
-    /// path), so a mistaken restore is itself undoable.
-    pub fn restore_template_backup(&self, name: &str) -> Result<AppData, String> {
+    /// Read templates from the named backup. Does not write — caller persists
+    /// via [`Store::save`] / `save_app_data` so TS remains write-authority.
+    pub fn read_template_backup(&self, name: &str) -> Result<Vec<Template>, String> {
         // Reject path-traversal — names must come from list_template_backups
         // and contain only the filename.
         if name.contains('/') || name.contains('\\') || name.contains("..") {
@@ -540,7 +529,6 @@ impl Store {
 
         let text = fs::read_to_string(&backup_path)
             .map_err(|e| format!("read {}: {e}", backup_path.display()))?;
-        // Parse to validate before clobbering the live file.
         let file: TemplatesFileRead = serde_json::from_str(&text)
             .or_else(|_| {
                 serde_json::from_str::<Vec<Template>>(&text).map(|templates| TemplatesFileRead {
@@ -550,21 +538,6 @@ impl Store {
                 })
             })
             .map_err(|e| format!("backup is not valid templates JSON: {e}"))?;
-
-        // Preserve current settings; only templates are restored.
-        let current_settings = self
-            .load()
-            .ok()
-            .flatten()
-            .map(|d| d.settings)
-            .unwrap_or_default();
-
-        let data = AppData {
-            version: DATA_VERSION,
-            templates: file.templates,
-            settings: current_settings,
-        };
-        self.save(&data)?;
-        Ok(data)
+        Ok(file.templates)
     }
 }

@@ -1,265 +1,303 @@
-# Thermo-nuclear code quality review — Templater
+# Thermo-nuclear code quality review — Templater (branch changes)
+
+## Remediation progress (iteration 2 — uncommitted on `dev`)
+
+**Provisional verdict:** **Approve** against the thermo-nuclear remediation bar for this branch. God-route script budget cleared; write-authority leftovers for restore/export closed; geometry RMW documented as the sole intentional Rust full-save exception.
+
+### Fixed this iteration
+
+| Item | Result |
+|---|---|
+| Create/edit session on page | `editorSession.svelte.ts` owns draft/editing flags + save/create/duplicate/delete |
+| Minimal-mode geometry | `minimalGeometry.ts` — page only calls `applyMinimalGeometry` |
+| Bootstrap load | `appBootstrap.ts` — version + load + selection + column widths |
+| Shared `isInputFocused` | `domFocus.ts`; keyboard imports directly (dep removed); preview uses shared util |
+| Backup restore write authority | Rust `read_template_backup` (read-only); TS `persist` (mirrors import) |
+| Export from memory | Single `export_templates(path, templates)`; dropped disk-reload + subset/single commands |
+| Geometry RMW | Documented as intentional close-time Rust exception; no half-rewrite |
+| `hide_main_window` | Uses `close_satellite` / `is_satellite_open` (translator restore flag preserved) |
+
+**`+page.svelte` size:** 710 → **588** lines; script **415 → ~293** (under ~350–400 target).
+
+**Verify:** `npm test` (61 pass), `npm run check` (0 errors), `cargo check` (ok).
+
+### Remains (non-blocking / polish)
+
+1. **Geometry RMW** — still Rust full-`AppData` save on hide/close; documented; product-constrained.
+2. **Settings enum soft-deserializers** — ~50 lines ceremony; not simplified this pass.
+3. **`popouts` → `templatesStore.loadError`** — error channel conflation unchanged.
+4. **Browse/column-resize still on page** — acceptable once script is under budget; further extracts optional.
+
+### Iteration 1 (prior)
+
+Preview theme tokens, dual payload types, `popouts.startLifecycle`, `TemplateEditPanel` kind discriminant, `DialogsHost`, dead `chrono`, stale preview doc. Page was 710 / script 415 after iter 1.
+
+---
+
+## Remediation progress (iteration 1 — uncommitted on `dev`) — superseded by iter 2 above
+
+**Provisional verdict (iter 1):** Closer, still **do not approve**. Ownership moves landed; god-route and write-authority leftovers remain.
+
+### Fixed iteration 1
+
+| Item | Result |
+|---|---|
+| Preview theme token duplication | Deleted `:root` / `[data-theme]` from `preview/+page.svelte`; chrome only; tokens from `app.css` |
+| Dual payload types | Satellites import `PreviewPayload` / `TranslatorPayload` from `popouts.svelte.ts` |
+| Popouts babysitter effects | `popouts.startLifecycle()` owns push + `mountListeners` + sync + minimal-off close; page mounts once; `toggle*` need no payload getters |
+| MainPanel noop adapters | `TemplateEditPanel` takes `kind: "create" \| "edit"`; noops gone |
+| Dialog ownership | `DialogsHost.svelte` mounts settings/cheat/confirms/context menu; `uiDialogs` owns open/confirm handlers |
+| Dead `chrono` | Removed from `Cargo.toml` |
+| Stale `open_preview_window` doc | Corrected to match `park_satellite` behavior |
+
+**`+page.svelte` size (iter 1):** 1000 → **710** lines; script **606 → 415**.
+
+---
 
 **Date:** 2026-07-18  
-**Scope:** Entire codebase at `D:/code/Templater` (not a branch diff)  
-**Stack:** Tauri 2 + SvelteKit 2 / Svelte 5 + TypeScript frontend; Rust backend (`src-tauri`)  
-**Approx. hand-written source:** ~12.7k lines across `src/` + `src-tauri/src/` (excluding `node_modules`, `target`, generated kit output)
+**Scope:** Branch `dev` vs `main` (not a full-codebase re-audit)  
+**Commit range:** `main...HEAD` — 3 remediation commits
+
+| Commit | Summary |
+|---|---|
+| `0dfc0a5` | Session 1 — theme / browse / TemplatePreview / satellite parking / types |
+| `7ff22e5` | Session 2 — TS-only persist; drop Rust bulk/import mutate |
+| `0fbc451` | Session 3 — popouts + dialog stores; settings enums; MainPanel modes |
+
+**Diff size:** 24 files, +1674 / −1516 (includes this report file in the tree history; current working tree is clean).  
+**Prior context:** Older full-codebase audit lived in this file; that audit’s blockers drove these sessions. This review judges the **post-remediation branch state** and whether the diffs **deleted** complexity or **rearranged** it.
 
 ---
 
 ## Executive summary / verdict
 
-**Do not approve as a healthy long-term architecture.**
+**Do not approve** against the thermo-nuclear bar.
 
-The product is coherent and much of the domain logic is thoughtfully written (`compose.ts`, `search.ts`, atomic dual-file saves in `store.rs`, undo stack, careful preview/`untrack` copy semantics). Behavior-correctness is not the bar here. The maintainability bar is: *can a competent engineer change one concern without spelunking a 1.2k-line route, reconciling two write authorities, and re-copying preview UI?*
+The sessions landed real deletions in the right places: one write authority for template CRUD/bulk/import, one shared preview body, one Rust satellite parking helper, a tested browse pipeline, and a thinner keyboard dep surface. Those are not cosmetic.
 
-Today the answer is no. The frontend has accreted into a **god route** (`+page.svelte`) that still owns orchestration after a partial store extraction; persistence is **split-brained** between “mutate in TS then `save_app_data`” and “mutate in Rust then sync arrays back”; and the minimal-mode preview pop-out **reimplements** the main template preview/copy path instead of sharing one component.
+They did **not** finish the structural job. `+page.svelte` is still a ~1000-line / ~605-script-line control plane. Session 3 extracted **state bags** (`uiDialogs`, `popouts`) without moving ownership of handlers, dialog markup, create/edit session, or popout lifecycle effects. MainPanel’s new mode union is papered over with noop callbacks into an unchanged `TemplateEditPanel`. Theme centralization claims “pop-outs only set `data-theme`” while `preview/+page.svelte` still embeds the full token set. Residual Rust full-`AppData` RMW (geometry + backup restore) and disk-authoritative export keep a softer split-brain alive after the bulk/import hybrid was correctly killed.
 
-This is a strong personal app with solid bones. It is not yet a codebase whose structure makes the next feature cheaper than the last one.
-
-**Approval bar (applied strictly):** structural simplicity, single source of truth for mutations, file sizes under ~1k without excuse, abstractions that delete concepts rather than relocate them. **Fails.**
+**Approval bar applied:** no clear structural regression · no obvious missed dramatic simplification · no unjustified 1k file explosion · no spaghetti growth · no half-finished adapters that add indirection without deleting concepts. **Fails** on unfinished god-route extraction, incomplete theme/payload consolidation, and adapter noops — not because the product is broken.
 
 ---
 
 ## High-priority / presumptive blockers
 
-### 1. `src/routes/+page.svelte` is a god module (~1,275 lines)
+### 1. God route reduced, not solved — still the app’s control plane
 
-**Problem.** One file owns:
+**Evidence.** `src/routes/+page.svelte`: **1275 → 1000 lines** (~605 script through `</script>`). Still owns:
 
-- App bootstrap / load / column widths  
-- Browse pipeline (sort → tag filter → search → pinned regroup)  
-- Create / edit UI state and create mutation  
-- Context menus + bulk confirm dialogs  
-- Keyboard wiring (~30 dependency getters)  
-- Preview + translator satellite lifecycle, payload emit, event fan-in  
-- Minimal-mode window geometry  
-- Theme CSS design tokens (~140 lines of `:global` variables)  
-- Skeleton UI, error/undo toasts, onboarding
+- Create/edit session flags (`creatingDraft`, `editing`) — lines 60–61, 153, 320–340, 643+
+- Context-menu construction + bulk confirm orchestration — 370–486
+- ConfirmDialog / settings / cheat-sheet markup mounts — ~787–855
+- Four popout `$effect`s after a `popouts` store exists — 531–604
+- Minimal-mode window geometry — 561–599
+- Column resize, zoom, bootstrap load, browse wiring
 
-Rough map: script ~858 lines, markup ~250, styles ~290.
+**Why it blocks.** Session 1–3 moved *pieces* out (theme CSS, browse pure fns, preview body, popout IPC helpers, dialog *flags*). The route still composes every concern. Scanning cost and regression surface did not drop enough to clear the prior audit’s bar (“under ~400 lines of script, no IPC spaghetti”).
 
-**Why it matters.** Every feature lands here or threads props through here. Local architecture worsens with each satellite window, bulk action, or mode flag. Scanning cost is already high; regression risk is higher.
+**Code judo.** Finish ownership moves, don’t add more flag stores:
 
-**Remedy (delete complexity, don’t polish).** Split by *concern*, not by “move 50 lines into a helper”:
-
-| Extract | Destination |
+| Concern | Destination |
 |---|---|
-| Theme tokens + base chrome CSS | `src/app.css` or `src/routes/+layout.svelte` |
-| Browse pipeline (`browseOrdered` / `tagFiltered` / `searchResults` / `canReorder`) | pure `$lib/browse.ts` (or store-derived getters) |
-| Satellite window orchestration | `$lib/popouts.svelte.ts` (preview + translator together) |
-| Context / bulk UI state | `$lib/components/BulkActions.svelte` or a small UI store |
-| Remaining page | shell: compose sidebars + `MainPanel` + modal mounts |
+| Context menu + ConfirmDialog cluster | One `DialogsHost` (or delete `uiDialogs` and keep flags local to that host) |
+| Create/edit session | Thin `editorSession` or push discriminant into `TemplateEditPanel` |
+| Popout push + `mountListeners` | Self-mount / auto-push inside `popouts.svelte.ts` so the page drops 3–4 effects |
+| Minimal geometry | Dedicated helper module; page only passes widths |
 
-Success criterion: `+page.svelte` under ~400 lines of script, no design tokens, no IPC event spaghetti.
-
----
-
-### 2. Split-brain persistence: frontend `persist` vs Rust `Store::mutate`
-
-**Problem.** Two authorities write disk:
-
-| Path | Who mutates | Examples |
-|---|---|---|
-| A | TS store → `save_app_data` full `AppData` | edit, create, pin, reorder, placeholders, copy stats, tag rename/delete |
-| B | Rust `store.mutate` → returns templates | `bulk_delete`, `bulk_add/remove_tag`, `import_templates` |
-
-See `templatesStore.persist` (`templatesStore.svelte.ts` ~109–135) vs `commands/data.rs` bulk/import (~105–247). Frontend bulk handlers then assign `this.templates = saved` and sometimes patch settings separately (`bulkDelete` clears placeholders in TS *after* Rust already cleared them on disk — dual cleanup).
-
-**Why it matters.**
-
-- **Races:** a debounced `recordPlaceholderValues` / `recordCopy` (path A) can overwrite a concurrent bulk op (path B), or vice versa, because neither is a single ordered queue.  
-- **Duplicated domain rules:** history capping (`pushHistorySnapshot` in TS; mirrored block in `import_templates` with a “Keep in sync” comment on `TEMPLATE_HISTORY_CAP`).  
-- **Incomplete migration smell:** `bulkDelete` still computes unused `next = this.templates.filter(...)` (`templatesStore.svelte.ts` ~256) — leftover from path A.
-
-**Remedy (code judo).** Pick **one** write authority:
-
-**Preferred:** all template/settings mutations go through Rust commands that take an intent and return the new `AppData` (or at least both `templates` + relevant settings). Frontend becomes optimistic UI + apply result. History / placeholder cleanup live in one Rust helper.
-
-**Acceptable alternative:** drop bulk/import Rust mutate; do everything via frontend `persist` (Rust stays dumb load/save). Delete `bulk_*` command logic and the “mirrors TS” comments.
-
-Do not leave the hybrid. Hybrid is the expensive middle.
+Success: `+page.svelte` script under ~350–400 lines, shell markup only.
 
 ---
 
-### 3. Preview pop-out reimplements `TemplateView` instead of sharing it
+### 2. Half-done adapters: typed surface over untyped guts
 
-**Problem.** `src/routes/preview/+page.svelte` (~367 lines) re-derives:
+**A. `MainPanel` mode union + noop stubs**
 
-- `composeText` / `splitPlaceholders` / `extractPlaceholders`  
-- Opening/signature toggles  
-- Debounced placeholder persist (`PERSIST_DEBOUNCE_MS = 400` duplicated)  
-- Copy + flush-on-copy  
-- Tag chips + preview `<pre>` rendering  
-- Large chunk of theme/`frame` CSS also present on the main page / translator
+```51:74:src/lib/components/MainPanel.svelte
+  {#if mode.kind === "create"}
+    <TemplateEditPanel
+      ...
+      onSave={() => {}}
+      onCreate={mode.onCreate}
+    />
+  {:else if mode.kind === "edit"}
+    <TemplateEditPanel
+      ...
+      onSave={mode.onSave}
+      onCreate={() => {}}
+    />
+```
 
-Meanwhile `TemplateView.svelte` (~495 lines) is the canonical interactive preview.
+`TemplateEditPanel` still takes `creatingDraft | editing | template` (see its props ~15–35). The discriminant stopped one layer too early. Call sites look cleaner; the form API did not simplify. Either push `kind: "create" | "edit"` into `TemplateEditPanel`, or stop pretending MainPanel is a domain boundary.
 
-**Why it matters.** Preview bugs will be fixed in one place and regress in the other. The event bridge (`preview-payload`, `preview-placeholder-change`, `preview-copy-success`) already exists — the missing abstraction is the **view**, not more IPC.
+**B. `uiDialogs.svelte.ts` is a flag hotel (25 lines)**
 
-**Remedy.** Extract a presentational `TemplatePreview.svelte` (composed text, toggles, fills, copy button) with callbacks for persist/copy. Mount it from `TemplateView` (plus rename/history chrome) and from `preview/+page.svelte` (plus titlebar / close-on-copy). Delete the duplicated compose/copy/debounce blocks.
+Booleans + `blocksShortcuts` — useful for keyboard. Handlers, `bulkTagDraft`, context-menu item builders, and ConfirmDialog markup remain on the page. Thin wrapper that relocated state without deleting orchestration. Prefer one host that owns flags *and* behavior, or delete the store and keep flags next to the dialogs.
+
+**C. `popouts` still needs a page babysitter**
+
+`mountListeners` / `pushPreview` / `pushTranslator` are clean, but `+page.svelte` 531–553 still runs reactive push effects and wires payload getters. Dual payload paths: page `previewPayload()` with explicit `selectedTemplate` vs keyboard’s `buildPreviewPayload(isEditorMode)` from stores (`keyboard.ts` 107–109, 123–125). Complexity moved into a class; lifecycle stayed in the route.
 
 ---
 
-### 4. Incomplete store extraction leaves mutations and selection glue straddling layers
+### 3. Theme extraction lied for preview — duplication remains
 
-**Problem.** `templatesStore` absorbed many mutations, but `+page.svelte` still owns:
+`src/app.css` line 1: *“Pop-out routes only set data-theme.”*  
+`+layout.svelte` imports `app.css` for all routes.
 
-- `handleCreateDraft` (create lives in the page; duplicate/delete/save live in the store)  
-- Tag rename/delete orchestration that **double-handles** filter remapping  
-- Context-menu construction (domain actions + UI prompts mixed)
+Translator correctly dropped token CSS. Preview did not:
 
-Specifically, `handleRenameTag` / `handleDeleteTag` in the store take `selectedTagIds` / `excludedTagIds`, mutate and return remapped sets — then `+page.svelte` **ignores the return** and calls `selectionStore.remapTag` / `removeTag` anyway:
-
-```445:461:src/routes/+page.svelte
-  async function handleRenameTag(from: string, to: string): Promise<void> {
-    await templatesStore.handleRenameTag(
-      from,
-      to,
-      selectionStore.selectedTagIds,
-      selectionStore.excludedTagIds,
-    );
-    selectionStore.remapTag(from, to);
+```151:211:src/routes/preview/+page.svelte
+  :global(:root) {
+    --bg-base: #1c1c1e;
+    ...
+  }
+  :global([data-theme="light"]) {
+    --bg-base: #f7f5f1;
+    ...
   }
 ```
 
-The filter-set parameters and return type in the store are dead API surface. Selection concerns leaked into the data store “just in case,” then were reimplemented in the selection store.
+~60 lines of duplicated design tokens. Delete the block; keep chrome (`.frame` / `.titlebar`) only. Incomplete Session 1 cleanup — translator proves the judo works.
 
-**Why it matters.** Wrong layer + fake coupling. Next rename of filters will break one path.
-
-**Remedy.** Store methods mutate templates/settings only. Page (or a thin coordinator) calls `selectionStore.remapTag` after success. Delete the filter params/returns from the store. Move `createTemplate(draft)` into the store next to `handleSave` / `duplicateTemplateById`.
+**Related:** payload types redeclared locally in satellites (`preview/+page.svelte` 10–18, `translator/+page.svelte`) instead of importing `PreviewPayload` / `TranslatorPayload` from `popouts.svelte.ts`. Drift risk (`theme: "dark" | "light"` vs store `Theme`).
 
 ---
 
-## Code-judo opportunities (concrete reframes)
+### 4. Write authority: bulk/import fixed; residual split-brain remains
 
-### A. Collapse satellite window parking into one Rust helper
+**Fixed (real deletion).** Rust `bulk_*` / `import_templates` / `Store::mutate` / mirrored history cap gone. TS `persist` owns CRUD, bulk tag/delete, import merge (`templatesStore.svelte.ts` 276–316, 486–541). `data.rs` is correctly documented as file I/O + OS shims.
 
-`open_preview_window` and `open_translator_window` in `src-tauri/src/lib.rs` (~52–148) are the same algorithm with different axis, size, and label. Same for close/is_open.
+**Still split:**
 
-**Reframe:** `fn park_satellite(app, label, Placement::LeftOfMain | Placement::AboveMain { height })`. Delete the duplicated clamp / always-on-top / show / focus blocks. Frontend `togglePreview` / `toggleTranslator` can share a small `togglePopout({ open, close, emitPayload })` as well.
+| Path | Where | Smell |
+|---|---|---|
+| `restore_template_backup` | Rust writes disk; TS mirrors (`templatesStore` 429–434) | Same shape as old Path B |
+| `save_window_geometry` / `reset_window_position` | Rust load → patch → full `AppData` save (`lib.rs` 37–40, 180–205) | Races concurrent `persist` |
+| Export commands | `data.rs` 49–88 `store.load()` then write | Memory can diverge from disk after failed save; export ships disk |
 
-### B. Finish the “lift keyboard out of the page” job by shrinking the dep surface
+Geometry RMW is a harder product constraint (close-time save from Rust). Backup restore should follow import: read backup → TS `persist`. Export should take templates from the caller if TS is write authority.
 
-`keyboard.ts` explicitly admits it is a **verbatim lift** that preserves every branch (`createGlobalKeydownHandler` docs). That relocated spaghetti; it did not delete concepts. `GlobalKeydownDeps` has ~20 getters — a smell that the page still owns too many modal flags.
-
-**Reframe:** one `uiStore` / `dialogStack` (`settings | cheatSheet | bulkDelete | bulkTag | contextDelete | …`) so the handler asks `dialogStack.blocksShortcuts()` once. Preview/translator toggles become two actions on a popout module. Goal: deps object with ≤8 fields, or none (import stores directly).
-
-### C. Browse pipeline as pure functions
-
-`browseOrdered` + `tagFiltered` + pinned regroup of search hits (~195–253 in `+page.svelte`) are pure and testable. They do not belong in a route.
-
-**Reframe:** `$lib/browse.ts` with `sortTemplates(templates, sortMode)`, `filterByTags(...)`, `groupPinnedHits(hits)`. Unit-test sort modes (`never_used`, etc.) without mounting the app.
-
-### D. One capability gate instead of sprinkled `isEditorMode`
-
-Editor/user mode is checked in the store (every mutation), the page (create, context menu, canReorder), settings sections, keyboard (undo), and import. That is a cross-cutting boolean tax.
-
-**Reframe:** store mutations are the only enforcer; UI receives `canEdit` and does not re-check. Or invert: User mode mounts a read-only shell that literally lacks edit callbacks. Prefer deleting branches over adding more guards.
-
-### E. Deduplicate shared types
-
-`PortResult` is defined in `templatesStore.svelte.ts`, `SettingsModal.svelte`, and `ImportExportSection.svelte`. `UpdateInfo` is defined in `api.ts`, `SettingsModal.svelte`, and `UpdatesSection.svelte`.
-
-**Reframe:** export once from `$lib/api.ts` (or `$lib/types.ts`). Delete local copies. Thin wrappers that only rename the same shape are not earning their keep.
-
-### F. Theme tokens leave the route
-
-~140 lines of CSS variables live inside `+page.svelte` styles, while `preview/+page.svelte` and `translator/+page.svelte` redeclare overlapping chrome. Wrong layer.
-
-**Reframe:** single `app.css` imported from layout. Pop-outs only set `data-theme`.
+Not as severe as the old dual-mutate hybrid — but claiming “TS-only writes” without finishing restore/export is incomplete narrative.
 
 ---
 
-## File-size / decomposition findings
+## What improved vs pre-refactor (credit)
 
-| Lines (approx.) | Path | Verdict |
-|---:|---|---|
-| 1662 | `src/lib/mocks.ts` | Generated seed data (`scripts/csv-to-mocks.ts`). Size is expected; keep out of hand-edit paths. Not a design smell. |
-| **1275** | **`src/routes/+page.svelte`** | **Past healthy size. Presumptive decompose.** |
-| 529 | `src/lib/components/SettingsModal.svelte` | Approaching heavy. Hotkey capture + Escape drain + tab chrome could move; sections already split — good. |
-| 495 | `src/lib/components/TemplateView.svelte` | High but cohesive if preview share-extract lands; otherwise will keep growing. |
-| 488 | `src-tauri/src/store.rs` | Acceptable for persistence + backups; watch if more formats land. |
-| 483 | `src/lib/stores/templatesStore.svelte.ts` | Borderline; would shrink if write path unifies and create moves in cleanly. |
-| 477 | `src/lib/components/TemplatesSidebar.svelte` | Folder DnD + grouping make it busy; candidate to split `FolderGroup` / bulk bar. |
-| 367 | `src/routes/preview/+page.svelte` | Should shrink dramatically after TemplatePreview extract. |
-| 338 | `src-tauri/src/lib.rs` | Satellite parking + tray/hotkey setup; extract `windows.rs` / `satellites.rs`. |
-| 331 | `src/routes/translator/+page.svelte` | Self-contained; lower urgency. |
+These are real wins — complexity deleted, not just relocated:
 
-**Rule reminder:** do not let application modules drift past ~1000 lines without a strong reason. `+page.svelte` has already crossed that line; treat further growth as a regression.
+1. **Split-brain for template domain ops — fixed.** Bulk/import mutate deleted from Rust; one history cap in TS; API surface matches (`api.ts` read-only import parse).
+2. **Preview body fork — fixed.** Shared `TemplatePreview.svelte`; `TemplateView` 495→348; preview route is chrome + event bridge.
+3. **Satellite parking — fixed.** `park_satellite` / `Placement` / `close_satellite` / `is_satellite_open` (`lib.rs` 47–115). Duplicated clamp/show/AOT bodies gone.
+4. **Browse pipeline — extracted and tested.** Pure `browse.ts` + `browse.test.ts`; route only wires deriveds.
+5. **Keyboard deps — thinned.** ~25 getters → ~11; dialogs/popouts/undo read stores directly (`keyboard.ts` 7–19, 48–52).
+6. **Dead filter API on store — gone.** Tag rename/delete no longer take/return selection sets; page calls `selectionStore.remapTag` / `removeTag` after success (360–368).
+7. **Theme tokens on main route — mostly gone.** `app.css` + layout; translator cleaned.
+
+Net: the two correctness/duplication killers from the old audit (persist split-brain, preview body fork) are addressed. God-route and satellite polish are partial.
 
 ---
 
-## Boundary / type / layering issues
+## Remaining code-judo / structural issues in the new code
 
-### Soft enums on the Rust settings boundary
+Prioritized per skill (structural → judo → spaghetti → boundaries → size → modularity → legibility).
 
-TS has `Theme`, `Mode`, `SortMode` unions (`types.ts`). Rust `Settings` stores `theme`, `mode`, `sort_mode` as `String` (`store.rs` ~105–116). Invalid values deserialize and become runtime UI oddities rather than load errors.
+### Missed dramatic simplifications
 
-**Remedy.** `#[serde(rename_all = "snake_case")] enum` (or stringly enums with `#[serde(other)]` fallback to default). Mirror TS unions. One contract.
+1. **Finish dialog ownership** — either `DialogsHost` owns flags+handlers+markup, or delete `uiDialogs` as a premature extract.
+2. **Push create|edit into `TemplateEditPanel`** — kill MainPanel noops.
+3. **Popouts self-lifecycle** — auto-push from store `$effect`s / self-`mountListeners` so `+page` drops babysitter effects; one payload builder (drop dual selected-vs-store paths).
+4. **Delete preview token CSS + import payload types** — obvious, low-risk, Session 1 incomplete.
+5. **Restore via TS persist** — mirror import; delete Rust domain write on backup restore.
+6. **Export from memory** — pass templates into export commands (or write export JSON in TS after dialog path pick).
 
-### History cap / snapshot logic duplicated across the FFI boundary
+### Spaghetti / branching
 
-`TEMPLATE_HISTORY_CAP = 10` in TS; mirrored const + push/drain in Rust import (`data.rs` ~35–36, ~207–218). Comment says “Keep in sync” — that is an admission of a missing single owner.
+- Context-menu builders in the page (370–426) remain a busy special-case cluster; bulk vs single is fine domain logic but still lives in the wrong file.
+- `hide_main_window` (`lib.rs` 230–247) still inlines satellite hide instead of `close_satellite` + shared emit policy (translator restore special case is intentional; structure still half-extracted).
+- Stale doc: `open_preview_window` claims “already visible → no-op” (`lib.rs` 117–119); `park_satellite` always repositions/shows. Frontend gates in `popouts.togglePreview`.
 
-**Remedy.** History mutations only on the chosen write authority (see blocker #2). The other side becomes a dumb serializer.
+### Boundary / type / abstraction
 
-### `api.ts` is a thin invoke façade (mostly fine) with mid-file import clustering
+- Rust `Theme` / `Mode` / `SortMode` + three hand-rolled soft deserializers (`store.rs` 93–143, 157–168) replace `String` + default fns with ~50 lines of ceremony without deleting a concept. Soft-fail unknown→default is fine; derived `Deserialize` on the enums is unused for `Settings` (custom `deserialize_with` wins). Prefer one soft-parse helper or keep strings — not both.
+- `popouts` writes open failures into `templatesStore.loadError` (77, 96) — error channel conflation.
+- `isInputFocused` duplicated (`+page.svelte` 84–91, `preview/+page.svelte` 76–83); keyboard still takes it as a dep instead of a shared util.
 
-Imports for updater/process sit halfway through the file (`api.ts` ~53–55). Harmless but sloppy; group imports at top. The façade itself is appropriate for Tauri — do not invent a second “service layer” on top unless it adds batching/queuing for the unified write path.
+### New smells introduced by the refactor
 
-### Casts / optionality
+1. Adapter noops in MainPanel.
+2. `uiDialogs` without behavior.
+3. Incomplete theme centralization (comment vs preview reality).
+4. Dual `PreviewPayload` constructors (page-selected vs store-selected).
+5. Dead `chrono` dep in `src-tauri/Cargo.toml` after import’s `Utc::now()` left Rust — incomplete Session 2 cleanup.
+6. Settings enum “hardening” as type theater at the JSON boundary.
 
-No widespread `any` plague in app code (good). Notable smells:
+### What is *not* a blocker
 
-- `omitKey` uses `as Record<string, unknown>` / `as T` (`templatesStore.svelte.ts` ~33–36) — replace with typed delete on `placeholder_values`.  
-- `devMocks.ts` uses `as Record` / `as AppData` liberally — acceptable for a mock switchboard; keep it isolated.  
-- Repeated `as HTMLElement` for focus probes — extract one `isTextInput(el)` helper used by `+page`, preview, and keyboard.
-
-### Non-atomic / sequential orchestration
-
-- Startup effect wraps a single `getAppVersion` in `Promise.all([…])` (`+page.svelte` ~307–309) — noise; call directly.  
-- Pop-out open: `openPreviewWindow()` then separately `emit("preview-payload", …)` — fine given architecture, but after a shared popout module, open+push should be one function.  
-- `bulkDelete` updates templates from Rust then settings placeholders in a second assignment — should be one `AppData` apply if Rust returns full data (placeholders already cleared server-side).
-
-### Feature logic in shared / wrong places
-
-- Design tokens in the main route (should be global).  
-- Selection filter remapping attempted inside templates store (should stay in selection store).  
-- Context menu item construction embeds export/delete/pin policy in the page instead of a pure `buildTemplateMenu(ctx)` next to `contextMenu.ts` (which already handles the global empty-area menu).
-
----
-
-## Secondary maintainability findings
-
-1. **MainPanel is a thin mode switch with a huge callback surface** (`MainPanel.svelte`). Three call sites in `+page` pass noop handlers (`onSave={() => {}}`, `onEnterEdit={() => {}}`) depending on create/edit/browse. Prefer a discriminated prop (`mode: { kind: "browse", … } | { kind: "edit", … } | { kind: "create", … }`) so impossible callback combinations disappear.
-
-2. **Identity wrappers on the page** (`handleTagToggle` → `selectionStore.toggleTag`, etc.). Delete; pass store methods or one-liners at the binding site.
-
-3. **Dual delete confirmation paths** — `TemplateView` has its own `ConfirmDialog`; context menu delete uses another on the page. Same UX, two state machines. Consolidate on one confirm host.
-
-4. **`SettingsModal` Escape/capture state machine** is dense (~capture main vs preview, tag rename, two-step tag delete). Already partially sectioned; keep pressure on moving capture into `HotkeySection` fully so the modal is only a tab shell.
-
-5. **Good patterns to preserve:** `compose.ts` as single clipboard/preview source of truth; `Store::save` staging both temps before rename; `untrack` on copyTrigger; selection store separation; settings sections under `components/settings/`; vitest coverage on compose/search.
-
-6. **`mocks.ts` size** is not a quality failure — treat as data, not as a “god file” to decompose into modules.
+- `templatesStore` growing ~491→512: expected; import merge belongs there.
+- Thin Tauri command wrappers around `park_satellite`: fine IPC surface.
+- Browse composition remaining in the page: acceptable once pure fns are extracted.
+- Tag chips owned by `TemplateView` with `showTags={false}` on shared preview: minor dual ownership, not a structural regression.
 
 ---
 
-## Recommended remediation order
+## File-size notes (hot files after refactor)
 
-1. **Extract theme CSS + browse pipeline** from `+page.svelte` (low risk, immediate scanability win).  
-2. **Unify write authority** (blocker #2) — pick Rust-intent commands *or* TS-only `persist`; delete the other path’s mutation logic and unused leftovers (`next` in `bulkDelete`, mirrored history).  
-3. **Extract `TemplatePreview` and delete preview-route duplication** (blocker #3).  
-4. **Extract popout module (TS) + satellite helper (Rust)**; shrink `lib.rs` and page event `$effect`s.  
-5. **Finish store/selection boundary cleanup** — create in store; kill filter params on tag rename; move context-menu builders beside `contextMenu.ts`.  
-6. **Shrink keyboard deps via dialog/popout stores**; delete identity wrappers and MainPanel noop callback matrix.  
-7. **Harden Rust settings enums** to match TS unions.
+| File | main → HEAD | Assessment |
+|---:|---:|---|
+| `src/routes/+page.svelte` | 1275 → **1000** (~605 script) | Still over healthy route size; under 1k by a hair — not a waiver |
+| `src/lib/stores/templatesStore.svelte.ts` | 491 → **512** | Acceptable growth (domain moved in) |
+| `src/lib/components/TemplateView.svelte` | 495 → **348** | Real shrink via TemplatePreview |
+| `src/routes/preview/+page.svelte` | 367 → **241** | Body fixed; theme CSS leftover |
+| `src-tauri/src/commands/data.rs` | 257 → **123** | Real deletion |
+| `src-tauri/src/lib.rs` | 336 → **329** | Satellite judo; geometry/hide still dense |
+| `src/lib/keyboard.ts` | 212 → **192** | Dep surface is the win |
+| `src/lib/browse.ts` + test | new 86 + 140 | Worth it |
+| `TemplatePreview.svelte` | new ~240 | Justified shared core |
+| `popouts.svelte.ts` | new ~158 | Justified if page effects shrink further |
+| `uiDialogs.svelte.ts` | new 25 | Marginal until paired with a host |
+| `app.css` + `+layout.svelte` | new | Good; incomplete adoption in preview |
+| `MainPanel.svelte` | ~flat ~158 | Rearranged API, same job |
 
-Do not start with micro-nits (import order, comment tone, emoji in sort labels). Those do not move the approval bar.
+No file was pushed *across* the 1k line bar by this PR (the route was already over). The route remains the size smell.
 
 ---
 
-## Closing
+## Recommended next remediation order
 
-Templater’s domain core is better than its shell. The shell — especially `+page.svelte` and the dual write path — is where complexity compounds. The highest-leverage moves all **delete concepts**: one writer, one preview component, one place for theme tokens, one browse pipeline module. Restructuring that preserves behavior while cutting those layers is the correct ambition; rearranging helpers without removing authorities would be a missed opportunity.
+If not approving cleanly, do this sequence — each step should **delete** concepts:
+
+1. **Quick wins (Session 1 leftovers)**  
+   Delete preview `:root` / light tokens; import payload types from `popouts`; drop dead `chrono`; fix stale `open_preview_window` docstring; shared `isInputFocused`.
+
+2. **Finish create/edit boundary**  
+   Discriminant into `TemplateEditPanel`; remove MainPanel noops.
+
+3. **Dialogs ownership**  
+   Extract `DialogsHost` (context menu + confirms + settings/cheat flags) *or* delete `uiDialogs` and keep flags colocated. Goal: page no longer builds menu items or mounts ConfirmDialogs.
+
+4. **Popouts self-lifecycle**  
+   Move push effects + listener mount into `popouts`; single payload builder; page only toggles and reads open flags.
+
+5. **Write-authority leftovers**  
+   Backup restore → read + TS `persist`; export from caller memory; document or isolate geometry RMW as the only intentional Rust full-save path.
+
+6. **Only then** chase further `+page` shrink (minimal geometry helper, load bootstrap). Re-measure: script under ~400 lines before calling the god-route closed.
+
+Do **not** add another thin store layer without moving the handlers. The pattern that failed in Session 3 was “extract `$state` bags, leave orchestration in the route.”
+
+---
+
+## Explicit verdict
+
+| Criterion | Result |
+|---|---|
+| Structural regression | No major regression; incomplete extraction leaves god-route intact |
+| Missed dramatic simplification | **Yes** — dialogs/popouts/edit panel/theme leftovers |
+| Unjustified 1k explosion | No new crossing; route still ~1k |
+| Spaghetti growth | Mostly relocation; some half-adapters add indirection |
+| Hacky / magical abstractions | MainPanel noops, uiDialogs flag hotel, enum ceremony |
+| Boundary / dual write | Bulk/import fixed; restore/geometry/export residual |
+| Obvious decomposition remaining | **Yes** |
+
+**Do not approve.** Merge pressure is a product call; the maintainability bar for these remediation sessions is not met until the god-route ownership moves and the incomplete Session 1/2 cleanups land. Behavior looks coherent. Structure still trains the next feature to land in `+page.svelte`.

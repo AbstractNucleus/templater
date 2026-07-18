@@ -50,27 +50,27 @@
 <section class="main">
   {#if mode.kind === "create"}
     <TemplateEditPanel
-      template={null}
-      editing={false}
+      mode={{
+        kind: "create",
+        draft: mode.draft,
+        onCancel: mode.onCancel,
+        onCreate: mode.onCreate,
+      }}
       canEdit={shared.canEdit}
       availableTags={shared.availableTags}
       availableFolders={shared.availableFolders}
-      creatingDraft={mode.draft}
-      onCancelEdit={mode.onCancel}
-      onSave={() => {}}
-      onCreate={mode.onCreate}
     />
   {:else if mode.kind === "edit"}
     <TemplateEditPanel
-      template={mode.template}
-      editing={true}
+      mode={{
+        kind: "edit",
+        template: mode.template,
+        onCancel: mode.onCancel,
+        onSave: mode.onSave,
+      }}
       canEdit={shared.canEdit}
       availableTags={shared.availableTags}
       availableFolders={shared.availableFolders}
-      creatingDraft={null}
-      onCancelEdit={mode.onCancel}
-      onSave={mode.onSave}
-      onCreate={() => {}}
     />
   {:else if mode.template}
     <TemplateView

@@ -3,7 +3,6 @@
 //! Template mutations live in the frontend store and persist via [`save_app_data`].
 
 use crate::store::{AppData, BackupEntry, Store, Template, DATA_VERSION};
-use std::collections::HashSet;
 
 /// Templates-only export file. Settings are intentionally excluded — they're
 /// machine-specific (window geometry, hotkey, theme) and exporting them would
@@ -23,8 +22,8 @@ struct ImportFile {
 }
 
 /// Serialize `templates` as a versioned export file and write it to `path`.
-/// Returns the number of templates written. Shared by all three export
-/// commands, which differ only in how they select the template set.
+/// Returns the number of templates written. Caller supplies the in-memory set
+/// (TS is write-authority; do not reload from disk here).
 fn write_export(path: &str, templates: Vec<Template>) -> Result<usize, String> {
     let count = templates.len();
     let file = ExportFile {
@@ -46,46 +45,11 @@ pub fn save_app_data(data: AppData, store: tauri::State<'_, Store>) -> Result<()
     store.save(&data)
 }
 
+/// Write `templates` to an export file at `path`. Templates come from the
+/// frontend store — not from a disk reload — so export matches memory.
 #[tauri::command]
-pub fn export_templates(path: String, store: tauri::State<'_, Store>) -> Result<usize, String> {
-    let data = store.load()?.unwrap_or_else(|| AppData::new(Vec::new()));
-    write_export(&path, data.templates)
-}
-
-#[tauri::command]
-pub fn export_template(
-    id: String,
-    path: String,
-    store: tauri::State<'_, Store>,
-) -> Result<(), String> {
-    let data = store
-        .load()?
-        .ok_or_else(|| "no templates file on disk".to_string())?;
-    let tpl = data
-        .templates
-        .into_iter()
-        .find(|t| t.id == id)
-        .ok_or_else(|| format!("template {id} not found"))?;
-    write_export(&path, vec![tpl])?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn export_templates_subset(
-    ids: Vec<String>,
-    path: String,
-    store: tauri::State<'_, Store>,
-) -> Result<usize, String> {
-    let data = store
-        .load()?
-        .ok_or_else(|| "no templates file on disk".to_string())?;
-    let want: HashSet<String> = ids.into_iter().collect();
-    let subset: Vec<Template> = data
-        .templates
-        .into_iter()
-        .filter(|t| want.contains(&t.id))
-        .collect();
-    write_export(&path, subset)
+pub fn export_templates(path: String, templates: Vec<Template>) -> Result<usize, String> {
+    write_export(&path, templates)
 }
 
 /// Read and parse a templates export file. Does not touch app data — the
@@ -107,12 +71,14 @@ pub fn list_template_backups(store: tauri::State<'_, Store>) -> Result<Vec<Backu
     store.list_template_backups()
 }
 
+/// Read templates from a named backup. Does not write — the frontend persists
+/// via [`save_app_data`] (mirrors import).
 #[tauri::command]
-pub fn restore_template_backup(
+pub fn read_template_backup(
     name: String,
     store: tauri::State<'_, Store>,
-) -> Result<AppData, String> {
-    store.restore_template_backup(&name)
+) -> Result<Vec<Template>, String> {
+    store.read_template_backup(&name)
 }
 
 #[tauri::command]

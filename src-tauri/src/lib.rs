@@ -13,9 +13,8 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WindowEvent};
 static TRANSLATOR_WAS_OPEN: AtomicBool = AtomicBool::new(false);
 
 use commands::data::{
-    export_template, export_templates, export_templates_subset, list_template_backups,
-    load_app_data, open_data_dir, open_path, read_templates_export, restore_template_backup,
-    save_app_data,
+    export_templates, list_template_backups, load_app_data, open_data_dir, open_path,
+    read_template_backup, read_templates_export, save_app_data,
 };
 use commands::translate::translate_text;
 use hotkey::set_hotkey;
@@ -114,9 +113,8 @@ fn is_satellite_open(app: &tauri::AppHandle, label: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Show the preview window parked to the left of the main window. If the
-/// preview window is already visible, this is a no-op (selection updates are
-/// delivered via events from the frontend, not by re-opening the window).
+/// Show the preview window parked to the left of the main window.
+/// Always repositions/shows via `park_satellite` (frontend gates reopen).
 #[tauri::command]
 fn open_preview_window(app: tauri::AppHandle) -> Result<(), String> {
     park_satellite(&app, "preview", Placement::LeftOfMain)
@@ -174,9 +172,14 @@ fn geometry_on_some_monitor(window: &tauri::WebviewWindow, geo: &WindowGeometry)
     })
 }
 
-/// Read the main window's current outer geometry and persist it into settings.
-/// Skipped if the window is hidden — `outer_position` then reflects the
-/// last-visible state, which we don't want to overwrite.
+/// Persist main-window outer geometry into settings.
+///
+/// **Intentional Rust full-`AppData` RMW** (load → patch `window_geometry` →
+/// save). Close-time / tray hide runs here in Rust before the webview can
+/// reliably round-trip a TS `persist`. Concurrent with TS `persist` this can
+/// race; product constraint: do not move close-time geometry to the frontend
+/// without a durable “geometry dirty” channel. Keep this as the sole
+/// intentional Rust settings writer alongside `reset_window_position`.
 pub(crate) fn save_window_geometry(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -232,18 +235,14 @@ pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
         return;
     };
     save_window_geometry(app);
-    if let Some(preview) = app.get_webview_window("preview") {
-        if preview.is_visible().unwrap_or(false) {
-            let _ = preview.hide();
-            let _ = app.emit("preview-closed", ());
-        }
+    if is_satellite_open(app, "preview") {
+        let _ = close_satellite(app, "preview");
+        let _ = app.emit("preview-closed", ());
     }
     // Hide translator silently — it will be re-shown when the main window comes back.
     // Don't emit translator-closed here so the frontend toggle state stays open.
-    if let Some(translator) = app.get_webview_window("translator") {
-        TRANSLATOR_WAS_OPEN.store(translator.is_visible().unwrap_or(false), Ordering::SeqCst);
-        let _ = translator.hide();
-    }
+    TRANSLATOR_WAS_OPEN.store(is_satellite_open(app, "translator"), Ordering::SeqCst);
+    let _ = close_satellite(app, "translator");
     let _ = main.hide();
 }
 
@@ -339,11 +338,9 @@ pub fn run() {
             load_app_data,
             save_app_data,
             export_templates,
-            export_template,
-            export_templates_subset,
             read_templates_export,
             list_template_backups,
-            restore_template_backup,
+            read_template_backup,
             set_hotkey,
             open_data_dir,
             open_path,
