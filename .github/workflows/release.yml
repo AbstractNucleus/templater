@@ -122,6 +122,21 @@ jobs:
         with:
           path: artifacts
 
+      # Tauri names both arches Templater.app.tar.gz; GitHub releases need
+      # unique basenames, and latest.json download URLs use the basename.
+      - name: Disambiguate macOS updater tarballs
+        run: |
+          for dir in artifacts/bundle-macos-*; do
+            [ -d "$dir/macos" ] || continue
+            arch="${dir##*bundle-macos-}"
+            for f in "$dir"/macos/Templater.app.tar.gz "$dir"/macos/Templater.app.tar.gz.sig; do
+              [ -e "$f" ] || continue
+              name=$(basename "$f")
+              mv "$f" "$dir/macos/${name/Templater.app/Templater_${arch}.app}"
+            done
+          done
+          ls -la artifacts/bundle-macos-*/macos/ || true
+
       - name: Generate latest.json
         run: |
           VERSION=$(node -p "require(\"./src-tauri/tauri.conf.json\").version")
