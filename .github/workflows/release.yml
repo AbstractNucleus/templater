@@ -29,6 +29,9 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             label: macos-aarch64
+          - os: macos-14
+            target: x86_64-apple-darwin
+            label: macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -54,19 +57,21 @@ jobs:
       # macOS: build .app + updater tarball first. Tauri bundles DMG before the
       # updater artifact, and bundle_dmg.sh flakes on GHA (hdiutil) — a DMG
       # failure would otherwise abort the job with no updater payload at all.
+      # Always pass --target so Intel macOS cross-compiles on macos-14 and
+      # artifacts land under target/<triple>/release/ on every platform.
       - name: Build app (Windows)
         if: startsWith(matrix.os, 'windows')
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri -- build
+        run: npm run tauri -- build --target ${{ matrix.target }}
 
       - name: Build app (macOS)
         if: startsWith(matrix.os, 'macos')
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri -- build --bundles app
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles app
 
       - name: Bundle DMG (best-effort)
         if: startsWith(matrix.os, 'macos')
@@ -74,7 +79,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri -- build --bundles dmg
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles dmg
 
       - name: Upload bundle artifacts
         uses: actions/upload-artifact@v4
@@ -82,11 +87,11 @@ jobs:
           name: bundle-${{ matrix.label }}
           if-no-files-found: error
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.exe.sig
-            src-tauri/target/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
-            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
 
   publish:
     needs: build
@@ -110,8 +115,9 @@ jobs:
             exit 1
           fi
 
-      # Keep per-matrix artifact dirs (bundle-macos-aarch64/…) so arch is
-      # visible in the path — Tauri's default Templater.app.tar.gz omits it.
+      # Keep per-matrix artifact dirs (bundle-macos-aarch64/,
+      # bundle-macos-x86_64/, …) so arch is visible in the path — Tauri's
+      # default Templater.app.tar.gz omits it.
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
