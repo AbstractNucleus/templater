@@ -17,7 +17,9 @@ Grab the latest installer or portable build from the [releases page](https://git
 
 ## Privacy
 
-Everything stays on your machine. Templates and settings are stored as local JSON files in the OS app-data directory. No telemetry, no analytics, no account.
+Templates and settings stay on your machine as local JSON files in the OS app-data directory. No telemetry, no analytics, no account.
+
+Optional translation uses OpenRouter: when you run Translate, the selected text and your API key are sent to `https://openrouter.ai` for that request only. Nothing else is uploaded.
 
 ---
 
@@ -37,7 +39,7 @@ SvelteKit (webview)  ──invoke──>  Tauri Rust backend
                      <─result──
 ```
 
-Svelte frontend (`src/`) talks to the Rust backend (`src-tauri/`) via Tauri `invoke()` and events. Local storage is two JSON files in the OS app-data dir with automatic timestamped backups.
+Svelte frontend (`src/`) talks to the Rust backend (`src-tauri/`) via Tauri `invoke()` and events. Local storage is `catalog.json` (templates + coupled metadata) and `preferences.json` in the OS app-data dir, with timestamped catalog backups.
 
 ### Keyboard shortcuts
 

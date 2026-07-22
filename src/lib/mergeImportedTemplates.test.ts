@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeImportedTemplates } from "./mergeImportedTemplates";
+import { ImportValidationError, mergeImportedTemplates } from "./mergeImportedTemplates";
 import type { Template } from "./types";
 
 function mk(partial: Partial<Template> & { id: string; name: string }): Template {
@@ -49,5 +49,30 @@ describe("mergeImportedTemplates", () => {
     expect(result.templates[0].history).toEqual([
       { saved_at: now, opening: "Hi", body: "old", tags: [] },
     ]);
+  });
+
+  it("normalizes tags on import", () => {
+    const result = mergeImportedTemplates(
+      [],
+      [mk({ id: "n", name: "N", tags: [" Email ", "email"] })],
+      false,
+    );
+    expect(result.templates[0].tags).toEqual(["email"]);
+  });
+
+  it("rejects empty ids in the import file", () => {
+    expect(() =>
+      mergeImportedTemplates([], [mk({ id: "", name: "Bad" })], false),
+    ).toThrow(ImportValidationError);
+  });
+
+  it("rejects duplicate ids within the import file", () => {
+    expect(() =>
+      mergeImportedTemplates(
+        [],
+        [mk({ id: "dup", name: "A" }), mk({ id: "dup", name: "B" })],
+        false,
+      ),
+    ).toThrow(/duplicate template id "dup"/);
   });
 });

@@ -125,13 +125,13 @@ class Popouts {
       void emit("preview-payload", this.buildPreviewPayload());
     });
     const unlistenCopy = listen<{ templateId: string }>("preview-copy-success", (e) => {
-      void templatesStore.recordCopy(e.payload.templateId);
+      void templatesStore.recordCopy(e.payload.templateId).catch(() => {});
     });
     const unlistenPlaceholder = listen<{
       templateId: string;
       values: Record<string, string>;
     }>("preview-placeholder-change", (e) => {
-      void templatesStore.recordPlaceholderValues(e.payload.templateId, e.payload.values);
+      void templatesStore.recordPlaceholderValues(e.payload.templateId, e.payload.values).catch(() => {});
     });
     const unlistenClosed = listen("preview-closed", () => {
       this.previewOpen = false;

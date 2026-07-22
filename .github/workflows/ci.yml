@@ -1,6 +1,6 @@
 name: CI
 
-# Runs cargo check, svelte-check, and vitest on every push and PR to main.
+# Runs cargo test, svelte-check, vitest, and production build on every push and PR to main.
 # Platform installer builds live in release.yml (tag-driven).
 
 on:
@@ -43,8 +43,8 @@ jobs:
             libssl-dev \
             build-essential
 
-      - name: cargo check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: npm ci (root)
         run: npm ci
@@ -54,3 +54,6 @@ jobs:
 
       - name: vitest
         run: npm test
+
+      - name: production build
+        run: npm run build

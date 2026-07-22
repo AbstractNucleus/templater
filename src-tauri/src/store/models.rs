@@ -90,6 +90,76 @@ pub enum SortMode {
     NeverUsed,
 }
 
+/// Template-coupled metadata stored atomically with templates in `catalog.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct CatalogMeta {
+    #[serde(default)]
+    pub placeholder_values: HashMap<String, HashMap<String, String>>,
+    #[serde(default)]
+    pub sort_mode: SortMode,
+    #[serde(default)]
+    pub tag_order: Vec<String>,
+}
+
+/// Independent preferences stored in `preferences.json` (patched, not catalog-backed-up).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Preferences {
+    pub always_on_top_default: bool,
+    pub global_hotkey: String,
+    #[serde(default)]
+    pub start_minimised_to_tray: bool,
+    #[serde(default)]
+    pub window_geometry: Option<WindowGeometry>,
+    #[serde(default)]
+    pub close_hint_shown: bool,
+    #[serde(default)]
+    pub global_signature: String,
+    #[serde(default)]
+    pub theme: Theme,
+    #[serde(default)]
+    pub mode: Mode,
+    #[serde(default = "default_zoom")]
+    pub zoom: f32,
+    #[serde(default)]
+    pub column_widths: ColumnWidths,
+    #[serde(default)]
+    pub onboarding_complete: bool,
+    #[serde(default)]
+    pub snippets: HashMap<String, String>,
+    #[serde(default)]
+    pub minimal: bool,
+    #[serde(default = "default_preview_hotkey")]
+    pub preview_hotkey: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default = "default_translation_model")]
+    pub translation_model: String,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            always_on_top_default: false,
+            global_hotkey: DEFAULT_HOTKEY.to_string(),
+            start_minimised_to_tray: false,
+            window_geometry: None,
+            close_hint_shown: false,
+            global_signature: String::new(),
+            theme: Theme::default(),
+            mode: Mode::default(),
+            zoom: default_zoom(),
+            column_widths: ColumnWidths::default(),
+            onboarding_complete: false,
+            snippets: HashMap::new(),
+            minimal: false,
+            preview_hotkey: default_preview_hotkey(),
+            openrouter_api_key: String::new(),
+            translation_model: default_translation_model(),
+        }
+    }
+}
+
+/// Merged in-memory / IPC settings (preferences + catalog meta). Disk splits them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub always_on_top_default: bool,
@@ -128,6 +198,61 @@ pub struct Settings {
     pub openrouter_api_key: String,
     #[serde(default = "default_translation_model")]
     pub translation_model: String,
+}
+
+impl Settings {
+    pub fn catalog_meta(&self) -> CatalogMeta {
+        CatalogMeta {
+            placeholder_values: self.placeholder_values.clone(),
+            sort_mode: self.sort_mode,
+            tag_order: self.tag_order.clone(),
+        }
+    }
+
+    pub fn preferences(&self) -> Preferences {
+        Preferences {
+            always_on_top_default: self.always_on_top_default,
+            global_hotkey: self.global_hotkey.clone(),
+            start_minimised_to_tray: self.start_minimised_to_tray,
+            window_geometry: self.window_geometry,
+            close_hint_shown: self.close_hint_shown,
+            global_signature: self.global_signature.clone(),
+            theme: self.theme,
+            mode: self.mode,
+            zoom: self.zoom,
+            column_widths: self.column_widths,
+            onboarding_complete: self.onboarding_complete,
+            snippets: self.snippets.clone(),
+            minimal: self.minimal,
+            preview_hotkey: self.preview_hotkey.clone(),
+            openrouter_api_key: self.openrouter_api_key.clone(),
+            translation_model: self.translation_model.clone(),
+        }
+    }
+
+    pub fn from_parts(preferences: Preferences, meta: CatalogMeta) -> Self {
+        Self {
+            always_on_top_default: preferences.always_on_top_default,
+            global_hotkey: preferences.global_hotkey,
+            start_minimised_to_tray: preferences.start_minimised_to_tray,
+            window_geometry: preferences.window_geometry,
+            close_hint_shown: preferences.close_hint_shown,
+            global_signature: preferences.global_signature,
+            theme: preferences.theme,
+            mode: preferences.mode,
+            zoom: preferences.zoom,
+            column_widths: preferences.column_widths,
+            placeholder_values: meta.placeholder_values,
+            sort_mode: meta.sort_mode,
+            tag_order: meta.tag_order,
+            onboarding_complete: preferences.onboarding_complete,
+            snippets: preferences.snippets,
+            minimal: preferences.minimal,
+            preview_hotkey: preferences.preview_hotkey,
+            openrouter_api_key: preferences.openrouter_api_key,
+            translation_model: preferences.translation_model,
+        }
+    }
 }
 
 fn default_zoom() -> f32 {

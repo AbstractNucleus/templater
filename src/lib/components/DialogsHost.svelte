@@ -23,8 +23,42 @@
   const settings = $derived(templatesStore.settings);
   const settingsTagCounts = $derived(orderedTagCounts(templates, settings.tag_order));
 
-  async function handleSettingsUpdate(next: Settings): Promise<void> {
-    await templatesStore.persist(templatesStore.templates, next);
+  /** Coalesce settings keystrokes — preference patches only, after quiet period. */
+  const PREFS_DEBOUNCE_MS = 400;
+  let prefsTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingPrefs: Settings | null = null;
+
+  function handleSettingsUpdate(next: Settings): void {
+    templatesStore.settings = next;
+    pendingPrefs = next;
+    if (prefsTimer) clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(() => {
+      prefsTimer = null;
+      const s = pendingPrefs;
+      pendingPrefs = null;
+      if (!s) return;
+      void templatesStore.persist(templatesStore.templates, s).catch(() => {});
+    }, PREFS_DEBOUNCE_MS);
+  }
+
+  async function flushPendingPrefs(): Promise<void> {
+    if (prefsTimer) {
+      clearTimeout(prefsTimer);
+      prefsTimer = null;
+    }
+    const s = pendingPrefs;
+    pendingPrefs = null;
+    if (!s) return;
+    try {
+      await templatesStore.persist(templatesStore.templates, s);
+    } catch {
+      /* appErrors already set by persist */
+    }
+  }
+
+  async function closeSettings(): Promise<void> {
+    await flushPendingPrefs();
+    uiDialogs.settingsOpen = false;
   }
 </script>
 
@@ -33,18 +67,20 @@
     {settings}
     currentVersion={appVersion}
     tagCounts={settingsTagCounts}
-    onClose={() => (uiDialogs.settingsOpen = false)}
+    onClose={() => void closeSettings()}
     onUpdate={handleSettingsUpdate}
     onExportTemplates={handleExportTemplates}
     onImportTemplates={handleImportTemplates}
     onCheckUpdate={checkForUpdate}
     onListBackups={listTemplateBackups}
-    onRestoreBackup={(name) => templatesStore.handleRestoreBackup(name)}
-    onRenameTag={(from, to) => templatesStore.handleRenameTag(from, to)}
-    onDeleteTag={(tag) => templatesStore.handleDeleteTag(tag)}
+    onRestoreBackup={(name) => templatesStore.handleRestoreBackup(name).catch(() => {})}
+    onRenameTag={(from, to) => templatesStore.handleRenameTag(from, to).catch(() => {})}
+    onDeleteTag={(tag) => templatesStore.handleDeleteTag(tag).catch(() => {})}
     onOpenCheatSheet={() => {
-      uiDialogs.settingsOpen = false;
-      uiDialogs.cheatSheetOpen = true;
+      void flushPendingPrefs().then(() => {
+        uiDialogs.settingsOpen = false;
+        uiDialogs.cheatSheetOpen = true;
+      });
     }}
   />
 {/if}
@@ -64,7 +100,7 @@
     confirmLabel="Delete {selectionStore.bulkSelectedIds.size}"
     danger
     ariaLabel="Confirm bulk delete"
-    onConfirm={() => void uiDialogs.confirmBulkDelete()}
+    onConfirm={() => void uiDialogs.confirmBulkDelete().catch(() => {})}
     onCancel={() => (uiDialogs.bulkDeleteConfirmOpen = false)}
   />
 {/if}
@@ -78,7 +114,7 @@
     bind:inputValue={uiDialogs.bulkTagDraft}
     inputPlaceholder="tag name"
     confirmDisabled={uiDialogs.bulkTagDraft.trim().length === 0}
-    onConfirm={() => void uiDialogs.confirmBulkTag()}
+    onConfirm={() => void uiDialogs.confirmBulkTag().catch(() => {})}
     onCancel={() => uiDialogs.closeBulkTagPrompt()}
     onDismiss={() => uiDialogs.closeBulkTagPrompt()}
   />
@@ -94,7 +130,7 @@
     bind:inputValue={uiDialogs.bulkTagDraft}
     inputPlaceholder="tag name"
     confirmDisabled={uiDialogs.bulkTagDraft.trim().length === 0}
-    onConfirm={() => void uiDialogs.confirmBulkRemoveTag()}
+    onConfirm={() => void uiDialogs.confirmBulkRemoveTag().catch(() => {})}
     onCancel={() => uiDialogs.closeBulkRemoveTagPrompt()}
     onDismiss={() => uiDialogs.closeBulkRemoveTagPrompt()}
   />
@@ -116,7 +152,7 @@
     message="Ctrl+Z will restore it."
     confirmLabel="Delete"
     danger
-    onConfirm={() => void uiDialogs.confirmDelete()}
+    onConfirm={() => void uiDialogs.confirmDelete().catch(() => {})}
     onCancel={() => (uiDialogs.deleteConfirmTarget = null)}
   />
 {/if}

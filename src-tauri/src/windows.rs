@@ -161,7 +161,7 @@ pub fn geometry_on_some_monitor(window: &WebviewWindow, geo: &WindowGeometry) ->
     })
 }
 
-/// Persist main-window outer geometry into settings.json only.
+/// Persist main-window outer geometry into preferences.json only.
 pub fn save_window_geometry(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;

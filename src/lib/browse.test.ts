@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBrowseListModel,
   buildTemplateList,
   canReorder,
   filterByTags,
@@ -183,6 +184,52 @@ describe("buildTemplateList", () => {
       query: "",
     });
     expect(hits.map((h) => h.template.id)).toEqual(["k"]);
+  });
+});
+
+describe("buildBrowseListModel", () => {
+  const base = {
+    sortMode: "manual" as const,
+    selectedTagIds: new Set<string>(),
+    excludedTagIds: new Set<string>(),
+    combinator: "and" as const,
+    query: "",
+    collapsedFolders: new Set<string>(),
+  };
+
+  it("uses flat hit order when there are no folders", () => {
+    const model = buildBrowseListModel({
+      ...base,
+      templates: [mk({ id: "a", name: "A" }), mk({ id: "b", name: "B" })],
+    });
+    expect(model.groups).toBeNull();
+    expect(model.visibleIds).toEqual(["a", "b"]);
+  });
+
+  it("flattens folder groups for visibleIds (not raw hit order)", () => {
+    const model = buildBrowseListModel({
+      ...base,
+      templates: [
+        mk({ id: "a", name: "A", folder: "F1" }),
+        mk({ id: "b", name: "B", folder: null }),
+        mk({ id: "c", name: "C", folder: "F1" }),
+      ],
+    });
+    expect(model.groups?.map((g) => g.folder)).toEqual(["F1", null]);
+    // Render order groups F1 then Ungrouped: a, c, b — not a, b, c.
+    expect(model.visibleIds).toEqual(["a", "c", "b"]);
+  });
+
+  it("omits collapsed folders from visibleIds", () => {
+    const model = buildBrowseListModel({
+      ...base,
+      collapsedFolders: new Set(["F1"]),
+      templates: [
+        mk({ id: "a", name: "A", folder: "F1" }),
+        mk({ id: "b", name: "B", folder: null }),
+      ],
+    });
+    expect(model.visibleIds).toEqual(["b"]);
   });
 });
 

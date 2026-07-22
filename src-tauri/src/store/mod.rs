@@ -1,51 +1,67 @@
 //! On-disk app data store. Two JSON files in the app data dir:
 //!
-//! - `templates.json` — `{ "version": 1, "templates": [...] }`
-//! - `settings.json`  — `{ "version": 1, "settings": {...} }`
+//! - `catalog.json` — `{ version, templates, placeholder_values, sort_mode, tag_order }`
+//! - `preferences.json` — `{ version, preferences: {...} }`
 //!
-//! The in-memory shape exposed to callers is the merged [`AppData`].
-//! See [`persist`] for atomic save / backup / parse helpers.
+//! Legacy `templates.json` / `settings.json` are read on load and retired after
+//! the first successful save of the new layout. The in-memory shape exposed to
+//! callers is the merged [`AppData`].
 
 mod models;
 mod persist;
 
 #[allow(unused_imports)] // public API re-exports for commands / future callers
 pub use models::{
-    AppData, BackupEntry, ColumnWidths, LoadOutcome, Mode, Settings, SortMode, Template,
-    TemplateVersion, Theme, WindowGeometry, DATA_VERSION, DEFAULT_HOTKEY,
+    AppData, BackupEntry, CatalogMeta, ColumnWidths, LoadOutcome, Mode, Preferences, Settings,
+    SortMode, Template, TemplateVersion, Theme, WindowGeometry, DATA_VERSION, DEFAULT_HOTKEY,
 };
 pub use persist::parse_templates_json;
-pub(crate) use persist::{commit_temp as commit_temp_file, prepare_temp as prepare_temp_file};
+pub(crate) use persist::commit_temp as commit_temp_file;
 
 use persist::{
-    clear_corrupt_lock, collect_backups, commit_temp, corrupt_lock_present, prepare_temp,
-    quarantine_file, read_settings_file, read_templates_file, write_corrupt_lock,
-    write_settings_file, write_settings_only, SettingsFileWrite, TemplatesFileWrite,
+    clear_corrupt_lock, collect_backups, corrupt_lock_present, prepare_temp, quarantine_file,
+    read_catalog_file, read_legacy_settings_file, read_preferences_file, retire_legacy_files,
+    write_catalog_file, write_corrupt_lock, write_preferences_file, write_preferences_only,
+    ParsedCatalog,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+/// Export / one-off writers: backup existing target then write temp.
+pub(crate) fn prepare_temp_file<F>(path: &Path, render: F) -> Result<PathBuf, String>
+where
+    F: FnOnce(&mut std::fs::File) -> Result<(), String>,
+{
+    prepare_temp(path, true, render)
+}
+
 struct StoreInner {
-    templates_path: PathBuf,
-    settings_path: PathBuf,
-    /// When set, [`Store::save`] refuses full AppData writes so defaults cannot
-    /// overwrite a quarantined settings file. Cleared by [`Store::reset_corrupt_settings`].
+    data_dir: PathBuf,
+    catalog_path: PathBuf,
+    preferences_path: PathBuf,
+    legacy_templates_path: PathBuf,
+    legacy_settings_path: PathBuf,
+    /// When set, catalog/preferences saves refuse writes so defaults cannot
+    /// overwrite a quarantined preferences file. Cleared by reset.
     settings_corrupt: bool,
 }
 
-/// On-disk app data. All load/save paths take the mutex so FE `save_app_data`
-/// cannot interleave with Rust settings-only geometry writes.
+/// On-disk app data. All load/save paths take the mutex so FE saves cannot
+/// interleave with Rust preferences-only geometry writes.
 pub struct Store {
     inner: Mutex<StoreInner>,
 }
 
 impl Store {
-    pub fn new(templates_path: PathBuf, settings_path: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf) -> Self {
         Self {
             inner: Mutex::new(StoreInner {
-                templates_path,
-                settings_path,
+                catalog_path: data_dir.join("catalog.json"),
+                preferences_path: data_dir.join("preferences.json"),
+                legacy_templates_path: data_dir.join("templates.json"),
+                legacy_settings_path: data_dir.join("settings.json"),
+                data_dir,
                 settings_corrupt: false,
             }),
         }
@@ -59,68 +75,83 @@ impl Store {
 
     pub fn load(&self) -> Result<LoadOutcome, String> {
         let mut guard = self.lock()?;
-        let templates_exists = guard.templates_path.exists();
-        let settings_exists = guard.settings_path.exists();
-        if !templates_exists && !settings_exists {
+        let has_catalog = guard.catalog_path.exists() || guard.legacy_templates_path.exists();
+        let has_prefs = guard.preferences_path.exists() || guard.legacy_settings_path.exists();
+        if !has_catalog && !has_prefs {
+            if corrupt_lock_present(&guard.preferences_path) {
+                guard.settings_corrupt = true;
+                return Ok(LoadOutcome::SettingsCorrupt {
+                    templates: vec![],
+                    message: "preferences were corrupt and quarantined; reset required"
+                        .to_string(),
+                });
+            }
             guard.settings_corrupt = false;
             return Ok(LoadOutcome::Empty);
         }
 
-        let templates_file = if templates_exists {
-            Some(read_templates_file(&guard.templates_path)?)
+        let using_new_catalog = guard.catalog_path.exists();
+        let catalog = if using_new_catalog {
+            read_catalog_file(&guard.catalog_path)?
+        } else if guard.legacy_templates_path.exists() {
+            read_catalog_file(&guard.legacy_templates_path)?
         } else {
-            None
+            ParsedCatalog::default()
         };
-        let templates = templates_file
-            .as_ref()
-            .map(|t| t.templates.clone())
-            .unwrap_or_default();
+        let templates = catalog.templates.clone();
 
-        if settings_exists {
-            match read_settings_file(&guard.settings_path) {
-                Ok(f) => {
-                    clear_corrupt_lock(&guard.settings_path);
+        if guard.preferences_path.exists() {
+            match read_preferences_file(&guard.preferences_path) {
+                Ok((_, preferences)) => {
+                    clear_corrupt_lock(&guard.preferences_path);
                     guard.settings_corrupt = false;
-                    if let Some(tf) = &templates_file {
-                        if tf.version != f.version {
-                            eprintln!(
-                                "warning: dual-file version mismatch (templates.json={}, settings.json={}); continuing with in-memory merge",
-                                tf.version, f.version
-                            );
-                        }
-                    }
                     Ok(LoadOutcome::Ready {
                         data: AppData {
                             version: DATA_VERSION,
                             templates,
-                            settings: f.settings,
+                            settings: Settings::from_parts(preferences, catalog.meta),
                         },
                     })
                 }
-                Err(e) => {
-                    let message = e.clone();
-                    if let Err(q) = quarantine_file(&guard.settings_path) {
-                        eprintln!("failed to quarantine corrupt settings.json: {q}");
-                    }
-                    if let Err(q) = write_corrupt_lock(&guard.settings_path) {
-                        eprintln!("failed to write settings corrupt-lock: {q}");
-                    }
-                    guard.settings_corrupt = true;
-                    eprintln!("settings.json unreadable (quarantined): {message}");
-                    Ok(LoadOutcome::SettingsCorrupt { templates, message })
-                }
+                Err(e) => Self::preferences_read_error(&mut guard, templates, e),
             }
-        } else if corrupt_lock_present(&guard.settings_path) {
+        } else if guard.legacy_settings_path.exists() {
+            match read_legacy_settings_file(&guard.legacy_settings_path) {
+                Ok((_, legacy)) => {
+                    clear_corrupt_lock(&guard.preferences_path);
+                    guard.settings_corrupt = false;
+                    let meta = if using_new_catalog {
+                        catalog.meta
+                    } else {
+                        legacy.catalog_meta()
+                    };
+                    Ok(LoadOutcome::Ready {
+                        data: AppData {
+                            version: DATA_VERSION,
+                            templates,
+                            settings: Settings::from_parts(legacy.preferences(), meta),
+                        },
+                    })
+                }
+                Err(e) => Self::preferences_read_error(&mut guard, templates, e),
+            }
+        } else if corrupt_lock_present(&guard.preferences_path) {
             guard.settings_corrupt = true;
             Ok(LoadOutcome::SettingsCorrupt {
                 templates,
-                message: "settings.json was corrupt and quarantined; reset required"
-                    .to_string(),
+                message: "preferences were corrupt and quarantined; reset required".to_string(),
             })
         } else {
-            let settings = templates_file
-                .and_then(|t| t.legacy_settings)
-                .unwrap_or_default();
+            let settings = if let Some(legacy) = catalog.legacy_settings {
+                let meta = if using_new_catalog {
+                    catalog.meta
+                } else {
+                    legacy.catalog_meta()
+                };
+                Settings::from_parts(legacy.preferences(), meta)
+            } else {
+                Settings::from_parts(Preferences::default(), catalog.meta)
+            };
             guard.settings_corrupt = false;
             Ok(LoadOutcome::Ready {
                 data: AppData {
@@ -132,42 +163,77 @@ impl Store {
         }
     }
 
-    /// Persist templates + settings. Inbound `data.version` is ignored; both
-    /// files are stamped with [`DATA_VERSION`] (FE does not own the disk schema).
+    fn preferences_read_error(
+        guard: &mut StoreInner,
+        templates: Vec<Template>,
+        e: String,
+    ) -> Result<LoadOutcome, String> {
+        if e.contains("unsupported schema version") {
+            return Err(e);
+        }
+        let message = e.clone();
+        let quarantine_target = if guard.preferences_path.exists() {
+            guard.preferences_path.clone()
+        } else {
+            guard.legacy_settings_path.clone()
+        };
+        if let Err(q) = quarantine_file(&quarantine_target) {
+            eprintln!("failed to quarantine preferences: {q}");
+        }
+        if let Err(q) = write_corrupt_lock(&guard.preferences_path) {
+            eprintln!("failed to write preferences corrupt-lock: {q}");
+        }
+        guard.settings_corrupt = true;
+        eprintln!("preferences unreadable (quarantined): {message}");
+        Ok(LoadOutcome::SettingsCorrupt { templates, message })
+    }
+
+    /// Write both catalog and preferences (bootstrap / full sync).
     pub fn save(&self, data: &AppData) -> Result<(), String> {
+        self.save_catalog(&data.templates, &data.settings.catalog_meta())?;
+        self.save_preferences(&data.settings.preferences())?;
+        Ok(())
+    }
+
+    /// Atomic catalog commit: templates + coupled metadata. Does not touch preferences.
+    pub fn save_catalog(&self, templates: &[Template], meta: &CatalogMeta) -> Result<(), String> {
         let guard = self.lock()?;
         if guard.settings_corrupt {
             return Err(
                 "settings_corrupt: refuse save until settings are reset".to_string(),
             );
         }
-        if let Some(parent) = guard.templates_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(&guard.data_dir)
+            .map_err(|e| format!("mkdir {}: {e}", guard.data_dir.display()))?;
+        write_catalog_file(&guard.catalog_path, templates, meta)?;
+        if guard.preferences_path.exists()
+            && (guard.legacy_templates_path.exists() || guard.legacy_settings_path.exists())
+        {
+            retire_legacy_files(&guard.data_dir);
         }
-
-        let templates_tmp = prepare_temp(&guard.templates_path, |w| {
-            let payload = TemplatesFileWrite {
-                version: DATA_VERSION,
-                templates: &data.templates,
-            };
-            serde_json::to_writer_pretty(w, &payload).map_err(|e| e.to_string())
-        })?;
-
-        let settings_tmp = prepare_temp(&guard.settings_path, |w| {
-            let payload = SettingsFileWrite {
-                version: DATA_VERSION,
-                settings: &data.settings,
-            };
-            serde_json::to_writer_pretty(w, &payload).map_err(|e| e.to_string())
-        })?;
-
-        commit_temp(&templates_tmp, &guard.templates_path)?;
-        commit_temp(&settings_tmp, &guard.settings_path)?;
-
         Ok(())
     }
 
-    /// OpenRouter key + model from on-disk settings (never trust FE IPC for the key).
+    /// Preferences-only commit. Does not rewrite or back up the catalog.
+    pub fn save_preferences(&self, preferences: &Preferences) -> Result<(), String> {
+        let guard = self.lock()?;
+        if guard.settings_corrupt {
+            return Err(
+                "settings_corrupt: refuse save until settings are reset".to_string(),
+            );
+        }
+        fs::create_dir_all(&guard.data_dir)
+            .map_err(|e| format!("mkdir {}: {e}", guard.data_dir.display()))?;
+        write_preferences_file(&guard.preferences_path, preferences)?;
+        if guard.catalog_path.exists()
+            && (guard.legacy_templates_path.exists() || guard.legacy_settings_path.exists())
+        {
+            retire_legacy_files(&guard.data_dir);
+        }
+        Ok(())
+    }
+
+    /// OpenRouter key + model from on-disk preferences (never trust FE IPC for the key).
     pub fn translation_config(&self) -> Result<(String, String), String> {
         let guard = self.lock()?;
         if guard.settings_corrupt {
@@ -175,49 +241,76 @@ impl Store {
                 "settings_corrupt: configure translation after resetting settings".to_string(),
             );
         }
-        let settings = if guard.settings_path.exists() {
-            read_settings_file(&guard.settings_path)?.settings
-        } else {
-            Settings::default()
-        };
-        Ok((settings.openrouter_api_key, settings.translation_model))
+        let preferences = Self::load_preferences_unlocked(&guard)?;
+        Ok((
+            preferences.openrouter_api_key,
+            preferences.translation_model,
+        ))
     }
 
-    /// Patch `window_geometry` in `settings.json` only — never rewrites templates.
+    fn load_preferences_unlocked(guard: &StoreInner) -> Result<Preferences, String> {
+        if guard.preferences_path.exists() {
+            Ok(read_preferences_file(&guard.preferences_path)?.1)
+        } else if guard.legacy_settings_path.exists() {
+            Ok(read_legacy_settings_file(&guard.legacy_settings_path)?
+                .1
+                .preferences())
+        } else {
+            Ok(Preferences::default())
+        }
+    }
+
+    /// Patch `window_geometry` in preferences only — never rewrites catalog.
     pub fn set_window_geometry(&self, geo: Option<WindowGeometry>) -> Result<(), String> {
         let guard = self.lock()?;
         if guard.settings_corrupt {
             return Ok(());
         }
-        write_settings_only(&guard.settings_path, |settings| {
-            settings.window_geometry = geo;
+        // Seed preferences from legacy settings when migrating so a geometry
+        // write does not wipe other preference fields to defaults.
+        if !guard.preferences_path.exists() && guard.legacy_settings_path.exists() {
+            let prefs = read_legacy_settings_file(&guard.legacy_settings_path)?
+                .1
+                .preferences();
+            write_preferences_file(&guard.preferences_path, &prefs)?;
+        }
+        write_preferences_only(&guard.preferences_path, |preferences| {
+            preferences.window_geometry = geo;
         })
     }
 
-    /// After a corrupt settings load: write defaults and clear the save lock.
+    /// After a corrupt preferences load: write defaults and clear the save lock.
     pub fn reset_corrupt_settings(&self) -> Result<(), String> {
         let mut guard = self.lock()?;
-        if let Some(parent) = guard.settings_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
-        }
-        write_settings_file(&guard.settings_path, &Settings::default())?;
-        clear_corrupt_lock(&guard.settings_path);
+        fs::create_dir_all(&guard.data_dir)
+            .map_err(|e| format!("mkdir {}: {e}", guard.data_dir.display()))?;
+        write_preferences_file(&guard.preferences_path, &Preferences::default())?;
+        clear_corrupt_lock(&guard.preferences_path);
         guard.settings_corrupt = false;
         Ok(())
     }
 
-    /// Backups of `templates.json`, newest first.
+    /// Backups of `catalog.json` (and legacy `templates.json` if still present), newest first.
     pub fn list_template_backups(&self) -> Result<Vec<BackupEntry>, String> {
         let guard = self.lock()?;
-        let backups = collect_backups(&guard.templates_path)?;
+        let mut backups = collect_backups(&guard.catalog_path)?;
+        if guard.legacy_templates_path.exists() || backups.is_empty() {
+            let legacy = collect_backups(&guard.legacy_templates_path)?;
+            backups.extend(legacy);
+            backups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+        }
         let mut out = Vec::with_capacity(backups.len());
+        let mut seen = std::collections::HashSet::new();
         for (path, ts) in backups {
-            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             out.push(BackupEntry {
                 name,
                 timestamp_secs: ts,
@@ -233,11 +326,7 @@ impl Store {
             return Err(format!("invalid backup name: {name}"));
         }
         let guard = self.lock()?;
-        let parent = guard
-            .templates_path
-            .parent()
-            .ok_or_else(|| "templates path has no parent".to_string())?;
-        let backup_path = parent.join(name);
+        let backup_path = guard.data_dir.join(name);
         if !backup_path.exists() {
             return Err(format!("backup not found: {name}"));
         }
@@ -256,7 +345,7 @@ mod tests {
     use std::path::Path;
 
     fn temp_store(dir: &Path) -> Store {
-        Store::new(dir.join("templates.json"), dir.join("settings.json"))
+        Store::new(dir.to_path_buf())
     }
 
     #[test]
@@ -284,7 +373,7 @@ mod tests {
         }
         assert!(!settings_path.exists(), "corrupt file should be quarantined");
         assert!(
-            corrupt_lock_path(&settings_path).exists(),
+            corrupt_lock_path(&dir.join("preferences.json")).exists(),
             "corrupt-lock should remain for a second load"
         );
         match store.load().unwrap() {
@@ -303,7 +392,7 @@ mod tests {
         );
 
         store.reset_corrupt_settings().unwrap();
-        assert!(!corrupt_lock_path(&settings_path).exists());
+        assert!(!corrupt_lock_path(&dir.join("preferences.json")).exists());
         store
             .save(&AppData {
                 version: DATA_VERSION,
@@ -311,12 +400,14 @@ mod tests {
                 settings: Settings::default(),
             })
             .unwrap();
+        assert!(dir.join("catalog.json").exists());
+        assert!(dir.join("preferences.json").exists());
 
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn set_window_geometry_does_not_touch_templates() {
+    fn set_window_geometry_does_not_touch_catalog() {
         let dir = std::env::temp_dir().join(format!("templater-geo-{}", now_epoch_secs()));
         fs::create_dir_all(&dir).unwrap();
         let templates_path = dir.join("templates.json");
@@ -341,15 +432,125 @@ mod tests {
             }))
             .unwrap();
         let after = fs::read_to_string(&templates_path).unwrap();
-        assert_eq!(before, after, "geometry write must not rewrite templates.json");
+        assert_eq!(before, after, "geometry write must not rewrite catalog/templates");
+        assert!(!dir.join("catalog.json").exists());
 
-        let settings_text = fs::read_to_string(&settings_path).unwrap();
-        assert!(settings_text.contains("\"x\": 10"));
+        let prefs_text = fs::read_to_string(dir.join("preferences.json")).unwrap();
+        assert!(prefs_text.contains("\"x\": 10"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn version_mismatch_still_loads() {
+    fn save_catalog_does_not_rewrite_preferences() {
+        let dir = std::env::temp_dir().join(format!("templater-cat-{}", now_epoch_secs()));
+        fs::create_dir_all(&dir).unwrap();
+        let store = temp_store(&dir);
+        store
+            .save(&AppData {
+                version: DATA_VERSION,
+                templates: vec![],
+                settings: Settings {
+                    global_hotkey: "Alt+X".into(),
+                    ..Settings::default()
+                },
+            })
+            .unwrap();
+        let prefs_before = fs::read_to_string(dir.join("preferences.json")).unwrap();
+
+        store
+            .save_catalog(
+                &[],
+                &CatalogMeta {
+                    tag_order: vec!["a".into()],
+                    ..CatalogMeta::default()
+                },
+            )
+            .unwrap();
+
+        let prefs_after = fs::read_to_string(dir.join("preferences.json")).unwrap();
+        assert_eq!(prefs_before, prefs_after);
+        let catalog = fs::read_to_string(dir.join("catalog.json")).unwrap();
+        assert!(catalog.contains("\"tag_order\""));
+        assert!(catalog.contains("\"a\""));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_preferences_does_not_rewrite_catalog() {
+        let dir = std::env::temp_dir().join(format!("templater-pref-{}", now_epoch_secs()));
+        fs::create_dir_all(&dir).unwrap();
+        let store = temp_store(&dir);
+        store
+            .save(&AppData {
+                version: DATA_VERSION,
+                templates: vec![],
+                settings: Settings {
+                    tag_order: vec!["keep".into()],
+                    ..Settings::default()
+                },
+            })
+            .unwrap();
+        let catalog_before = fs::read_to_string(dir.join("catalog.json")).unwrap();
+
+        let mut prefs = Preferences::default();
+        prefs.theme = Theme::Light;
+        store.save_preferences(&prefs).unwrap();
+
+        let catalog_after = fs::read_to_string(dir.join("catalog.json")).unwrap();
+        assert_eq!(catalog_before, catalog_after);
+        let prefs_text = fs::read_to_string(dir.join("preferences.json")).unwrap();
+        assert!(prefs_text.contains("\"light\""));
+        assert!(!prefs_text.contains("tag_order"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_load_migrates_coupled_fields_into_catalog_on_save() {
+        let dir = std::env::temp_dir().join(format!("templater-mig-{}", now_epoch_secs()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("templates.json"),
+            r#"{"version":1,"templates":[{"id":"a","name":"A","tags":["t"],"opening":"","body":"","created_at":"","updated_at":""}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"version":1,"settings":{"always_on_top_default":true,"global_hotkey":"Ctrl+A","tag_order":["t"],"sort_mode":"manual","placeholder_values":{"a":{"x":"1"}}}}"#,
+        )
+        .unwrap();
+
+        let store = temp_store(&dir);
+        let data = match store.load().unwrap() {
+            LoadOutcome::Ready { data } => data,
+            other => panic!("expected Ready, got {other:?}"),
+        };
+        assert_eq!(data.settings.tag_order, vec!["t"]);
+        assert!(data.settings.always_on_top_default);
+        assert_eq!(data.settings.sort_mode, SortMode::Manual);
+
+        store.save(&data).unwrap();
+        assert!(dir.join("catalog.json").exists());
+        assert!(dir.join("preferences.json").exists());
+        assert!(
+            !dir.join("templates.json").exists(),
+            "legacy templates should be retired"
+        );
+        assert!(
+            !dir.join("settings.json").exists(),
+            "legacy settings should be retired"
+        );
+
+        let catalog = fs::read_to_string(dir.join("catalog.json")).unwrap();
+        assert!(catalog.contains("\"tag_order\""));
+        assert!(catalog.contains("placeholder_values"));
+        let prefs = fs::read_to_string(dir.join("preferences.json")).unwrap();
+        assert!(prefs.contains("always_on_top_default"));
+        assert!(!prefs.contains("tag_order"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn forward_settings_version_rejects_without_quarantine() {
         let dir = std::env::temp_dir().join(format!("templater-ver-{}", now_epoch_secs()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(
@@ -357,19 +558,44 @@ mod tests {
             r#"{"version":1,"templates":[]}"#,
         )
         .unwrap();
+        let settings_json = r#"{"version":99,"settings":{"always_on_top_default":false,"global_hotkey":"Ctrl+Shift+Backslash"}}"#;
+        fs::write(dir.join("settings.json"), settings_json).unwrap();
+
+        let store = temp_store(&dir);
+        let err = store.load().expect_err("forward settings version must fail load");
+        assert!(
+            err.contains("unsupported schema version 99"),
+            "got: {err}"
+        );
+        let on_disk = fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert_eq!(on_disk, settings_json, "must not quarantine or rewrite");
+        assert!(!corrupt_lock_path(&dir.join("preferences.json")).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn forward_templates_version_rejects_load() {
+        let dir = std::env::temp_dir().join(format!("templater-tpl-ver-{}", now_epoch_secs()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("templates.json"),
+            r#"{"version":99,"templates":[]}"#,
+        )
+        .unwrap();
         fs::write(
             dir.join("settings.json"),
-            r#"{"version":99,"settings":{"always_on_top_default":false,"global_hotkey":"Ctrl+Shift+Backslash"}}"#,
+            r#"{"version":1,"settings":{"always_on_top_default":false,"global_hotkey":"Ctrl+Shift+Backslash"}}"#,
         )
         .unwrap();
 
         let store = temp_store(&dir);
-        match store.load().unwrap() {
-            LoadOutcome::Ready { data } => {
-                assert_eq!(data.version, DATA_VERSION);
-            }
-            other => panic!("expected Ready despite version mismatch, got {other:?}"),
-        }
+        let err = store.load().expect_err("forward templates version must fail load");
+        assert!(
+            err.contains("unsupported schema version 99"),
+            "got: {err}"
+        );
+        let on_disk = fs::read_to_string(dir.join("templates.json")).unwrap();
+        assert!(on_disk.contains(r#""version":99"#));
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -1,12 +1,15 @@
 //! Data-layer and misc system `#[tauri::command]`s: load/save, templates
 //! import/export (file I/O only), backups, and a few small OS shims (open paths).
-//! Template mutations live in the frontend store and persist via [`save_app_data`].
+//! Template mutations live in the frontend store and persist via catalog /
+//! preferences saves.
 
 use crate::error::{cmd_err, AppError};
 use crate::store::{
-    commit_temp_file, parse_templates_json, prepare_temp_file, AppData, BackupEntry, LoadOutcome,
-    Store, Template, DATA_VERSION,
+    commit_temp_file, parse_templates_json, prepare_temp_file, AppData, BackupEntry, CatalogMeta,
+    LoadOutcome, Preferences, SortMode, Store, Template, DATA_VERSION,
 };
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Templates-only export file. Settings are intentionally excluded — they're
@@ -16,6 +19,17 @@ use std::path::Path;
 struct ExportFile<'a> {
     version: u32,
     templates: &'a [Template],
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CatalogSave {
+    templates: Vec<Template>,
+    #[serde(default)]
+    placeholder_values: HashMap<String, HashMap<String, String>>,
+    #[serde(default)]
+    sort_mode: SortMode,
+    #[serde(default)]
+    tag_order: Vec<String>,
 }
 
 /// Serialize `templates` as a versioned export file and write it atomically.
@@ -41,12 +55,32 @@ pub fn load_app_data(store: tauri::State<'_, Store>) -> Result<LoadOutcome, Stri
     store.load().map_err(cmd_err)
 }
 
+/// Full sync (bootstrap). Prefer [`save_catalog`] / [`save_preferences`] for
+/// day-to-day writes so preference keystrokes do not back up the catalog.
 #[tauri::command]
 pub fn save_app_data(data: AppData, store: tauri::State<'_, Store>) -> Result<(), String> {
     store.save(&data).map_err(cmd_err)
 }
 
-/// Clear a fail-closed corrupt-settings lock by writing `Settings::default()`.
+#[tauri::command]
+pub fn save_catalog(data: CatalogSave, store: tauri::State<'_, Store>) -> Result<(), String> {
+    let meta = CatalogMeta {
+        placeholder_values: data.placeholder_values,
+        sort_mode: data.sort_mode,
+        tag_order: data.tag_order,
+    };
+    store.save_catalog(&data.templates, &meta).map_err(cmd_err)
+}
+
+#[tauri::command]
+pub fn save_preferences(
+    preferences: Preferences,
+    store: tauri::State<'_, Store>,
+) -> Result<(), String> {
+    store.save_preferences(&preferences).map_err(cmd_err)
+}
+
+/// Clear a fail-closed corrupt-settings lock by writing `Preferences::default()`.
 #[tauri::command]
 pub fn reset_corrupt_settings(store: tauri::State<'_, Store>) -> Result<(), String> {
     store.reset_corrupt_settings().map_err(cmd_err)
@@ -60,7 +94,7 @@ pub fn export_templates(path: String, templates: Vec<Template>) -> Result<usize,
 }
 
 /// Read and parse a templates export file. Does not touch app data — the
-/// frontend merges and persists via [`save_app_data`].
+/// frontend merges and persists via catalog save.
 #[tauri::command]
 pub fn read_templates_export(path: String) -> Result<Vec<Template>, String> {
     let text = std::fs::read_to_string(&path)
@@ -76,7 +110,7 @@ pub fn list_template_backups(store: tauri::State<'_, Store>) -> Result<Vec<Backu
 }
 
 /// Read templates from a named backup. Does not write — the frontend persists
-/// via [`save_app_data`] (mirrors import).
+/// via catalog save (mirrors import).
 #[tauri::command]
 pub fn read_template_backup(
     name: String,

@@ -45,7 +45,7 @@
         ...template,
         name: trimmed,
         updated_at: new Date().toISOString(),
-      });
+      }).catch(() => {});
     }
     renamingTitle = false;
   }
@@ -139,7 +139,7 @@
           <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
         </svg>
       </button>
-      <button class="icon-action" onclick={() => void editorSession.duplicate(template)} title="Duplicate" aria-label="Duplicate template">
+      <button class="icon-action" onclick={() => void editorSession.duplicate(template).catch(() => {})} title="Duplicate" aria-label="Duplicate template">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="9" y="9" width="13" height="13" rx="2" />
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
@@ -165,8 +165,8 @@
   savedPlaceholderValues={settings.placeholder_values}
   {onToggleOpening}
   {onToggleSignature}
-  onCopySuccess={(id) => void templatesStore.recordCopy(id)}
-  onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals)}
+  onCopySuccess={(id) => void templatesStore.recordCopy(id).catch(() => {})}
+  onPlaceholderValuesChange={(id, vals) => void templatesStore.recordPlaceholderValues(id, vals).catch(() => {})}
   registerForShortcuts
   showTags={false}
 >
@@ -175,7 +175,7 @@
       <HistoryPanel
         {template}
         open={historyOpen}
-        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx)}
+        onRevertHistory={(id, idx) => void templatesStore.revertHistory(id, idx).catch(() => {})}
       />
     {/if}
   {/snippet}

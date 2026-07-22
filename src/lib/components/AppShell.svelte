@@ -31,7 +31,7 @@
         kind: "create",
         draft: editorSession.creatingDraft,
         onCancel: () => editorSession.cancelCreate(),
-        onCreate: (d) => void editorSession.create(d),
+        onCreate: (d) => void editorSession.create(d).catch(() => {}),
       }}
     />
   {:else if editorSession.editing && selectedTemplate}
@@ -40,7 +40,7 @@
         kind: "edit",
         template: selectedTemplate,
         onCancel: () => editorSession.cancelEdit(),
-        onSave: (t) => void editorSession.save(t),
+        onSave: (t) => void editorSession.save(t).catch(() => {}),
       }}
     />
   {:else if selectedTemplate}

@@ -1,12 +1,17 @@
 import {
   loadAppData,
   saveAppData,
+  saveCatalog,
+  savePreferences,
+  toPreferences,
+  catalogPayload,
   resetCorruptSettings,
   readTemplateBackup,
 } from "$lib/api/data";
 import { starterTemplates } from "$lib/starterTemplates";
 import { pushHistorySnapshot } from "$lib/templateHistory";
 import { normalizeTag } from "$lib/tags";
+import { normalizeTags, renameTagInTemplates } from "$lib/catalog";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 import { appErrors } from "$lib/stores/appErrors.svelte";
 import { captureUndoSnapshot, UndoStack } from "$lib/stores/undoStack";
@@ -29,6 +34,14 @@ function dedupe(items: string[]): string[] {
   return out;
 }
 
+function catalogFingerprint(templates: Template[], settings: Settings): string {
+  return JSON.stringify(catalogPayload(templates, settings));
+}
+
+function preferencesFingerprint(settings: Settings): string {
+  return JSON.stringify(toPreferences(settings));
+}
+
 class TemplatesStore {
   templates = $state<Template[]>([]);
   settings = $state<Settings>({ ...DEFAULT_SETTINGS });
@@ -45,20 +58,28 @@ class TemplatesStore {
   #undoToastTimer: ReturnType<typeof setTimeout> | null = null;
   /** Serialize disk writes so concurrent persist callers cannot last-write-wins drop mutations. */
   #writeChain: Promise<void> = Promise.resolve();
+  /** Fingerprints of last successful disk commit (detect dirty after optimistic UI). */
+  #persistedCatalogFp = "";
+  #persistedPrefsFp = "";
 
   get isEditorMode(): boolean {
     return this.settings.mode === "editor";
   }
 
-  /** Snapshot (optional) then persist. `label: null` skips undo (usage/settings noise). */
+  /** Snapshot (optional) then persist. `label: null` skips undo (usage/settings noise).
+   * Undo and `afterCommit` run only after a successful commit. Rejects if persist fails. */
   async apply(
     label: string | null,
     next: { templates?: Template[]; settings?: Settings },
+    afterCommit?: () => void,
   ): Promise<void> {
-    if (label !== null) {
-      this.#undo.push(captureUndoSnapshot(this.templates, this.settings, label));
-    }
+    const snapshot =
+      label !== null
+        ? captureUndoSnapshot(this.templates, this.settings, label)
+        : null;
     await this.persist(next.templates ?? this.templates, next.settings ?? this.settings);
+    if (snapshot) this.#undo.push(snapshot);
+    afterCommit?.();
   }
 
   async load(): Promise<void> {
@@ -73,6 +94,7 @@ class TemplatesStore {
           templates: starterTemplates,
           settings: this.settings,
         });
+        this.#rememberPersisted(starterTemplates, this.settings);
       } else if (outcome.status === "settings_corrupt") {
         this.templates = outcome.templates;
         this.settings = { ...DEFAULT_SETTINGS };
@@ -85,6 +107,7 @@ class TemplatesStore {
         this.settings = outcome.data.settings;
         this.settingsCorrupt = false;
         appErrors.clearLoad();
+        this.#rememberPersisted(this.templates, this.settings);
         // Existing users who dismissed the legacy "minimises to tray" banner
         // shouldn't be surprised by the new onboarding tour. Auto-graduate
         // them so the tour only fires for genuinely fresh installs.
@@ -94,6 +117,7 @@ class TemplatesStore {
             templates: this.templates,
             settings: this.settings,
           });
+          this.#rememberPersisted(this.templates, this.settings);
         }
       }
       this.#loadSucceeded = true;
@@ -112,25 +136,35 @@ class TemplatesStore {
       await resetCorruptSettings();
       this.settings = { ...DEFAULT_SETTINGS };
       this.settingsCorrupt = false;
+      this.#persistedPrefsFp = preferencesFingerprint(this.settings);
       appErrors.clearLoad();
     } catch (e) {
       appErrors.setAction(`reset settings failed: ${e}`);
     }
   }
 
+  #rememberPersisted(templates: Template[], settings: Settings): void {
+    this.#persistedCatalogFp = catalogFingerprint(templates, settings);
+    this.#persistedPrefsFp = preferencesFingerprint(settings);
+  }
+
+  /** Persist to disk. Writes catalog and/or preferences only when that slice
+   * changed — preference keystrokes no longer back up the catalog. Rejects on
+   * blocked or failed save; rolls back optimistic UI. */
   async persist(
     nextTemplates: Template[],
     nextSettings: Settings = this.settings,
   ): Promise<void> {
     if (!this.#loadSucceeded) {
-      appErrors.setLoad("save blocked: initial data load did not complete");
-      return;
+      const msg = "save blocked: initial data load did not complete";
+      appErrors.setLoad(msg);
+      throw new Error(msg);
     }
     if (this.settingsCorrupt) {
-      appErrors.setLoad(
-        "Saves blocked: settings file is corrupt. Reset settings to continue.",
-      );
-      return;
+      const msg =
+        "Saves blocked: settings file is corrupt. Reset settings to continue.";
+      appErrors.setLoad(msg);
+      throw new Error(msg);
     }
     // Rust's ColumnWidths is u32. Pointer events emit fractional pixel deltas
     // on high-DPI displays, so coerce here as the last line of defence before
@@ -145,15 +179,28 @@ class TemplatesStore {
     };
     const prevTemplates = this.templates;
     const prevSettings = this.settings;
+    const nextCatalogFp = catalogFingerprint(nextTemplates, safeSettings);
+    const nextPrefsFp = preferencesFingerprint(safeSettings);
+    const writeCatalog = this.#persistedCatalogFp !== nextCatalogFp;
+    const writePreferences = this.#persistedPrefsFp !== nextPrefsFp;
+
     this.templates = nextTemplates;
     this.settings = safeSettings;
 
+    if (!writeCatalog && !writePreferences) {
+      return;
+    }
+
     const run = async () => {
       try {
-        await saveAppData({
-          templates: nextTemplates,
-          settings: safeSettings,
-        });
+        if (writeCatalog) {
+          await saveCatalog(catalogPayload(nextTemplates, safeSettings));
+          this.#persistedCatalogFp = nextCatalogFp;
+        }
+        if (writePreferences) {
+          await savePreferences(toPreferences(safeSettings));
+          this.#persistedPrefsFp = nextPrefsFp;
+        }
       } catch (e) {
         // Roll back only if nothing newer has replaced our optimistic assign.
         if (this.templates === nextTemplates && this.settings === safeSettings) {
@@ -161,6 +208,7 @@ class TemplatesStore {
           this.settings = prevSettings;
         }
         appErrors.setAction(`save failed: ${e}`);
+        throw e instanceof Error ? e : new Error(String(e));
       }
     };
 
@@ -199,7 +247,7 @@ class TemplatesStore {
     const newTemplate: Template = {
       id: crypto.randomUUID(),
       name: draft.name.trim() || "Untitled",
-      tags: draft.tags,
+      tags: normalizeTags(draft.tags),
       opening: draft.opening,
       body: draft.body,
       created_at: now,
@@ -216,17 +264,18 @@ class TemplatesStore {
 
   async handleSave(updated: Template): Promise<void> {
     if (!this.isEditorMode) return;
-    const prior = this.templates.find((t) => t.id === updated.id);
-    let withHistory = updated;
+    const normalized = { ...updated, tags: normalizeTags(updated.tags) };
+    const prior = this.templates.find((t) => t.id === normalized.id);
+    let withHistory = normalized;
     if (
       prior &&
-      (prior.opening !== updated.opening ||
-        prior.body !== updated.body ||
-        prior.tags.join("\0") !== updated.tags.join("\0"))
+      (prior.opening !== normalized.opening ||
+        prior.body !== normalized.body ||
+        prior.tags.join("\0") !== normalized.tags.join("\0"))
     ) {
-      withHistory = { ...updated, history: pushHistorySnapshot(prior, updated.updated_at) };
+      withHistory = { ...normalized, history: pushHistorySnapshot(prior, normalized.updated_at) };
     }
-    const next = this.templates.map((t) => (t.id === updated.id ? withHistory : t));
+    const next = this.templates.map((t) => (t.id === normalized.id ? withHistory : t));
     await this.apply("edit", { templates: next });
   }
 
@@ -245,8 +294,9 @@ class TemplatesStore {
     const idx = this.templates.findIndex((t) => t.id === id);
     const next = [...this.templates];
     next.splice(idx + 1, 0, copy);
-    await this.apply("duplicate", { templates: next });
-    selectionStore.selectedTemplateId = copy.id;
+    await this.apply("duplicate", { templates: next }, () => {
+      selectionStore.selectedTemplateId = copy.id;
+    });
     return copy.id;
   }
 
@@ -258,11 +308,14 @@ class TemplatesStore {
     const nextTemplates = this.templates.filter((t) => !idSet.has(t.id));
     const nextPlaceholders = { ...this.settings.placeholder_values };
     for (const id of idSet) delete nextPlaceholders[id];
-    await this.apply(idSet.size === 1 ? "delete" : `delete ${idSet.size}`, {
-      templates: nextTemplates,
-      settings: { ...this.settings, placeholder_values: nextPlaceholders },
-    });
-    selectionStore.syncAfterRemoval(idSet, nextTemplates[0]?.id ?? null);
+    await this.apply(
+      idSet.size === 1 ? "delete" : `delete ${idSet.size}`,
+      {
+        templates: nextTemplates,
+        settings: { ...this.settings, placeholder_values: nextPlaceholders },
+      },
+      () => selectionStore.syncAfterRemoval(idSet, nextTemplates[0]?.id ?? null),
+    );
   }
 
   async togglePin(id: string): Promise<void> {
@@ -398,23 +451,27 @@ class TemplatesStore {
             : "manual";
     void this.apply(null, {
       settings: { ...this.settings, sort_mode: next },
+    }).catch(() => {
+      /* appErrors already set by persist */
     });
   }
 
   async handleRenameTag(from: string, to: string): Promise<void> {
     if (!this.isEditorMode) return;
-    if (from === to || to.length === 0) return;
-    const next = this.templates.map((t) =>
-      t.tags.includes(from)
-        ? { ...t, tags: dedupe(t.tags.map((tag) => (tag === from ? to : tag))) }
-        : t,
+    const normalizedTo = normalizeTag(to);
+    if (from === normalizedTo || normalizedTo.length === 0) return;
+    const next = renameTagInTemplates(this.templates, from, normalizedTo);
+    const newOrder = dedupe(
+      this.settings.tag_order.map((t) => (t === from ? normalizedTo : t)),
     );
-    const newOrder = this.settings.tag_order.map((t) => (t === from ? to : t));
-    await this.apply("rename tag", {
-      templates: next,
-      settings: { ...this.settings, tag_order: dedupe(newOrder) },
-    });
-    selectionStore.remapTag(from, to);
+    await this.apply(
+      "rename tag",
+      {
+        templates: next,
+        settings: { ...this.settings, tag_order: newOrder },
+      },
+      () => selectionStore.remapTag(from, normalizedTo),
+    );
   }
 
   async handleDeleteTag(tag: string): Promise<void> {
@@ -423,11 +480,14 @@ class TemplatesStore {
       t.tags.includes(tag) ? { ...t, tags: t.tags.filter((x) => x !== tag) } : t,
     );
     const newOrder = this.settings.tag_order.filter((t) => t !== tag);
-    await this.apply("remove tag", {
-      templates: next,
-      settings: { ...this.settings, tag_order: newOrder },
-    });
-    selectionStore.removeTag(tag);
+    await this.apply(
+      "remove tag",
+      {
+        templates: next,
+        settings: { ...this.settings, tag_order: newOrder },
+      },
+      () => selectionStore.removeTag(tag),
+    );
   }
 
   async handleRestoreBackup(name: string): Promise<void> {

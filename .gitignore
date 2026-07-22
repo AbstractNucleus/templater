@@ -24,3 +24,6 @@ Thumbs.db
 
 # Engagement / private seed data — not for publication
 *.csv
+
+# Local codebase visualization
+codebase-map.html

@@ -16,6 +16,7 @@ use windows::{
 use commands::data::{
     export_templates, list_template_backups, load_app_data, open_data_dir, open_path,
     read_template_backup, read_templates_export, reset_corrupt_settings, save_app_data,
+    save_catalog, save_preferences,
 };
 use commands::translate::translate_text;
 use hotkey::set_hotkey;
@@ -31,7 +32,7 @@ pub fn run() {
         .join(&context.config().identifier);
     std::fs::create_dir_all(&dir).expect("could not create application data directory");
 
-    let store = Store::new(dir.join("templates.json"), dir.join("settings.json"));
+    let store = Store::new(dir);
     let loaded_settings = match store.load() {
         Ok(LoadOutcome::Ready { data }) => Some(data.settings),
         _ => None,
@@ -88,6 +89,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_app_data,
             save_app_data,
+            save_catalog,
+            save_preferences,
             reset_corrupt_settings,
             export_templates,
             read_templates_export,

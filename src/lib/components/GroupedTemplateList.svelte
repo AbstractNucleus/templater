@@ -1,8 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { SearchHit } from "$lib/search";
-
-  export type TemplateGroup = { folder: string | null; hits: SearchHit[] };
+  import type { TemplateGroup } from "$lib/browse";
 
   let {
     groups,

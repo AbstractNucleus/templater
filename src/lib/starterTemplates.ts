@@ -1,6 +1,6 @@
-// First-launch seed. Used to populate the catalog when the app starts and no
-// templates.json exists yet. Kept generic on purpose — the goal is to show
-// the format and the tag picker working, not to ship anyone's real content.
+// First-launch seed when no catalog.json exists yet. Kept generic on purpose —
+// the goal is to show the format and the tag picker working, not to ship
+// anyone's real content.
 import type { Template } from "./types";
 
 const ISO = "2026-05-19T18:00:00Z";

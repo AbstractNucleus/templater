@@ -23,6 +23,8 @@
 
   const templates = $derived(templatesStore.templates);
   const searchResults = $derived(browseSession.results);
+  const groupedSearchResults = $derived(browseSession.groups);
+  const collapsedFolders = $derived(browseSession.collapsedFolders);
   const selectedTemplateId = $derived(selectionStore.selectedTemplateId);
   const bulkSelectedIds = $derived(selectionStore.bulkSelectedIds);
   const canCreate = $derived(templatesStore.isEditorMode);
@@ -41,31 +43,6 @@
     uiDialogs.openContextForTemplate(id, e.clientX, e.clientY);
   }
 
-  const hasFolders = $derived(templates.some((t) => t.folder !== null));
-
-  let collapsedFolders = $state<Set<string>>(new Set());
-
-  function toggleFolder(name: string): void {
-    const next = new Set(collapsedFolders);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
-    collapsedFolders = next;
-  }
-
-  const groupedSearchResults = $derived.by(() => {
-    const groups = new Map<string | null, SearchHit[]>();
-    const order: (string | null)[] = [];
-    for (const hit of searchResults) {
-      const key = hit.template.folder;
-      if (!groups.has(key)) {
-        groups.set(key, []);
-        order.push(key);
-      }
-      groups.get(key)!.push(hit);
-    }
-    return order.map((k) => ({ folder: k, hits: groups.get(k)! }));
-  });
-
   let sidebarEl: HTMLElement | undefined = $state();
 
   $effect(() => {
@@ -78,8 +55,9 @@
 
   const drag = createDragReorder({
     enabled: () => canReorder,
-    currentIds: () => templates.map((t) => t.id),
-    onReorder: (ids) => void templatesStore.handleTemplatesReorder(ids),
+    // Same sequence the list renders (folder-flattened when grouped).
+    currentIds: () => browseSession.visibleIds,
+    onReorder: (ids) => void templatesStore.handleTemplatesReorder(ids).catch(() => {}),
   });
 
   let dragOverFolder = $state<string | null>(null);
@@ -105,7 +83,7 @@
     const ids = draggedSelection();
     drag.reset();
     dragOverFolder = null;
-    void templatesStore.moveToFolder(ids, folder);
+    void templatesStore.moveToFolder(ids, folder).catch(() => {});
   }
 
   function handleDragEnd(): void {
@@ -152,7 +130,7 @@
       canEdit={canCreate}
       onTag={() => uiDialogs.openBulkTagPrompt()}
       onUntag={() => uiDialogs.openBulkRemoveTagPrompt()}
-      onExport={() => void templatesStore.bulkExport(bulkSelectedIds)}
+      onExport={() => void templatesStore.bulkExport(bulkSelectedIds).catch(() => {})}
       onDelete={() => (uiDialogs.bulkDeleteConfirmOpen = true)}
     />
   </div>
@@ -191,12 +169,12 @@
         </li>
       {/if}
     </ul>
-  {:else if hasFolders}
+  {:else if groupedSearchResults}
     <GroupedTemplateList
       groups={groupedSearchResults}
       {collapsedFolders}
       {dragOverFolder}
-      onToggleFolder={toggleFolder}
+      onToggleFolder={(label) => browseSession.toggleFolder(label)}
       onFolderDragOver={handleFolderDragOver}
       onFolderDragLeave={() => (dragOverFolder = null)}
       onFolderDrop={handleFolderDrop}

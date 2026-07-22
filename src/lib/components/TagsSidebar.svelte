@@ -41,7 +41,7 @@
   const drag = createDragReorder({
     enabled: () => true,
     currentIds: () => tagCounts.map(([tag]) => tag),
-    onReorder: (next) => void templatesStore.handleTagsReorder(next),
+    onReorder: (next) => void templatesStore.handleTagsReorder(next).catch(() => {}),
   });
 </script>
 

@@ -2,6 +2,10 @@
 export {
   loadAppData,
   saveAppData,
+  saveCatalog,
+  savePreferences,
+  toPreferences,
+  catalogPayload,
   resetCorruptSettings,
   exportTemplates,
   readTemplatesExport,
@@ -9,6 +13,7 @@ export {
   readTemplateBackup,
   translateText,
   type BackupEntry,
+  type Preferences,
 } from "./data";
 
 export {

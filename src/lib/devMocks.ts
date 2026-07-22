@@ -110,6 +110,64 @@ export function installDevMocks(): void {
           }
           return null;
         }
+        case "save_catalog": {
+          const args = (isRecord(payload) ? payload : {}) as {
+            data?: {
+              templates: Template[];
+              placeholder_values: Settings["placeholder_values"];
+              tag_order: string[];
+              sort_mode: Settings["sort_mode"];
+            };
+          };
+          if (args.data && data) {
+            data = {
+              ...data,
+              templates: args.data.templates,
+              settings: {
+                ...data.settings,
+                placeholder_values: args.data.placeholder_values,
+                tag_order: args.data.tag_order,
+                sort_mode: args.data.sort_mode,
+              },
+            };
+          } else if (args.data) {
+            data = {
+              version: 1,
+              templates: args.data.templates,
+              settings: {
+                ...DEFAULT_SETTINGS,
+                placeholder_values: args.data.placeholder_values,
+                tag_order: args.data.tag_order,
+                sort_mode: args.data.sort_mode,
+              },
+            };
+          }
+          return null;
+        }
+        case "save_preferences": {
+          const args = (isRecord(payload) ? payload : {}) as {
+            preferences?: Omit<Settings, "placeholder_values" | "tag_order" | "sort_mode">;
+          };
+          if (args.preferences) {
+            const meta = data
+              ? {
+                  placeholder_values: data.settings.placeholder_values,
+                  tag_order: data.settings.tag_order,
+                  sort_mode: data.settings.sort_mode,
+                }
+              : {
+                  placeholder_values: DEFAULT_SETTINGS.placeholder_values,
+                  tag_order: DEFAULT_SETTINGS.tag_order,
+                  sort_mode: DEFAULT_SETTINGS.sort_mode,
+                };
+            data = {
+              version: data?.version ?? 1,
+              templates: data?.templates ?? [],
+              settings: { ...args.preferences, ...meta },
+            };
+          }
+          return null;
+        }
         case "reset_corrupt_settings":
           if (data) {
             data = { ...data, settings: { ...DEFAULT_SETTINGS } };
@@ -117,7 +175,7 @@ export function installDevMocks(): void {
           return null;
         case "list_template_backups":
           return [1, 2, 3].map((n) => ({
-            name: `templates.json.bak.${Math.floor(Date.now() / 1000) - n * 86_400}`,
+            name: `catalog.json.bak.${Math.floor(Date.now() / 1000) - n * 86_400}`,
             timestamp_secs: Math.floor(Date.now() / 1000) - n * 86_400,
             size: 48_120 - n * 900,
           }));

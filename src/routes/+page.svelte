@@ -69,7 +69,7 @@
     // Round to one decimal to avoid 0.1-step float drift (0.7 + 0.1 = 0.7999…).
     const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(next * 10) / 10));
     if (clamped === templatesStore.settings.zoom) return;
-    void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, zoom: clamped });
+    void templatesStore.persist(templatesStore.templates, { ...templatesStore.settings, zoom: clamped }).catch(() => {});
   }
 
   function copySelected(): void {
@@ -107,7 +107,7 @@
           void templatesStore.persist(templatesStore.templates, {
             ...templatesStore.settings,
             column_widths: { ...templatesStore.settings.column_widths, [target]: final },
-          });
+          }).catch(() => {});
         }
       }
 
@@ -214,7 +214,7 @@
     toggleTranslator: () => void popouts.toggleTranslator(),
     getPreviewHotkey: () => templatesStore.settings.preview_hotkey,
     canUndo: () => templatesStore.isEditorMode,
-    performUndo: () => void templatesStore.performUndo(),
+    performUndo: () => void templatesStore.performUndo().catch(() => {}),
   });
 
   // Popouts own push + listeners; page only mounts the lifecycle once.
@@ -308,7 +308,7 @@
         ...templatesStore.settings,
         onboarding_complete: true,
         close_hint_shown: true,
-      });
+      }).catch(() => {});
     }}
   />
 {/if}

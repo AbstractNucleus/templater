@@ -2,53 +2,68 @@ import type { Template, TemplateDraft } from "$lib/types";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 
-/** Create/edit session flags + handlers. Page reads state; mutations go here. */
+export type EditorMode =
+  | { kind: "idle" }
+  | { kind: "creating"; draft: TemplateDraft }
+  | { kind: "editing" };
+
+/** Create/edit session as a single discriminated mode (idle | creating | editing). */
 class EditorSession {
-  creatingDraft = $state<TemplateDraft | null>(null);
-  editing = $state(false);
+  mode = $state<EditorMode>({ kind: "idle" });
 
   get isActive(): boolean {
-    return this.editing || this.creatingDraft !== null;
+    return this.mode.kind !== "idle";
+  }
+
+  get creatingDraft(): TemplateDraft | null {
+    return this.mode.kind === "creating" ? this.mode.draft : null;
+  }
+
+  get editing(): boolean {
+    return this.mode.kind === "editing";
   }
 
   enterEdit(): void {
-    this.editing = true;
+    this.mode = { kind: "editing" };
   }
 
   cancelEdit(): void {
-    this.editing = false;
+    if (this.mode.kind === "editing") this.mode = { kind: "idle" };
   }
 
   /** Drop edit mode when the user picks another template. */
   clearEditOnSelect(): void {
-    if (this.editing) this.editing = false;
+    if (this.mode.kind === "editing") this.mode = { kind: "idle" };
   }
 
   startCreate(prefilledBody = ""): void {
     if (!templatesStore.isEditorMode) return;
-    this.creatingDraft = {
-      name: "",
-      tags: [],
-      opening: "Hello,",
-      body: prefilledBody,
-      folder: null,
+    this.mode = {
+      kind: "creating",
+      draft: {
+        name: "",
+        tags: [],
+        opening: "Hello,",
+        body: prefilledBody,
+        folder: null,
+      },
     };
   }
 
   cancelCreate(): void {
-    this.creatingDraft = null;
+    if (this.mode.kind === "creating") this.mode = { kind: "idle" };
   }
 
   async save(updated: Template): Promise<void> {
     await templatesStore.handleSave(updated);
-    this.editing = false;
+    this.mode = { kind: "idle" };
   }
 
   async create(draft: TemplateDraft): Promise<void> {
     const id = await templatesStore.createTemplate(draft);
     if (!id) return;
     selectionStore.selectedTemplateId = id;
-    this.creatingDraft = null;
+    this.mode = { kind: "idle" };
   }
 
   async duplicate(template: Template | null): Promise<void> {

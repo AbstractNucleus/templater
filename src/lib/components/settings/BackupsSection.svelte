@@ -105,8 +105,8 @@
     <div class="hint">No backups yet — they're created automatically on each save.</div>
   {/if}
   <div class="hint">
-    The newest 5 templates.json backups are kept. Restoring keeps your settings and
-    backs up the current templates first, so undoing a restore is one more restore away.
+    The newest 5 catalog.json backups are kept. Restoring keeps your preferences and
+    backs up the current catalog first, so undoing a restore is one more restore away.
   </div>
   <div class="port-row data-folder-row">
     <button class="port-btn" onclick={() => void openDataDir()}>Open data folder</button>

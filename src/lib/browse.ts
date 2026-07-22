@@ -105,6 +105,60 @@ export function buildTemplateList(opts: {
   return groupPinnedHits(searchTemplates(opts.query, tagged));
 }
 
+export type TemplateGroup = { folder: string | null; hits: SearchHit[] };
+
+/** Folder groups in first-seen order from the flat hit list. */
+export function groupHitsByFolder(hits: SearchHit[]): TemplateGroup[] {
+  const groups = new Map<string | null, SearchHit[]>();
+  const order: (string | null)[] = [];
+  for (const hit of hits) {
+    const key = hit.template.folder;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(hit);
+  }
+  return order.map((k) => ({ folder: k, hits: groups.get(k)! }));
+}
+
+export type BrowseListModel = {
+  /** Flat filtered/sorted hits (pre-folder). */
+  hits: SearchHit[];
+  /** Folder groups when any hit has a folder; otherwise null (flat render). */
+  groups: TemplateGroup[] | null;
+  /**
+   * Rendered navigation order: folder-flattened, omitting collapsed folders.
+   * Keyboard, range select, and selection sync must use this — not raw hits.
+   */
+  visibleIds: string[];
+};
+
+/** One model for render + navigation: groups and the flattened visible-ID sequence. */
+export function buildBrowseListModel(
+  opts: Parameters<typeof buildTemplateList>[0] & {
+    collapsedFolders: ReadonlySet<string>;
+  },
+): BrowseListModel {
+  const hits = buildTemplateList(opts);
+  const hasFolders = hits.some((h) => h.template.folder !== null);
+  if (!hasFolders) {
+    return {
+      hits,
+      groups: null,
+      visibleIds: hits.map((h) => h.template.id),
+    };
+  }
+  const groups = groupHitsByFolder(hits);
+  const visibleIds: string[] = [];
+  for (const group of groups) {
+    const label = group.folder ?? "Ungrouped";
+    if (opts.collapsedFolders.has(label)) continue;
+    for (const hit of group.hits) visibleIds.push(hit.template.id);
+  }
+  return { hits, groups, visibleIds };
+}
+
 /**
  * Drag-reorder is only safe when the visible order IS the underlying array
  * order. Any filter, search, or non-manual sort breaks that invariant.

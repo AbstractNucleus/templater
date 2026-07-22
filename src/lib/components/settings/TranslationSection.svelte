@@ -15,7 +15,7 @@
   <div class="field-row">
     <label class="field-label" for="openrouter-api-key">
       <span class="check-title">API key</span>
-      <span class="check-hint">Required for the translation pop-out. Stored in settings.json (OS keychain deferred). Get a free key at openrouter.ai/keys</span>
+      <span class="check-hint">Required for the translation pop-out. Stored in preferences.json (OS keychain deferred). Get a free key at openrouter.ai/keys</span>
     </label>
     <input
       id="openrouter-api-key"

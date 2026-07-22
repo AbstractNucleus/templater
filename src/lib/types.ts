@@ -97,7 +97,7 @@ export interface Settings {
    *  global OS shortcut would be overkill. */
   preview_hotkey: string;
   /** OpenRouter API key for the translation pop-out. Empty string = not configured.
-   *  Stored in settings.json (OS secret store deferred — key never crosses translate IPC). */
+   *  Stored in preferences.json (OS secret store deferred — key never crosses translate IPC). */
   openrouter_api_key: string;
   /** OpenRouter model identifier for translation, e.g. "openrouter/free". */
   translation_model: string;
