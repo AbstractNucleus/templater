@@ -4,6 +4,22 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] — 2026-07-22
+
+### Changed
+
+- **Atomic catalog + preferences.** On-disk layout is now `catalog.json` (templates and coupled metadata) and `preferences.json` (independent settings). Legacy `templates.json` / `settings.json` still load and are retired after the first successful save. Preference edits no longer rewrite or back up the catalog; settings updates are debounced.
+- **Stricter persistence.** Schema loads require version and payload fields, reject unsupported forward versions, and treat save failures as failures so editors and imports do not succeed silently.
+- **Browse and dialog models.** Unified list model for render/nav/select, catalog ID/tag invariants on import and edit, and discriminated unions for editor and modal state.
+
+### Removed
+
+- **Private mock corpus.** Deleted bundled CoinPoker templates and the payments filter script from the tree; README privacy notes updated for optional OpenRouter use.
+
+### Fixed
+
+- **macOS transparent windows.** Enabled `macOSPrivateApi` so frameless transparent windows no longer warn at startup.
+
 ## [0.9.7] — 2026-07-18
 
 ### Fixed
