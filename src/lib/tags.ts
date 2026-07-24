@@ -1,10 +1,27 @@
 import type { Template } from "./types";
 
+/** Sentinel id for the virtual sidebar filter matching templates with no tags.
+ *  Never persisted on templates or in `tag_order`. */
+export const UNTAGGED_ID = "__untagged__";
+
+/** Display label for {@link UNTAGGED_ID} in the Tags sidebar. */
+export const UNTAGGED_LABEL = "Untagged";
+
+export function isUntaggedId(id: string): boolean {
+  return id === UNTAGGED_ID;
+}
+
 /** Canonical tag normalization: trim + lowercase. Keeps tag creation,
  *  bulk-tagging, and the tag picker from producing case-variant duplicates
  *  (e.g. "Email" alongside an existing "email"). */
 export function normalizeTag(tag: string): string {
   return tag.trim().toLowerCase();
+}
+
+/** Whether a template matches a (possibly virtual) tag id. */
+export function templateHasTag(template: Template, tag: string): boolean {
+  if (isUntaggedId(tag)) return template.tags.length === 0;
+  return template.tags.includes(tag);
 }
 
 /** Tag → usage-count pairs ordered for display: persisted `tagOrder` first,
@@ -30,4 +47,20 @@ export function orderedTagCounts(
     return b[1] - a[1] || a[0].localeCompare(b[0]);
   });
   return all;
+}
+
+/** Sidebar list: virtual Untagged row (when any) pinned above real tags.
+ *  Settings must keep using {@link orderedTagCounts} so rename/delete never
+ *  see the sentinel. */
+export function sidebarTagCounts(
+  templates: Template[],
+  tagOrder: string[],
+): [string, number][] {
+  const real = orderedTagCounts(templates, tagOrder);
+  let untagged = 0;
+  for (const t of templates) {
+    if (t.tags.length === 0) untagged += 1;
+  }
+  if (untagged === 0) return real;
+  return [[UNTAGGED_ID, untagged], ...real];
 }

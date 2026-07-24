@@ -1,8 +1,15 @@
 import type { Template } from "$lib/types";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openDataDir } from "$lib/api/windows";
 import { templatesStore } from "$lib/stores/templatesStore.svelte";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 import { appErrors } from "$lib/stores/appErrors.svelte";
+
+function copyIds(ids: Iterable<string>): void {
+  const text = [...ids].join("\n");
+  if (text.length === 0) return;
+  void writeText(text).catch(() => {});
+}
 
 export type DialogMenuItem = {
   label: string;
@@ -90,6 +97,10 @@ class UiDialogs {
           label: `Remove tag from ${count}…`,
           onClick: () => this.openBulkRemoveTagPrompt(),
         });
+        items.push({
+          label: `Copy ${count} IDs`,
+          onClick: () => copyIds(bulk),
+        });
       }
       items.push({
         label: `Export ${count}…`,
@@ -115,6 +126,10 @@ class UiDialogs {
       items.push({
         label: "Duplicate",
         onClick: () => void templatesStore.duplicateId(id).catch(() => {}),
+      });
+      items.push({
+        label: "Copy ID",
+        onClick: () => copyIds([id]),
       });
     }
     items.push({

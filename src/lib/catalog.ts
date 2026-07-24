@@ -1,13 +1,14 @@
-import { normalizeTag } from "$lib/tags";
+import { isUntaggedId, normalizeTag } from "$lib/tags";
 import type { Template } from "$lib/types";
 
-/** Normalize + dedupe tags (canonical form for create/edit/import/rename). */
+/** Normalize + dedupe tags (canonical form for create/edit/import/rename).
+ *  Drops the virtual Untagged sentinel so it can never be persisted. */
 export function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of tags) {
     const tag = normalizeTag(raw);
-    if (tag.length === 0 || seen.has(tag)) continue;
+    if (tag.length === 0 || isUntaggedId(tag) || seen.has(tag)) continue;
     seen.add(tag);
     out.push(tag);
   }

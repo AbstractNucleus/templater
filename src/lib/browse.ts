@@ -1,5 +1,6 @@
 import type { SearchHit } from "./search";
 import { searchTemplates } from "./search";
+import { templateHasTag } from "./tags";
 import type { SortMode, Template } from "./types";
 
 /**
@@ -30,7 +31,8 @@ export function sortTemplates(templates: Template[], sortMode: SortMode): Templa
   });
 }
 
-/** Exclude tags first, then require ALL (and) or ANY (or) of the selected tags. */
+/** Exclude tags first, then require ALL (and) or ANY (or) of the selected tags.
+ *  Selected/excluded ids may include the virtual Untagged sentinel. */
 export function filterByTags(
   templates: Template[],
   selectedTagIds: ReadonlySet<string>,
@@ -40,17 +42,17 @@ export function filterByTags(
   if (selectedTagIds.size === 0 && excludedTagIds.size === 0) return templates;
   return templates.filter((t) => {
     for (const tag of excludedTagIds) {
-      if (t.tags.includes(tag)) return false;
+      if (templateHasTag(t, tag)) return false;
     }
     if (selectedTagIds.size === 0) return true;
     if (combinator === "or") {
       for (const tag of selectedTagIds) {
-        if (t.tags.includes(tag)) return true;
+        if (templateHasTag(t, tag)) return true;
       }
       return false;
     }
     for (const tag of selectedTagIds) {
-      if (!t.tags.includes(tag)) return false;
+      if (!templateHasTag(t, tag)) return false;
     }
     return true;
   });

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { orderedTagCounts } from "$lib/tags";
+  import { isUntaggedId, sidebarTagCounts, UNTAGGED_LABEL } from "$lib/tags";
   import { createDragReorder } from "$lib/dragReorder.svelte";
   import { templatesStore } from "$lib/stores/templatesStore.svelte";
   import { selectionStore } from "$lib/stores/selectionStore.svelte";
@@ -23,7 +23,7 @@
     uiDialogs.openContextForEmpty(e.clientX, e.clientY);
   }
 
-  const tagCounts = $derived(orderedTagCounts(templates, tagOrder));
+  const tagCounts = $derived(sidebarTagCounts(templates, tagOrder));
 
   const hasAnyFilter = $derived(selectedTagIds.size > 0 || excludedTagIds.size > 0);
   const showCombinator = $derived(selectedTagIds.size >= 2);
@@ -40,9 +40,14 @@
 
   const drag = createDragReorder({
     enabled: () => true,
-    currentIds: () => tagCounts.map(([tag]) => tag),
-    onReorder: (next) => void templatesStore.handleTagsReorder(next).catch(() => {}),
+    currentIds: () => tagCounts.map(([tag]) => tag).filter((t) => !isUntaggedId(t)),
+    onReorder: (next) =>
+      void templatesStore.handleTagsReorder(next.filter((t) => !isUntaggedId(t))).catch(() => {}),
   });
+
+  function tagLabel(tag: string): string {
+    return isUntaggedId(tag) ? UNTAGGED_LABEL : tag;
+  }
 </script>
 
 <aside class="sidebar" style="width: {width}px" oncontextmenu={handleSidebarContext}>
@@ -69,32 +74,35 @@
   </div>
   <ul class="tag-list">
     {#each tagCounts as [tag, count] (tag)}
+      {@const virtual = isUntaggedId(tag)}
       <li class="tag-row">
         <button
           class="tag"
           class:active={selectedTagIds.has(tag)}
           class:excluded={excludedTagIds.has(tag)}
           class:dragging={drag.draggingId === tag}
-          class:drag-over-top={drag.dragOverId === tag && drag.dragOverHalf === "top"}
-          class:drag-over-bottom={drag.dragOverId === tag && drag.dragOverHalf === "bottom"}
-          draggable={true}
-          ondragstart={(e) => drag.handleDragStart(e, tag)}
-          ondragover={(e) => drag.handleDragOver(e, tag)}
-          ondragleave={() => drag.handleDragLeave(tag)}
-          ondrop={(e) => drag.handleDrop(e, tag)}
+          class:drag-over-top={!virtual && drag.dragOverId === tag && drag.dragOverHalf === "top"}
+          class:drag-over-bottom={!virtual && drag.dragOverId === tag && drag.dragOverHalf === "bottom"}
+          draggable={!virtual}
+          ondragstart={(e) => { if (!virtual) drag.handleDragStart(e, tag); }}
+          ondragover={(e) => { if (!virtual) drag.handleDragOver(e, tag); }}
+          ondragleave={() => { if (!virtual) drag.handleDragLeave(tag); }}
+          ondrop={(e) => { if (!virtual) drag.handleDrop(e, tag); }}
           ondragend={drag.handleDragEnd}
           onclick={() => handleTagClick(tag)}
           oncontextmenu={(e) => handleTagContext(e, tag)}
-          title="Click to filter · right-click to exclude · drag to reorder"
+          title={virtual
+            ? "Click to filter templates with no tags · right-click to exclude"
+            : "Click to filter · right-click to exclude · drag to reorder"}
           aria-pressed={selectedTagIds.has(tag)}
         >
-          <span class="tag-name">{tag}</span>
+          <span class="tag-name">{tagLabel(tag)}</span>
           <span class="tag-count">{count}</span>
         </button>
         <button
           class="tag-exclude"
-          title={excludedTagIds.has(tag) ? `Un-exclude ${tag}` : `Exclude ${tag}`}
-          aria-label={excludedTagIds.has(tag) ? `Un-exclude ${tag}` : `Exclude ${tag}`}
+          title={excludedTagIds.has(tag) ? `Un-exclude ${tagLabel(tag)}` : `Exclude ${tagLabel(tag)}`}
+          aria-label={excludedTagIds.has(tag) ? `Un-exclude ${tagLabel(tag)}` : `Exclude ${tagLabel(tag)}`}
           onclick={(e) => { e.stopPropagation(); selectionStore.excludeTag(tag); }}
         >−</button>
       </li>

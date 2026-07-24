@@ -30,6 +30,10 @@ describe("catalog codec", () => {
     expect(normalizeTags([" Email ", "email", "Poker", ""])).toEqual(["email", "poker"]);
   });
 
+  it("normalizeTags drops the virtual Untagged sentinel", () => {
+    expect(normalizeTags(["__untagged__", "email"])).toEqual(["email"]);
+  });
+
   it("withNormalizedTags is a no-op when already canonical", () => {
     const t = mk({ id: "a", tags: ["email"] });
     expect(withNormalizedTags(t)).toBe(t);

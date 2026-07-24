@@ -10,7 +10,7 @@ import {
 } from "$lib/api/data";
 import { starterTemplates } from "$lib/starterTemplates";
 import { pushHistorySnapshot } from "$lib/templateHistory";
-import { normalizeTag } from "$lib/tags";
+import { isUntaggedId, normalizeTag } from "$lib/tags";
 import { normalizeTags, renameTagInTemplates } from "$lib/catalog";
 import { selectionStore } from "$lib/stores/selectionStore.svelte";
 import { appErrors } from "$lib/stores/appErrors.svelte";
@@ -352,7 +352,7 @@ class TemplatesStore {
   async bulkAddTag(ids: Set<string>, tag: string): Promise<void> {
     if (!this.isEditorMode || ids.size === 0) return;
     const trimmed = normalizeTag(tag);
-    if (trimmed.length === 0) return;
+    if (trimmed.length === 0 || isUntaggedId(trimmed)) return;
     const next = this.templates.map((t) => {
       if (!ids.has(t.id)) return t;
       if (t.tags.some((existing) => existing.toLowerCase() === trimmed)) return t;
@@ -436,7 +436,10 @@ class TemplatesStore {
 
   async handleTagsReorder(newOrder: string[]): Promise<void> {
     await this.apply(null, {
-      settings: { ...this.settings, tag_order: newOrder },
+      settings: {
+        ...this.settings,
+        tag_order: newOrder.filter((t) => !isUntaggedId(t)),
+      },
     });
   }
 
@@ -459,7 +462,7 @@ class TemplatesStore {
   async handleRenameTag(from: string, to: string): Promise<void> {
     if (!this.isEditorMode) return;
     const normalizedTo = normalizeTag(to);
-    if (from === normalizedTo || normalizedTo.length === 0) return;
+    if (from === normalizedTo || normalizedTo.length === 0 || isUntaggedId(normalizedTo)) return;
     const next = renameTagInTemplates(this.templates, from, normalizedTo);
     const newOrder = dedupe(
       this.settings.tag_order.map((t) => (t === from ? normalizedTo : t)),
