@@ -12,6 +12,7 @@
 
 <div class="frame">
   <header class="titlebar" data-tauri-drag-region>
+    <img class="logo" src="/logo.svg" width="16" height="16" alt="" data-tauri-drag-region />
     <span class="title" data-tauri-drag-region>{title}</span>
     <span class="drag-spacer" data-tauri-drag-region></span>
   </header>
@@ -64,6 +65,14 @@
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     user-select: none;
+  }
+
+  .logo {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 3.5px;
+    flex-shrink: 0;
   }
 
   .title {

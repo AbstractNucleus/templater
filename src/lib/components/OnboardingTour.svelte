@@ -71,6 +71,9 @@
   <div class="card">
     {#key stepIndex}
       <div class="step">
+        {#if stepIndex === 0}
+          <img class="welcome-logo" src="/logo.svg" width="48" height="48" alt="" />
+        {/if}
         <h2>{steps[stepIndex].title}</h2>
         <p>{steps[stepIndex].body}</p>
       </div>
@@ -131,6 +134,14 @@
 
   .step {
     animation: step-in 160ms ease-out;
+  }
+
+  .welcome-logo {
+    display: block;
+    width: 48px;
+    height: 48px;
+    border-radius: 11px;
+    margin: 0 0 14px;
   }
 
   @keyframes step-in {

@@ -78,7 +78,7 @@
 
 <header class="titlebar">
   <div class="leading" data-tauri-drag-region>
-    <span class="brand" data-tauri-drag-region>Templater</span>
+    <img class="logo" src="/logo.svg" width="18" height="18" alt="Templater" data-tauri-drag-region />
   </div>
   {#if showSearch}
     <div class="search-slot">
@@ -186,11 +186,12 @@
     flex-shrink: 0;
   }
 
-  .brand {
-    color: var(--text-muted);
-    font-size: 0.78rem;
-    letter-spacing: 0.04em;
-    font-weight: 500;
+  .logo {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    flex-shrink: 0;
   }
 
   .search-slot {
