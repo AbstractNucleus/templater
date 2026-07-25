@@ -4,6 +4,14 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9] — 2026-07-26
+
+### Added
+
+- **App logo.** New brand mark used as the native app icon, favicon, title-bar badge, and welcome-tour header.
+- **Copy ID.** Copy a template's ID from editor mode.
+- **Untagged filter.** Virtual sidebar tag that shows templates with no tags.
+
 ## [0.9.8] — 2026-07-22
 
 ### Changed
