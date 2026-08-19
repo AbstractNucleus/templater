@@ -3,14 +3,19 @@
 use crate::store::{Store, WindowGeometry};
 use crate::windows_snap;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 /// Remembers translator visibility across main-window hide so tray/hotkey
 /// show can restore it via the same park path as `set_satellite`.
 static TRANSLATOR_WAS_OPEN: AtomicBool = AtomicBool::new(false);
 
-/// Default translator window height (logical px).
+/// Last translator inner height (physical px). 0 = never observed.
+/// Survives hide so Ctrl+Shift+T / global hotkey show can restore it.
+static TRANSLATOR_HEIGHT: AtomicU32 = AtomicU32::new(0);
+
+/// Default translator window height (logical px). Used only when no live or
+/// remembered size is available (first park before the webview reports a size).
 const TRANSLATOR_DEFAULT_HEIGHT: u32 = 360;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,9 +36,7 @@ impl SatelliteKind {
     fn placement(self) -> Placement {
         match self {
             Self::Preview => Placement::LeftOfMain,
-            Self::Translator => Placement::AboveMain {
-                height: TRANSLATOR_DEFAULT_HEIGHT,
-            },
+            Self::Translator => Placement::AboveMain,
         }
     }
 
@@ -57,8 +60,68 @@ impl SatelliteKind {
 enum Placement {
     /// Same height as main, flush to its left edge.
     LeftOfMain,
-    /// Fixed height, flush above the main window's top edge.
-    AboveMain { height: u32 },
+    /// Same width as main, flush above its top edge. Height is the satellite's
+    /// last size (user-resized), not a constant.
+    AboveMain,
+}
+
+/// Prefer a remembered user-resized height, then the live window size, then
+/// the logical default converted by `scale`.
+fn resolve_translator_height(
+    remembered: u32,
+    current: Option<u32>,
+    default_logical: u32,
+    scale: f64,
+) -> u32 {
+    if remembered > 0 {
+        return remembered;
+    }
+    if let Some(h) = current.filter(|&h| h > 0) {
+        return h;
+    }
+    (default_logical as f64 * scale).round().max(1.0) as u32
+}
+
+fn current_height(window: &WebviewWindow) -> Option<u32> {
+    window
+        .inner_size()
+        .ok()
+        .map(|s| s.height)
+        .filter(|&h| h > 0)
+        .or_else(|| {
+            window
+                .outer_size()
+                .ok()
+                .map(|s| s.height)
+                .filter(|&h| h > 0)
+        })
+}
+
+/// Record the translator's inner height so the next park restores it instead
+/// of snapping back to [`TRANSLATOR_DEFAULT_HEIGHT`].
+pub fn note_translator_resized(height: u32) {
+    if height > 0 {
+        TRANSLATOR_HEIGHT.store(height, Ordering::SeqCst);
+    }
+}
+
+fn remember_translator_height(window: &WebviewWindow) {
+    if let Some(h) = current_height(window) {
+        note_translator_resized(h);
+    }
+}
+
+fn translator_park_height(satellite: &WebviewWindow) -> u32 {
+    resolve_translator_height(
+        TRANSLATOR_HEIGHT.load(Ordering::SeqCst),
+        current_height(satellite),
+        TRANSLATOR_DEFAULT_HEIGHT,
+        satellite.scale_factor().unwrap_or(1.0),
+    )
+}
+
+fn above_main_y(main_y: i32, height: u32) -> i32 {
+    (main_y - height as i32).max(0)
 }
 
 /// Show `label` parked beside/above the main window. If main geometry can't be
@@ -86,11 +149,11 @@ fn park_satellite(app: &AppHandle, label: &str, placement: Placement) -> Result<
                 PhysicalPosition::new(x, main_pos.y),
             )
         }
-        Placement::AboveMain { height } => {
-            let y = (main_pos.y - height as i32).max(0);
+        Placement::AboveMain => {
+            let height = translator_park_height(&satellite);
             (
                 PhysicalSize::new(main_size.width, height),
-                PhysicalPosition::new(main_pos.x, y),
+                PhysicalPosition::new(main_pos.x, above_main_y(main_pos.y, height)),
             )
         }
     };
@@ -107,6 +170,9 @@ fn hide_satellite(app: &AppHandle, kind: SatelliteKind, emit_closed: bool) {
     let label = kind.label();
     let was_open = is_satellite_open(app, label);
     if let Some(w) = app.get_webview_window(label) {
+        if kind == SatelliteKind::Translator {
+            remember_translator_height(&w);
+        }
         let _ = w.hide();
     }
     if emit_closed && was_open {
@@ -262,4 +328,43 @@ pub fn configure_main_on_startup(
         let _ = window.set_focus();
     }
     windows_snap::install(window);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{above_main_y, resolve_translator_height, TRANSLATOR_DEFAULT_HEIGHT};
+
+    #[test]
+    fn remembered_height_wins() {
+        assert_eq!(
+            resolve_translator_height(480, Some(360), TRANSLATOR_DEFAULT_HEIGHT, 1.5),
+            480
+        );
+    }
+
+    #[test]
+    fn live_size_used_when_nothing_remembered() {
+        assert_eq!(
+            resolve_translator_height(0, Some(540), TRANSLATOR_DEFAULT_HEIGHT, 1.0),
+            540
+        );
+    }
+
+    #[test]
+    fn zero_live_size_falls_through_to_scaled_default() {
+        assert_eq!(
+            resolve_translator_height(0, Some(0), TRANSLATOR_DEFAULT_HEIGHT, 1.5),
+            540
+        );
+        assert_eq!(
+            resolve_translator_height(0, None, TRANSLATOR_DEFAULT_HEIGHT, 1.0),
+            360
+        );
+    }
+
+    #[test]
+    fn above_main_y_clamps_to_screen_top() {
+        assert_eq!(above_main_y(400, 360), 40);
+        assert_eq!(above_main_y(200, 360), 0);
+    }
 }

@@ -2,7 +2,12 @@
   import { listen, emit } from "@tauri-apps/api/event";
   import { translateText } from "$lib/api";
   import PopoutFrame from "$lib/components/PopoutFrame.svelte";
+  import ResizeHandles from "$lib/components/ResizeHandles.svelte";
   import type { TranslatorPayload } from "$lib/stores/popouts.svelte";
+
+  const PANE_MIN = 56;
+  /** Source pane share of the two panes (output is the remainder). */
+  const SOURCE_SHARE_DEFAULT = 0.38;
 
   let payload = $state<TranslatorPayload | null>(null);
 
@@ -10,6 +15,10 @@
   let translatedText = $state("");
   let translating = $state(false);
   let error = $state<string | null>(null);
+  let sourceShare = $state(SOURCE_SHARE_DEFAULT);
+
+  let outputPaneEl = $state<HTMLElement | undefined>();
+  let sourcePaneEl = $state<HTMLElement | undefined>();
 
   $effect(() => {
     if (payload && typeof document !== "undefined") {
@@ -64,45 +73,102 @@
       void doTranslate();
     }
   }
+
+  function startPaneResize(e: PointerEvent): void {
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    const outputH = outputPaneEl?.offsetHeight ?? 0;
+    const sourceH = sourcePaneEl?.offsetHeight ?? 0;
+    const total = outputH + sourceH;
+    if (total <= 0) return;
+
+    const startY = e.clientY;
+    const startSourceH = sourceH;
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+
+    function onMove(ev: PointerEvent): void {
+      const next = Math.round(
+        Math.max(PANE_MIN, Math.min(total - PANE_MIN, startSourceH - (ev.clientY - startY))),
+      );
+      sourceShare = next / total;
+    }
+
+    function onUp(): void {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      handle.releasePointerCapture(e.pointerId);
+      handle.classList.remove("dragging");
+    }
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
 <PopoutFrame title="Translate">
   <div class="body">
-    <!-- Translated output pane (top) -->
-    <div class="pane-label">English translation</div>
-    <div class="output-pane" class:loading={translating}>
-      {#if translating}
-        <div class="overlay">
-          <div class="spinner"></div>
-          <span>Translating...</span>
-        </div>
-      {:else if error}
-        <div class="error">{error}</div>
-      {:else if translatedText}
-        <pre class="output-text">{translatedText}</pre>
-      {:else}
-        <div class="empty">Paste text below to translate to English</div>
-      {/if}
+    <div
+      class="pane"
+      bind:this={outputPaneEl}
+      style="flex: {1 - sourceShare} 1 0; min-height: {PANE_MIN}px"
+    >
+      <div class="pane-label">English translation</div>
+      <div class="output-pane" class:loading={translating}>
+        {#if translating}
+          <div class="overlay">
+            <div class="spinner"></div>
+            <span>Translating...</span>
+          </div>
+        {:else if error}
+          <div class="error">{error}</div>
+        {:else if translatedText}
+          <pre class="output-text">{translatedText}</pre>
+        {:else}
+          <div class="empty">Paste text below to translate to English</div>
+        {/if}
+      </div>
     </div>
 
-    <!-- Source input pane (bottom) -->
-    <div class="pane-label">
-      Source text
-      {#if sourceText.trim().length > 0}
-        <span class="hint">Ctrl+Enter to translate</span>
-      {/if}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="row-resize"
+      title="Drag to resize panes"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize source and translation panes"
+      aria-valuenow={Math.round(sourceShare * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      onpointerdown={startPaneResize}
+    ></div>
+
+    <div
+      class="pane"
+      bind:this={sourcePaneEl}
+      style="flex: {sourceShare} 1 0; min-height: {PANE_MIN}px"
+    >
+      <div class="pane-label">
+        Source text
+        {#if sourceText.trim().length > 0}
+          <span class="hint">Ctrl+Enter to translate</span>
+        {/if}
+      </div>
+      <textarea
+        class="source-input"
+        placeholder="Paste text to translate to English..."
+        value={sourceText}
+        oninput={(e) => (sourceText = e.currentTarget.value)}
+        onpaste={handlePaste}
+      ></textarea>
     </div>
-    <textarea
-      class="source-input"
-      placeholder="Paste text to translate to English..."
-      value={sourceText}
-      oninput={(e) => (sourceText = e.currentTarget.value)}
-      onpaste={handlePaste}
-    ></textarea>
   </div>
 </PopoutFrame>
+<ResizeHandles />
 
 <style>
   .body {
@@ -110,9 +176,16 @@
     display: flex;
     flex-direction: column;
     padding: 12px 14px;
-    gap: 6px;
     overflow: hidden;
     min-height: 0;
+  }
+
+  .pane {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .pane-label {
@@ -124,6 +197,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .hint {
@@ -206,10 +280,27 @@
     word-wrap: break-word;
   }
 
+  .row-resize {
+    height: 5px;
+    flex-shrink: 0;
+    cursor: row-resize;
+    background: transparent;
+    transition: background 120ms;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .row-resize:hover,
+  .row-resize.dragging {
+    background: var(--border-focus);
+  }
+
   .source-input {
-    flex: 0 0 auto;
-    min-height: 80px;
-    max-height: 160px;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -218,7 +309,7 @@
     font-size: 0.85rem;
     line-height: 1.5;
     padding: 10px 12px;
-    resize: vertical;
+    resize: none;
     box-sizing: border-box;
     scrollbar-width: none;
   }
