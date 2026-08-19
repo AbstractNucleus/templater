@@ -20,7 +20,7 @@ export function composeText(
 // callers can parse it into a kind + key.
 const PLACEHOLDER_RE = /\{\{([^{}]+?)\}\}/g;
 
-export type DateFormat = "iso" | "long";
+export type DateFormat = "short" | "iso" | "long";
 export type TimeFormat = "short" | "long";
 
 export type PlaceholderKind =
@@ -67,7 +67,7 @@ export function parsePlaceholder(inner: string): ParsedPlaceholder {
   const trimmed = inner.trim();
   const raw = `{{${inner}}}`;
 
-  const date = parseFormatToken<DateFormat>(trimmed, "date", ["iso", "long"], "iso");
+  const date = parseFormatToken<DateFormat>(trimmed, "date", ["short", "iso", "long"], "short");
   if (date) {
     return { raw, key: trimmed, label: date.label, kind: { type: "date", format: date.format } };
   }
@@ -106,11 +106,12 @@ function formatDate(now: Date, format: DateFormat): string {
       day: "numeric",
     });
   }
-  // ISO date in the local timezone (not UTC) — what most users mean by "today".
+  // Local calendar date (not UTC) — what most users mean by "today".
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  if (format === "iso") return `${y}-${m}-${d}`;
+  return `${d}/${m}/${y}`;
 }
 
 function formatTime(now: Date, format: TimeFormat): string {

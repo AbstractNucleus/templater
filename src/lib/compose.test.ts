@@ -87,8 +87,13 @@ describe("splitPlaceholders", () => {
     });
   });
 
-  it("auto-fills {{date}} in ISO format", () => {
+  it("auto-fills {{date}} as dd/mm/yyyy", () => {
     const segs = splitPlaceholders("Today is {{date}}.", { now: FIXED_NOW });
+    expect(segs[1]).toEqual({ text: "24/05/2026", placeholder: true });
+  });
+
+  it("auto-fills {{date:iso}} as yyyy-mm-dd", () => {
+    const segs = splitPlaceholders("Today is {{date:iso}}.", { now: FIXED_NOW });
     expect(segs[1]).toEqual({ text: "2026-05-24", placeholder: true });
   });
 
@@ -152,8 +157,8 @@ describe("applyValues", () => {
     expect(applyValues("{{x}} and {{x}}", { values: { x: "y" } })).toBe("y and y");
   });
 
-  it("substitutes {{date}} with today's ISO date", () => {
-    expect(applyValues("on {{date}}", { now: FIXED_NOW })).toBe("on 2026-05-24");
+  it("substitutes {{date}} with today's dd/mm/yyyy date", () => {
+    expect(applyValues("on {{date}}", { now: FIXED_NOW })).toBe("on 24/05/2026");
   });
 
   it("substitutes {{choice:a|b}} via its full key", () => {
@@ -174,8 +179,12 @@ describe("parsePlaceholder", () => {
     expect(p.key).toBe("name");
   });
 
-  it("classifies date with default ISO format", () => {
-    expect(parsePlaceholder("date").kind).toEqual({ type: "date", format: "iso" });
+  it("classifies date with default short format", () => {
+    expect(parsePlaceholder("date").kind).toEqual({ type: "date", format: "short" });
+  });
+
+  it("classifies date:iso", () => {
+    expect(parsePlaceholder("date:iso").kind).toEqual({ type: "date", format: "iso" });
   });
 
   it("classifies date:long", () => {

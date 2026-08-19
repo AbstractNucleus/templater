@@ -50,7 +50,7 @@
       label: "Placeholders",
       rows: [
         { keys: "{{name}}", desc: "Free-text variable, filled in before copy" },
-        { keys: "{{date}}", desc: "Today's date. Use {{date:long}} for long format" },
+        { keys: "{{date}}", desc: "Today's date as dd/mm/yyyy. Use {{date:long}} for long format, {{date:iso}} for yyyy-mm-dd" },
         { keys: "{{time}}", desc: "Current local time HH:MM. Use {{time:long}} for HH:MM:SS" },
         { keys: "{{choice:a|b|c}}", desc: "Dropdown picker with the listed options" },
         { keys: "{{me_name}}", desc: "Custom snippet from Settings → Global snippets" },

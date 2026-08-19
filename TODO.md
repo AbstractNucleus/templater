@@ -8,4 +8,4 @@
 - [ ] restore size of the translation window when using keybind to show window
 - [ ] resize the source/translation prompts vertically in the translation window
 - [ ] search by id e.g. "tpl-10"
-- [ ] change the today's date placeholder to dd/mm/yyyy
+- [x] change the today's date placeholder to dd/mm/yyyy
