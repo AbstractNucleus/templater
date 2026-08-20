@@ -4,6 +4,20 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.10] — 2026-08-20
+
+### Changed
+
+- **`{{date}}` default.** Bare date placeholders now fill as dd/mm/yyyy. Use `{{date:iso}}` for yyyy-mm-dd and `{{date:long}}` for a locale long date.
+
+### Added
+
+- **Translator pane splitter.** Drag the handle between source and translation to resize the two panes.
+
+### Fixed
+
+- **Translator height restore.** Showing the translator via hotkey or tray no longer snaps the window back to the default height.
+
 ## [0.9.9] — 2026-07-26
 
 ### Added
