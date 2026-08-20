@@ -293,7 +293,7 @@
   }
 
   .row-resize:hover,
-  .row-resize.dragging {
+  :global(.row-resize.dragging) {
     background: var(--border-focus);
   }
 
