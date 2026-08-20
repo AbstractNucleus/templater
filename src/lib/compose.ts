@@ -106,12 +106,11 @@ function formatDate(now: Date, format: DateFormat): string {
       day: "numeric",
     });
   }
-  // Local calendar date (not UTC) — what most users mean by "today".
+  // Local calendar date (not UTC). `short` is fixed dd/mm/yyyy, not locale.
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
-  if (format === "iso") return `${y}-${m}-${d}`;
-  return `${d}/${m}/${y}`;
+  return format === "iso" ? `${y}-${m}-${d}` : `${d}/${m}/${y}`;
 }
 
 function formatTime(now: Date, format: TimeFormat): string {

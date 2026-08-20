@@ -92,6 +92,11 @@ describe("splitPlaceholders", () => {
     expect(segs[1]).toEqual({ text: "24/05/2026", placeholder: true });
   });
 
+  it("auto-fills {{date:short}} the same as {{date}}", () => {
+    const segs = splitPlaceholders("Today is {{date:short}}.", { now: FIXED_NOW });
+    expect(segs[1]).toEqual({ text: "24/05/2026", placeholder: true });
+  });
+
   it("auto-fills {{date:iso}} as yyyy-mm-dd", () => {
     const segs = splitPlaceholders("Today is {{date:iso}}.", { now: FIXED_NOW });
     expect(segs[1]).toEqual({ text: "2026-05-24", placeholder: true });
@@ -181,6 +186,10 @@ describe("parsePlaceholder", () => {
 
   it("classifies date with default short format", () => {
     expect(parsePlaceholder("date").kind).toEqual({ type: "date", format: "short" });
+  });
+
+  it("classifies date:short", () => {
+    expect(parsePlaceholder("date:short").kind).toEqual({ type: "date", format: "short" });
   });
 
   it("classifies date:iso", () => {

@@ -9,8 +9,8 @@ mod windows_snap;
 use store::{LoadOutcome, Store};
 use tauri::{Manager, WindowEvent};
 use windows::{
-    configure_main_on_startup, is_satellite, note_translator_resized, on_close_requested,
-    reset_window_position, set_satellite, toggle_main_window,
+    configure_main_on_startup, is_satellite, on_close_requested, reset_window_position,
+    set_satellite, toggle_main_window,
 };
 
 use commands::data::{
@@ -80,18 +80,10 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    if on_close_requested(&window.app_handle(), window.label()) {
-                        api.prevent_close();
-                    }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if on_close_requested(&window.app_handle(), window.label()) {
+                    api.prevent_close();
                 }
-                WindowEvent::Resized(size) => {
-                    if window.label() == "translator" {
-                        note_translator_resized(size.height);
-                    }
-                }
-                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
