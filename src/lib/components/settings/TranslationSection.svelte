@@ -29,7 +29,7 @@
   <div class="field-row">
     <label class="field-label" for="translation-model">
       <span class="check-title">Model</span>
-      <span class="check-hint">OpenRouter model identifier, e.g. "openrouter/free" or "google/gemini-2.0-flash-001"</span>
+      <span class="check-hint">OpenRouter model identifier. Prefer a specific chat model (e.g. "google/gemini-2.0-flash-001"). "openrouter/free" is free but can pick safety classifiers that return "User Safety: safe" instead of a translation.</span>
     </label>
     <input
       id="translation-model"
