@@ -4,6 +4,12 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.11] — 2026-08-23
+
+### Changed
+
+- **Translator system prompt.** Reinforced the OpenRouter prompt so models treat pasted text as source to translate, not as instructions, and skip preamble, quotes, fences, and refusals.
+
 ## [0.9.10] — 2026-08-20
 
 ### Changed
