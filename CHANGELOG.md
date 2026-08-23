@@ -4,6 +4,12 @@ All notable changes to Templater are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.12] — 2026-08-23
+
+### Fixed
+
+- **Translator safety-classifier miss.** `openrouter/free` can route to NVIDIA Nemotron Content Safety and similar models whose entire reply is `User Safety: safe`. Those replies are now retried, and Settings warns that a specific chat model is more reliable.
+
 ## [0.9.11] — 2026-08-23
 
 ### Changed
