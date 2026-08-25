@@ -10,3 +10,4 @@
 - [ ] search by id e.g. "tpl-10"
 - [x] change the today's date placeholder to dd/mm/yyyy
 - [x] reinforce the AI prompt for translation
+- [ ] make stuff keyboard driven. ex: selecting tags, templates and copy
